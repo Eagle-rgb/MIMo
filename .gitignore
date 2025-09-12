@@ -2,8 +2,10 @@
 *.pyc
 __pycache__/
 *egg-info/
+.vscode
 mimoEnv/imgs/*
 mimoEnv/models/*
 mimoEnv/benchmarks
+mimoGrowth/log.txt
 test*
 models*

@@ -22,6 +22,8 @@ import mujoco
 
 from mimoEnv.envs.mimo_env import MIMoEnv, SCENE_DIRECTORY, DEFAULT_PROPRIOCEPTION_PARAMS, DEFAULT_VESTIBULAR_PARAMS
 from mimoActuation.actuation import SpringDamperModel
+import mimoEnv.utils as mimo_utils
+
 
 STANDUP_XML = os.path.join(SCENE_DIRECTORY, "standup_scene.xml")
 """ Path to the stand up scene.
@@ -74,13 +76,22 @@ class MIMoStandupEnv(MIMoEnv):
     disabled since :attr:`.done_active` is set to ``False``. The purpose of this is to enable extra information for
     the logging features of stable baselines.
 
+    If the 'age' parameter is set, the following will be changed:
+    - Height of MIMo so that he will touch the floor
+    - Constraints for MIMo
+    - Size and position of crib
+    - sample goal and achieved goal will be relative values
+        for a better comparison
+
     Attributes:
         init_crouch_position (numpy.ndarray): The initial position.
+        init_head_height (float): The initial head height.
     """
     def __init__(self,
                  model_path=STANDUP_XML,
                  initial_qpos=SITTING_POSITION,
                  frame_skip=2,
+                 age=None,
                  proprio_params=DEFAULT_PROPRIOCEPTION_PARAMS,
                  touch_params=None,
                  vision_params=None,
@@ -88,9 +99,14 @@ class MIMoStandupEnv(MIMoEnv):
                  actuation_model=SpringDamperModel,
                  **kwargs):
 
+        initial_qpos = None if age is not None else initial_qpos
+
+        self.mimo_height = None
+
         super().__init__(model_path=model_path,
                          initial_qpos=initial_qpos,
                          frame_skip=frame_skip,
+                         age=age,
                          proprio_params=proprio_params,
                          touch_params=touch_params,
                          vision_params=vision_params,
@@ -98,7 +114,80 @@ class MIMoStandupEnv(MIMoEnv):
                          actuation_model=actuation_model,
                          goals_in_observation=False,
                          done_active=False,
+                         default_camera_config={"azimuth": 180},
                          **kwargs)
+
+        if self.age is not None:
+
+            mujoco.mj_forward(self.model, self.data)
+
+            distance_to_floor = self.data.body("left_foot").xpos[2]
+            distance_to_floor -= self.model.geom("geom:left_foot1").size[1]
+
+            qpos = self.data.joint("mimo_location").qpos
+            qpos[2] -= distance_to_floor
+
+            joint_values = [
+                ("mimo_location", qpos),
+                ("robot:right_shoulder_horizontal", [0.0845]),
+                ("robot:right_shoulder_ad_ab", [0.0485]),
+                ("robot:right_shoulder_rotation", [0.387]),
+                ("robot:right_elbow", [-1.24]),
+                ("robot:right_hand1", [1.29]),
+                ("robot:right_hand2", [0.274]),
+                ("robot:right_hand3", [-0.15]),
+                ("robot:right_fingers", [-1.5]),
+            ]
+
+            # Bring MIMo in a starting position where he stand on his feet and
+            # grabs the crib with his hands.
+            for name, qpos in joint_values:
+                mimo_utils.set_joint_qpos(self.model, self.data, name, qpos)
+                if "right" in name:
+                    name = name.replace("right", "left")
+                    mimo_utils.set_joint_qpos(
+                        self.model, self.data, name, qpos)
+
+            mujoco.mj_forward(self.model, self.data)
+
+            # Store the initial height of MIMo if he stands upright.
+            self.mimo_height = self.data.geom("head").xpos[2]
+
+            hand_pos = self.data.body("right_hand").xpos
+            hand_size = self.model.geom("geom:right_hand1").size
+            right_finger_pos = self.data.body("right_fingers").xpos
+            left_finger_pos = self.data.body("left_fingers").xpos
+            finger_size = self.model.geom("geom:right_fingers1").size
+
+            # Adjust crib position.
+            pos_x = (left_finger_pos[0] * (0.098 / 0.09890521))
+            pos_x -= finger_size[1] * 2
+            pos_z = hand_pos[2] * (0.42 / 0.45927906)
+            self.model.body("crib").pos = [pos_x, 0, pos_z]
+
+            # Adjust crib size.
+            new_size = [hand_size[1] * 2, 0.4, 0]
+            self.model.geom(self.model.body("crib").geomadr).size = new_size
+
+            # Update constraints.
+            const1, const2 = self.model.eq_data[-4], self.model.eq_data[-5]
+            const1[5], const2[5] = right_finger_pos[2], right_finger_pos[2]
+            self.model.eq_data[-4], self.model.eq_data[-5] = const1, const2
+
+            mujoco.mj_forward(self.model, self.data)
+
+            self.data.ctrl[0] = 1  # hip_bend
+            self.data.ctrl[19] = -1  # right_hip_flex
+            self.data.ctrl[22] = -1  # right_knee
+            self.data.ctrl[23] = -1  # left_hip_flex
+            self.data.ctrl[26] = -1  # left_knee
+
+            # Let MIMo fall into a sitting/crouching position. Activate some
+            # actuators to help him get there.
+            for _ in range(1000):
+                mujoco.mj_step(self.model, self.data)
+
+            self.data.ctrl = [0] * len(self.data.ctrl)
 
         self.init_crouch_position = self.data.qpos.copy()
 
@@ -183,12 +272,17 @@ class MIMoStandupEnv(MIMoEnv):
     def sample_goal(self):
         """ Returns the goal height.
 
-        We use a fixed goal height of 0.5.
+        If 'age' is not set, a fixed goal height of 0.5 is used.
+        Otherwise, the goal is based on the initial height of MIMo.
 
         Returns:
-            float: 0.5
+            float: The goal height.
         """
-        return 0.5
+
+        if self.age is None or self.mimo_height is None:
+            return 0.5
+        else:
+            return self.mimo_height * 0.8
 
     def get_achieved_goal(self):
         """ Get the height of MIMos head.

@@ -14,6 +14,8 @@ from gymnasium import spaces, utils
 from gymnasium.envs.mujoco import MujocoEnv
 from gymnasium.envs.mujoco.mujoco_rendering import MujocoRenderer
 
+from mimoGrowth.growth import adjust_mimo_to_age
+from mimoGrowth.scene import delete_growth_scene
 from mimoTouch.touch import TrimeshTouch, Touch
 from mimoVision.vision import SimpleVision, Vision
 from mimoVestibular.vestibular import SimpleVestibular, Vestibular
@@ -239,6 +241,10 @@ class MIMoEnv(MujocoEnv, utils.EzPickle):
         camera_name (str): The camera, by name, which will be used for rendering.
         width (int): The width of the rendered image.
         height (int): The height of the rendered image.
+        age (float|None): The age of MIMo. Can be between 0 and 24 months. If ``None`` the original model will be used
+            with no changes.
+        custom_measurements (dict | None): A dictionary of custom measurements for MIMo.  Keys must match measurement
+            names from the ``mimoGrowth/measurements/`` folder, and values are floats representing measurements in centimeters.
         proprio_params (Dict|None): The configuration dictionary for the proprioceptive system. If ``None`` the module
             is disabled. Default ``None``.
         touch_params (Dict|None): The configuration dictionary for the touch system. If ``None`` the module is disabled.
@@ -263,6 +269,7 @@ class MIMoEnv(MujocoEnv, utils.EzPickle):
         init_qvel (np.ndarray): The initial velocity vectors for the whole scene. Can be used with :meth:`.set_state`
             to return the simulation to its initial state.
         frame_skip: The number of simulation substeps for each environment step.
+        age (float|None): The age of MIMo.
         goal (object): The desired goal.
         action_space (gym.spaces.Space): The action space. See Gym documentation for more.
         observation_space (gym.spaces.Space): The observation space. See Gym documentation for more.
@@ -297,9 +304,11 @@ class MIMoEnv(MujocoEnv, utils.EzPickle):
                  render_mode=None,
                  camera_id=None,
                  camera_name=None,
-                 width= DEFAULT_SIZE,
+                 width=DEFAULT_SIZE,
                  height=DEFAULT_SIZE,
                  default_camera_config=None,
+                 age=None,
+                 custom_measurements=None,
                  proprio_params=None,
                  touch_params=None,
                  vision_params=None,
@@ -309,7 +318,7 @@ class MIMoEnv(MujocoEnv, utils.EzPickle):
                  done_active=False):
         utils.EzPickle.__init__(**locals())
 
-        #self.fullpath = os.path.abspath(model_path)
+        # self.fullpath = os.path.abspath(model_path)
         self.frame_skip = frame_skip
 
         self.age = age
@@ -342,6 +351,8 @@ class MIMoEnv(MujocoEnv, utils.EzPickle):
 
         self._initial_qpos = initial_qpos
 
+        model_path = adjust_mimo_to_age(age, model_path, custom_measurements) if age is not None else model_path
+
         # Load XML and initialize everything
         super().__init__(model_path,
                          frame_skip,
@@ -352,6 +363,9 @@ class MIMoEnv(MujocoEnv, utils.EzPickle):
                          camera_id=camera_id,
                          camera_name=camera_name,
                          default_camera_config=default_camera_config)
+
+        if age is not None:
+            delete_growth_scene(model_path)
 
         self._env_setup()
 
