@@ -296,7 +296,6 @@ class MIMoEnv(MujocoEnv, utils.EzPickle):
 
     def __init__(self,
                  model_path,
-                 age=None,
                  initial_qpos=None,
                  frame_skip=2,
                  sensory_delay=0,
