@@ -63,8 +63,8 @@ class SimpleVision(Vision):
     The parameter `camera_parameters` should be a dictionary with the following structure::
 
         {
-            'camera_name': {'width': width, 'height': height},
-            'other_camera_name': {'width': width, 'height': height},
+            'camera_name': {'width': width, 'height': height, 'acuity': age_for_visual_acuity, 'foveation': True/False},
+            'other_camera_name': {'width': width, 'height': height, 'acuity': age_for_visual_acuity, 'foveation': True/False},
         }
 
     The default MIMo model has two cameras, one in each eye, named `eye_left` and `eye_right`. Note that the cameras in
@@ -94,7 +94,8 @@ class SimpleVision(Vision):
             self._viewports[camera] = viewport
             if camera_parameters[camera]["acuity"]:
                 self._acuity_functions[camera] = self._get_acuity_function(
-                    camera_parameters[camera]["width"], camera_parameters[camera]["height"], fovy=60)
+                    camera_parameters[camera]["width"], camera_parameters[camera]["height"],
+                    acuity_age=camera_parameters[camera]["acuity"], fovy=60)
             else:
                 self._acuity_functions[camera] = None
             if camera_parameters[camera]["foveation"]:
@@ -177,7 +178,7 @@ class SimpleVision(Vision):
             new_img[:,:,idx] = np.clip(np.abs(np.fft.ifft2(iff)), 0, 255)
         return new_img.astype(np.uint8)
 
-    def _get_acuity_function(self, width, height, fovy):
+    def _get_acuity_function(self, width, height, acuity_age, fovy):
         """ Computes the modulation transfer function (MTF) for visual acuity.
 
         We compute the MTF as a linear function between MTF=1 at 0 cycles/deg and MTF=0 at an age-dependent value interpolated
@@ -199,17 +200,17 @@ class SimpleVision(Vision):
                     8.218,  9.008,  9.405,  9.544,  9.6775, 10.079, 11.013,
                     12.54, 14.6785, 17.4195]
         
-        if self.env.age in ages:
+        if acuity_age in ages:
             acuity = acuities[ages.index(self.env.age)]
         else:
-            if self.env.age < ages[0]:
+            if acuity_age < ages[0]:
                 acuity = acuities[0]  # Use the first acuity value if age is smaller than all in the list
-            elif self.env.age > ages[-1]:
+            elif acuity_age > ages[-1]:
                 acuity = acuities[-1]  # Use the last acuity value if age is larger than all in the list
             else:
                 for i in range(len(ages)):
-                    if (ages[i] > self.env.age):
-                        weight = (self.env.age - ages[i-1]) / (ages[i] - ages[i-1])
+                    if (ages[i] > acuity_age):
+                        weight = (acuity_age - ages[i-1]) / (ages[i] - ages[i-1])
                         acuity = acuities[i-1] + (acuities[i] - acuities[i-1]) * weight
                         break
 

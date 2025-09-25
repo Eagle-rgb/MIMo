@@ -540,6 +540,10 @@ class MIMoEnv(MujocoEnv, utils.EzPickle):
         Args:
             vision_params (dict): The parameter dictionary.
         """
+        # If acuity is True but age not specified, use default age
+        for eye in vision_params:
+            if (vision_params[eye]["acuity"] is True) and (type(vision_params[eye]["acuity"])==bool):
+                vision_params[eye]["acuity"] = self.age
         self.vision = SimpleVision(self, vision_params)
 
     def vestibular_setup(self, vestibular_params):
