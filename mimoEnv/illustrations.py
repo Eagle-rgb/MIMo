@@ -80,7 +80,7 @@ def main():
 
     Command line interface that can train and load models for the standup scenario. Possible parameters are:
 
-    - ``--env``: The demonstration environment to use. Must be one of ``reach, standup, selfbody, catch``.
+    - ``--env``: The demonstration environment to use. Must be one of ``reach, standup, selfbody, catch, roll_over``.
     - ``--train_for``: The number of time steps to train. No training takes place if this is 0. Default 0.
     - ``--test_for``: The number of time steps to test. Testing renders the environment to an interactive window, so
       the trained behaviour can be observed. Default 1000.
@@ -99,9 +99,9 @@ def main():
 
     parser = argparse.ArgumentParser()
     parser.add_argument('--env', required=True,
-                        choices=['reach', 'standup', 'selfbody', 'catch'],
+                        choices=['reach', 'standup', 'selfbody', 'catch', 'roll_over'],
                         help='The demonstration environment to use. Must be one of "reach", "standup", "selfbody", '
-                             '"catch"')
+                             '"catch", "roll_over"')
     parser.add_argument('--train_for', default=0, type=int,
                         help='Total timesteps of training')
     parser.add_argument('--test_for', default=1000, type=int,
@@ -138,7 +138,8 @@ def main():
     env_names = {"reach": "MIMoReach-v0",
                  "standup": "MIMoStandup-v0",
                  "selfbody": "MIMoSelfBody-v0",
-                 "catch": "MIMoCatch-v0"}
+                 "catch": "MIMoCatch-v0",
+                 "roll_over": "MIMoRollOver-v0"}
 
     env = gym.make(env_names[env_name], actuation_model=actuation_model)
     env.reset()

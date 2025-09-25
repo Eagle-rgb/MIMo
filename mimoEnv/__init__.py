@@ -71,3 +71,8 @@ register(id='MIMoComplianceTest-v0',
 register(id='MIMoComplianceMuscleTest-v0',
          entry_point='mimoEnv.envs:MIMoComplianceMuscleEnv',
          )
+
+register(id='MIMoRollOver-v0',
+         entry_point='mimoEnv.envs:MIMoRollOverEnv',
+         max_episode_steps=500,
+         )

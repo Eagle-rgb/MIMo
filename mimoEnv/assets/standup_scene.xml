@@ -58,11 +58,11 @@
 		
 	    <body name="crib" pos="0.078 0 0.42">
             <geom type="cylinder" material="crib" size="0.02 0.4" pos="0 0 0" euler="90 0 0"/>
-            <geom type="cylinder" material="crib" size="0.01 0.2" pos="0 0 -0.2" euler="0 0 0"/>
-            <geom type="cylinder" material="crib" size="0.01 0.2" pos="0 -0.2 -0.2" euler="0 0 0"/>
-            <geom type="cylinder" material="crib" size="0.01 0.2" pos="0 0.2 -0.2" euler="0 0 0"/>
-            <geom type="cylinder" material="crib" size="0.01 0.2" pos="0 -0.4 -0.2" euler="0 0 0"/>
-            <geom type="cylinder" material="crib" size="0.01 0.2" pos="0 0.4 -0.2" euler="0 0 0"/>
+            <geom type="cylinder" material="crib" size="0.01 0.3" pos="0 0 -0.3" euler="0 0 0"/>
+            <geom type="cylinder" material="crib" size="0.01 0.3" pos="0 -0.2 -0.3" euler="0 0 0"/>
+            <geom type="cylinder" material="crib" size="0.01 0.3" pos="0 0.2 -0.3" euler="0 0 0"/>
+            <geom type="cylinder" material="crib" size="0.01 0.3" pos="0 -0.4 -0.3" euler="0 0 0"/>
+            <geom type="cylinder" material="crib" size="0.01 0.3" pos="0 0.4 -0.3" euler="0 0 0"/>
             <geom type="sphere"   material="crib" size="0.022" pos="0 -0.4 0" euler="0 0 0"/>
             <geom type="sphere"   material="crib" size="0.022" pos="0 0.4 0" euler="0 0 0"/>
         </body>
