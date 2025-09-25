@@ -1,4 +1,4 @@
-# MIMo
+# MIMo, the Multimodal Infant Model 
 
 <img src="/docs/source/imgs/growth.png" width="400" align="right">
 
@@ -72,7 +72,7 @@ If you use any of the functionality of MIMo-v2, such as body growth, developing 
   title={MIMo Grows! Simulating Body and Sensory Development in a Multimodal Infant Model},
   author={L{\'o}pez, Francisco M and Lenz, Miles and Fedozzi, Marco G and Aubret, Arthur and Triesch, Jochen},
   booktitle={2025 IEEE International Conference on Development and Learning (ICDL)},  
-  pages={1 -- 6},
+  pages={1--6},
   year={2025},
   organization={IEEE}
 }
