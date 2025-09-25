@@ -5,7 +5,6 @@ from typing import List, Dict, Tuple
 
 EPS = 1e-10
 
-
 MUJOCO_JOINT_SIZES = {
     mujoco.mjtJoint.mjJNT_FREE: 7,
     mujoco.mjtJoint.mjJNT_BALL: 4,
@@ -290,9 +289,8 @@ def set_joint_locking_angle(mujoco_model, joint_name, angle, constraint_id=None)
         constraint_id (int|ndarray): If the ID(s) of the constraint is already known the id lookup can be bypassed by
             passing it here.
     """
-    if constraint_id is None:
-        constraint_id = mujoco_model.equality(joint_name).id
-    mujoco_model.eq_data[constraint_id, 0] = angle
+    mujoco_model.equality(joint_name).data[0] = angle
+    mujoco_model.equality(joint_name).data[1:] = 0
 
 
 def lock_joint(mujoco_model, joint_name, joint_angle=None):
@@ -302,6 +300,7 @@ def lock_joint(mujoco_model, joint_name, joint_angle=None):
     constraint already existing the scene XML. This is the case for MIMo by default, with each joint having a constraint
     of the same name that is disabled at initialization.
     In effect this function enables the equality constraint with same name as the argument.
+    The joint is locked if the angle is defined or if there is no other active constraint locking the joint.
 
     Args:
         mujoco_model (mujoco.MjModel): The MuJoCo model object.
@@ -313,8 +312,20 @@ def lock_joint(mujoco_model, joint_name, joint_angle=None):
     constraint_id = mujoco_model.equality(joint_name).id
     if joint_angle is not None:
         set_joint_locking_angle(mujoco_model, joint_name, joint_angle, constraint_id=constraint_id)
-    mujoco_model.eq_active[constraint_id] = True
-
+        mujoco_model.equality(joint_name).active0[0] = 1
+    else:
+        joint_id = mujoco_model.equality(joint_name).obj1id
+        joint_locked_by_other_constraint = False
+        for equality_id in range(len(mujoco_model.eq_data)): 
+            if (mujoco_model.equality(equality_id).type == 2) \
+            and (joint_id == mujoco_model.equality(equality_id).obj1id \
+            or joint_id == mujoco_model.equality(equality_id).obj2id ) \
+            and (constraint_id != mujoco_model.equality(equality_id).id) \
+            and (mujoco_model.equality(equality_id).active0[0] == 1):
+                joint_locked_by_other_constraint = True
+                break
+        if not joint_locked_by_other_constraint:
+            mujoco_model.equality(joint_name).active0[0] = 1
 
 def unlock_joint(mujoco_model, joint_name):
     """ Unlocks a given joint.
@@ -325,8 +336,7 @@ def unlock_joint(mujoco_model, joint_name):
         mujoco_model (mujoco.MjModel): The MuJoCo model object.
         joint_name (str): The name of the joint.
     """
-    constraint_id = mujoco_model.equality(joint_name).id
-    mujoco_model.eq_active[constraint_id] = False
+    mujoco_model.equality(joint_name).active0[0] = 0
 
 
 # ======================== Mujoco frame utils =====================================
@@ -343,7 +353,7 @@ def get_geom_position(mujoco_data, geom_id):
     Returns:
         numpy.ndarray: The position of the geom in the world frame. Shape (3,).
     """
-    return mujoco_data.geom_xpos[geom_id]
+    return mujoco_data.geom(geom_id).xpos
 
 
 def get_body_position(mujoco_data, body_id):
@@ -356,7 +366,7 @@ def get_body_position(mujoco_data, body_id):
     Returns:
         numpy.ndarray: The position of the body in the world frame. Shape (3,).
     """
-    return mujoco_data.xpos[body_id]
+    return mujoco_data.body(body_id).xpos
 
 
 def get_geom_rotation(mujoco_data, geom_id):
@@ -369,7 +379,7 @@ def get_geom_rotation(mujoco_data, geom_id):
     Returns:
           numpy.ndarray: A (3,3) array containing the rotation matrix.
     """
-    return np.reshape(mujoco_data.geom_xmat[geom_id], (3, 3))
+    return np.reshape(mujoco_data.geom(geom_id).xmat, (3, 3))
 
 
 def get_body_rotation(mujoco_data, body_id):
@@ -382,7 +392,7 @@ def get_body_rotation(mujoco_data, body_id):
     Returns:
           numpy.ndarray: A (3,3) array containing the rotation matrix.
     """
-    return np.reshape(mujoco_data.xmat[body_id], (3, 3))
+    return np.reshape(mujoco_data.body(body_id).xmat, (3, 3)) 
 
 
 def world_pos_to_geom(mujoco_data, position, geom_id):

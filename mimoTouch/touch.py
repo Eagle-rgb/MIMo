@@ -160,9 +160,6 @@ class DiscreteTouch(Touch):
 
     def __init__(self, env, touch_params):
         super().__init__(env, touch_params)
-        self.m_data = env.data
-        self.m_model = env.model
-
         self.plotting_limits = {}
 
         # Add sensors to bodies
@@ -187,14 +184,14 @@ class DiscreteTouch(Touch):
         Returns:
             int: The number of sensors added to this body.
         """
-        body_id = env_utils.get_body_id(self.m_model, body_id=body_id, body_name=body_name)
+        body_id = env_utils.get_body_id(env.model, body_id=body_id, body_name=body_name)
 
         n_sensors = 0
 
-        for geom_id in env_utils.get_geoms_for_body(self.m_model, body_id):
-            g_body_id = self.m_model.geom(geom_id).bodyid.item()
-            contype = self.m_model.geom(geom_id).contype.item()
-            conaffinity = self.m_model.geom(geom_id).conaffinity.item()
+        for geom_id in env_utils.get_geoms_for_body(env.model, body_id):
+            g_body_id = env.model.geom(geom_id).bodyid.item()
+            contype = env.model.geom(geom_id).contype.item()
+            conaffinity = env.model.geom(geom_id).conaffinity.item()
             # Add a geom if it belongs to body and has collisions enabled (at least potentially)
             if g_body_id == body_id and (contype > 0 or conaffinity > 0):
                 n_sensors += self.add_geom(geom_id=geom_id, scale=scale)
@@ -215,9 +212,9 @@ class DiscreteTouch(Touch):
         Returns:
             int: The number of sensors added to this geom.
         """
-        geom_id = env_utils.get_geom_id(self.m_model, geom_id=geom_id, geom_name=geom_name)
+        geom_id = env_utils.get_geom_id(env.model, geom_id=geom_id, geom_name=geom_name)
 
-        if self.m_model.geom(geom_id).contype.item() == 0 and self.m_model.geom(geom_id).conaffinity.item() == 0:
+        if env.model.geom(geom_id).contype.item() == 0 and env.model.geom(geom_id).conaffinity.item() == 0:
             raise RuntimeWarning("Added sensors to geom with collisions disabled!")
         return self._add_sensorpoints(geom_id, scale)
 
@@ -280,8 +277,8 @@ class DiscreteTouch(Touch):
         # Add sensor points for the given geom using given resolution
         # Returns the number of sensor points added
         # Also set the maximum size of the geom, for plotting purposes
-        geom_type = self.m_model.geom(geom_id).type.item()
-        size = self.m_model.geom(geom_id).size
+        geom_type = env.model.geom(geom_id).type.item()
+        size = env.model.geom(geom_id).size
         limit = 1
         if geom_type == mujoco.mjtGeom.mjGEOM_BOX:
             limit = np.max(size)
@@ -302,7 +299,7 @@ class DiscreteTouch(Touch):
         elif geom_type == mujoco.mjtGeom.mjGEOM_ELLIPSOID:
             raise NotImplementedError("Ellipsoids currently not implemented")
         elif geom_type == mujoco.mjtGeom.mjGEOM_MESH:
-            size = self.m_model.geom(geom_id).rbound
+            size = env.model.geom(geom_id).rbound
             limit = size
             points = spread_points_sphere(scale, size)
         else:
@@ -392,7 +389,7 @@ class DiscreteTouch(Touch):
         Returns:
             np.ndarray: An array with the position of the contact.
         """
-        return self.m_data.contact[contact_id].pos
+        return self.data.contact[contact_id].pos
 
     def get_contact_position_relative(self, contact_id, geom_id):
         """ Get the position of a contact in the coordinate frame of a geom.
@@ -407,8 +404,8 @@ class DiscreteTouch(Touch):
         Returns:
             np.ndarray: An array with the position of the contact.
         """
-        body_pos = env_utils.world_pos_to_geom(self.m_data, self.get_contact_position_world(contact_id), geom_id)
-        contact = self.m_data.contact[contact_id]
+        body_pos = env_utils.world_pos_to_geom(self.data, self.get_contact_position_world(contact_id), geom_id)
+        contact = self.data.contact[contact_id]
         if contact.dist < 0:
             # Have to correct contact position towards surface of our body.
             # Note that distance is negative for intersecting geoms and the normal vector points into the sensing geom.
@@ -431,11 +428,11 @@ class DiscreteTouch(Touch):
         Returns:
             Tuple[plt.Figure, plt.Axes]: A tuple (fig, ax) with the pyplot figure and axis objects.
         """
-        geom_id = env_utils.get_geom_id(self.m_model, geom_id=geom_id, geom_name=geom_name)
+        geom_id = env_utils.get_geom_id(env.model, geom_id=geom_id, geom_name=geom_name)
 
         points = self.sensor_positions[geom_id]
         limit = self.plotting_limits[geom_id]
-        title = self.m_model.geom(geom_id).name
+        title = env.model.geom(geom_id).name
         fig, ax = env_utils.plot_points(points, limit=limit, title=title, show=False)
         return fig, ax
 
@@ -451,7 +448,7 @@ class DiscreteTouch(Touch):
         Returns:
             Tuple[plt.Figure, plt.Axes]: A tuple (fig, ax) with the pyplot figure and axis objects.
         """
-        geom_id = env_utils.get_geom_id(self.m_model, geom_id=geom_id, geom_name=geom_name)
+        geom_id = env_utils.get_geom_id(env.model, geom_id=geom_id, geom_name=geom_name)
 
         sensor_points = self.sensor_positions[geom_id]
         force_vectors = self.sensor_outputs[geom_id]
@@ -473,14 +470,14 @@ class DiscreteTouch(Touch):
         """
         points = []
         forces = []
-        for geom_id in env_utils.get_geoms_for_body(self.m_model, body_id):
-            points_in_body = env_utils.geom_pos_to_body(self.m_data, self.sensor_positions[geom_id], geom_id, body_id)
+        for geom_id in env_utils.get_geoms_for_body(env.model, body_id):
+            points_in_body = env_utils.geom_pos_to_body(self.data, self.sensor_positions[geom_id], geom_id, body_id)
             points.append(points_in_body)
             force_vectors = self.sensor_outputs[geom_id] / 100
             if force_vectors.shape[1] == 1:
                 # TODO: Need proper sensor normals, can't do this until trimesh rework
                 raise RuntimeWarning("Plotting of scalar forces not implemented!")
-            body_forces = env_utils.geom_rot_to_body(self.m_data, force_vectors, geom_id=geom_id, body_id=body_id)
+            body_forces = env_utils.geom_rot_to_body(self.data, force_vectors, geom_id=geom_id, body_id=body_id)
             forces.append(body_forces)
         points_t = np.concatenate(points)
         forces_t = np.concatenate(forces)
@@ -499,7 +496,7 @@ class DiscreteTouch(Touch):
         Returns:
             Tuple[plt.Figure, plt.Axes]: A tuple (fig, ax) with the pyplot figure and axis objects.
         """
-        body_id = env_utils.get_body_id(self.m_model, body_id=body_id, body_name=body_name)
+        body_id = env_utils.get_body_id(env.model, body_id=body_id, body_name=body_name)
 
         points, forces = self._get_plot_info_body(body_id)
 
@@ -523,8 +520,8 @@ class DiscreteTouch(Touch):
             np.ndarray: An array with shape (3,) containing the normal force and tangential frictional forces.
         """
         forces = np.zeros(6, dtype=np.float64)
-        mujoco.mj_contactForce(self.m_model, self.m_data, contact_id, forces)
-        contact = self.m_data.contact[contact_id]
+        mujoco.mj_contactForce(env.model, self.data, contact_id, forces)
+        contact = self.data.contact[contact_id]
         if geom_id == contact.geom1:
             forces *= -1  # Convention is that normal points away from geom1
         elif geom_id == contact.geom2:
@@ -543,7 +540,7 @@ class DiscreteTouch(Touch):
         Returns:
             np.ndarray: An array with shape (3,) containing the normal vector.
         """
-        contact = self.m_data.contact[contact_id]
+        contact = self.data.contact[contact_id]
         normal_vector = contact.frame[:3]
         if geom_id == contact.geom1:  # Mujoco vectors point away from geom1 by convention
             normal_vector *= -1
@@ -552,7 +549,7 @@ class DiscreteTouch(Touch):
         else:
             RuntimeError("Mismatch between contact and geom")
         # contact frame is in global coordinate frame, rotate to geom frame
-        normal_vector = rotate_vector(normal_vector, env_utils.get_geom_rotation(self.m_data, geom_id))
+        normal_vector = rotate_vector(normal_vector, env_utils.get_geom_rotation(self.data, geom_id))
         return normal_vector
 
     # =============== Valid touch force functions =====================================
@@ -587,7 +584,7 @@ class DiscreteTouch(Touch):
         Returns:
             np.ndarray: An array with shape (3,) containing the contact force as a vector.
         """
-        contact = self.m_data.contact[contact_id]
+        contact = self.data.contact[contact_id]
         forces = self.get_raw_force(contact_id, geom_id)
         force_rot = np.reshape(contact.frame, (3, 3))
         global_forces = rotate_vector_transpose(forces, force_rot)
@@ -606,7 +603,7 @@ class DiscreteTouch(Touch):
             np.ndarray: An array with shape (3,) containing the contact force as a vector.
         """
         global_forces = self.force_vector_global(contact_id, geom_id)
-        relative_forces = rotate_vector_transpose(global_forces, env_utils.get_geom_rotation(self.m_data, geom_id))
+        relative_forces = rotate_vector_transpose(global_forces, env_utils.get_geom_rotation(self.data, geom_id))
         return relative_forces
 
     # =============== Output functions ================================================
@@ -623,8 +620,8 @@ class DiscreteTouch(Touch):
             List[Tuple[int, int, np.ndarray]]: A list of tuples with contact information.
         """
         contact_tuples = []
-        for i in range(self.m_data.ncon):
-            contact = self.m_data.contact[i]
+        for i in range(self.data.ncon):
+            contact = self.data.contact[i]
             # Do we sense this contact at all
             if self.has_sensors(contact.geom1) or self.has_sensors(contact.geom2):
                 rel_geoms = []
@@ -721,7 +718,7 @@ class DiscreteTouch(Touch):
             force (np.ndarray): The raw force.
         """
         # Get all sensors within distance (distance here is just double the sensor scale)
-        body_id = self.m_model.geom(geom_id).bodyid.item()
+        body_id = env.model.geom(geom_id).bodyid.item()
         scale = self.sensor_scales[body_id]
         nearest_sensors, sensor_distances = self.get_sensors_within_distance(contact_id, geom_id, 2*scale)
 
@@ -835,9 +832,7 @@ class TrimeshTouch(Touch):
 
     def __init__(self, env, touch_params):
         super().__init__(env, touch_params=touch_params)
-        self.m_model = self.env.model
-        self.m_data = self.env.data
-
+        
         # for each body, _submeshes stores the individual watertight meshes as a list and '_active_subvertices' stores
         # a boolean area of whether the vertices are active sensors. Inactive sensors do not output data and are not
         # included in the output arrays.
@@ -884,16 +879,16 @@ class TrimeshTouch(Touch):
             body_name (str|None): Name of the body. If `body_id` is provided this parameter is ignored!
             scale (float): The distance between sensor points.
         """
-        body_id = env_utils.get_body_id(self.m_model, body_id=body_id, body_name=body_name)
+        body_id = env_utils.get_body_id(self.env.model, body_id=body_id, body_name=body_name)
         meshes = []
-        for geom_id in env_utils.get_geoms_for_body(self.m_model, body_id):
-            contype = self.m_model.geom(geom_id).contype.item()
-            conaffinity = self.m_model.geom(geom_id).conaffinity.item()
+        for geom_id in env_utils.get_geoms_for_body(self.env.model, body_id):
+            contype = self.env.model.geom(geom_id).contype.item()
+            conaffinity = self.env.model.geom(geom_id).conaffinity.item()
             if contype == 0 and conaffinity == 0:
                 continue
             mesh = self._get_mesh(geom_id, scale)
             # Move meshes from geom into body frame
-            mesh.vertices = env_utils.geom_pos_to_body(self.m_data, mesh.vertices.copy(), geom_id, body_id)
+            mesh.vertices = env_utils.geom_pos_to_body(self.env.data, mesh.vertices.copy(), geom_id, body_id)
             meshes.append(mesh)
         self._submeshes[body_id] = meshes
         if len(meshes) > 1:
@@ -1004,8 +999,8 @@ class TrimeshTouch(Touch):
         """
         # Do sensorpoints for a single geom
         # TODO: Use our own normals instead of default from trimesh face estimation
-        geom_type = self.m_model.geom(geom_id).type.item()
-        size = self.m_model.geom(geom_id).size
+        geom_type = self.env.model.geom(geom_id).type.item()
+        size = self.env.model.geom(geom_id).size
 
         if geom_type == mujoco.mjtGeom.mjGEOM_BOX:
             mesh = mesh_box(scale, size)
@@ -1023,7 +1018,7 @@ class TrimeshTouch(Touch):
             mesh = mesh_ellipsoid(scale, size)
         elif geom_type == mujoco.mjtGeom.mjGEOM_MESH:
             # TODO: Use convex hull of mesh as sensor mesh? Would not have remotely consistent spacing
-            size = self.m_model.geom(geom_id).rbound
+            size = self.env.model.geom(geom_id).rbound
             mesh = mesh_sphere(scale, size)
         else:
             return None
@@ -1272,8 +1267,9 @@ class TrimeshTouch(Touch):
             active_vertices_on_submesh = self._active_subvertices[body_id][i]
             # If we only have a single sensor point, and it is active we add it to the candidates and go to next
             # submesh
-            if mesh.vertices.shape[0] == 1 and active_vertices_on_submesh[0]:
-                mesh_candidate_idxs.append(sub_idx)
+            if len(mesh.vertices) == 1:
+                if active_vertices_on_submesh[0]:
+                    mesh_candidate_idxs.append(sub_idx)
                 continue
 
             # The actual search happens here now simply using BFS
@@ -1393,7 +1389,7 @@ class TrimeshTouch(Touch):
         Returns:
             np.ndarray: An array with the contact position.
         """
-        return self.m_data.contact[contact_id].pos
+        return self.env.data.contact[contact_id].pos
 
     def get_contact_position_relative(self, contact_id, body_id):
         """ Get the position of a contact in the coordinate frame of a body.
@@ -1408,8 +1404,8 @@ class TrimeshTouch(Touch):
         Returns:
             np.ndarray: An array with the contact position.
         """
-        contact_pos = env_utils.world_pos_to_body(self.m_data, self.get_contact_position_world(contact_id), body_id)
-        contact = self.m_data.contact[contact_id]
+        contact_pos = env_utils.world_pos_to_body(self.env.data, self.get_contact_position_world(contact_id), body_id)
+        contact = self.env.data.contact[contact_id]
         if contact.dist < 0:
             # Have to correct contact position towards surface of our body.
             # Note that distance is negative for intersecting geoms and the normal vector points into the sensing geom.
@@ -1435,11 +1431,11 @@ class TrimeshTouch(Touch):
             np.ndarray: An array with shape (3,) with the normal force and the two tangential friction forces.
         """
         forces = np.zeros(6, dtype=np.float64)
-        mujoco.mj_contactForce(self.m_model, self.m_data, contact_id, forces)
-        contact = self.m_data.contact[contact_id]
-        if contact.geom1 in env_utils.get_geoms_for_body(self.m_model, body_id=body_id):
+        mujoco.mj_contactForce(self.env.model, self.env.data, contact_id, forces)
+        contact = self.env.data.contact[contact_id]
+        if contact.geom1 in env_utils.get_geoms_for_body(self.env.model, body_id=body_id):
             forces *= -1  # Convention is that normal points away from geom1
-        elif contact.geom2 in env_utils.get_geoms_for_body(self.m_model, body_id=body_id):
+        elif contact.geom2 in env_utils.get_geoms_for_body(self.env.model, body_id=body_id):
             pass
         else:
             RuntimeError("Mismatch between contact and body")
@@ -1455,17 +1451,17 @@ class TrimeshTouch(Touch):
         Returns:
             np.ndarray: An array of shape (3,) containing the normal vector.
         """
-        contact = self.m_data.contact[contact_id]
+        contact = self.env.data.contact[contact_id]
         normal_vector = contact.frame[:3]
         # Mujoco vectors point away from geom1 by convention
-        if contact.geom1 in env_utils.get_geoms_for_body(self.m_model, body_id=body_id):
+        if contact.geom1 in env_utils.get_geoms_for_body(self.env.model, body_id=body_id):
             normal_vector *= -1
-        elif contact.geom2 in env_utils.get_geoms_for_body(self.m_model, body_id=body_id):
+        elif contact.geom2 in env_utils.get_geoms_for_body(self.env.model, body_id=body_id):
             pass
         else:
             RuntimeError("Mismatch between contact and body")
         # contact frame is in global coordinate frame, rotate to body frame
-        normal_vector = env_utils.rotate_vector_transpose(normal_vector, env_utils.get_body_rotation(self.m_data, body_id))
+        normal_vector = env_utils.rotate_vector_transpose(normal_vector, env_utils.get_body_rotation(self.env.data, body_id))
         return normal_vector
 
     # =============== Valid touch force functions =====================================
@@ -1485,7 +1481,7 @@ class TrimeshTouch(Touch):
         Returns:
             np.ndarray: An array of shape (3,) with the forces.
         """
-        contact = self.m_data.contact[contact_id]
+        contact = self.env.data.contact[contact_id]
         forces = self.get_raw_force(contact_id, body_id)
         force_rot = np.reshape(contact.frame, (3, 3))
         global_forces = env_utils.rotate_vector_transpose(forces, force_rot)
@@ -1504,7 +1500,7 @@ class TrimeshTouch(Touch):
             np.ndarray: An array of shape (3,) with the forces.
         """
         global_forces = self.force_vector_global(contact_id, body_id)
-        relative_forces = env_utils.rotate_vector_transpose(global_forces, env_utils.get_body_rotation(self.m_data,
+        relative_forces = env_utils.rotate_vector_transpose(global_forces, env_utils.get_body_rotation(self.env.data,
                                                                                                        body_id))
         return relative_forces
 
@@ -1518,13 +1514,13 @@ class TrimeshTouch(Touch):
         Returns:
             np.ndarray: An array of shape (3,) with the normal force.
         """
-        contact = self.m_data.contact[contact_id]
+        contact = self.env.data.contact[contact_id]
         forces = self.get_raw_force(contact_id, body_id)
         force_rot = np.reshape(contact.frame, (3, 3))
         # Forces[0] is the magnitude of the normal force, while the first column of the contact frame is the normal
         # vector.
         normal_force = forces[0] * force_rot[:, 0]
-        normal_force = env_utils.world_rot_to_body(self.m_data, normal_force, body_id)
+        normal_force = env_utils.world_rot_to_body(self.env.data, normal_force, body_id)
         return normal_force
 
     # =============== Output related functions ========================================
@@ -1541,10 +1537,10 @@ class TrimeshTouch(Touch):
             List[Tuple[int, int, np.ndarray]]: A list of tuples with contact information.
         """
         contact_tuples = []
-        for i in range(self.m_data.ncon):
-            contact = self.m_data.contact[i]
-            body1 = self.m_model.geom(contact.geom1).bodyid.item()
-            body2 = self.m_model.geom(contact.geom2).bodyid.item()
+        for i in range(self.env.data.ncon):
+            contact = self.env.data.contact[i]
+            body1 = self.env.model.geom(contact.geom1).bodyid.item()
+            body2 = self.env.model.geom(contact.geom2).bodyid.item()
             # Do we sense this contact at all
             if self.has_sensors(body1) or self.has_sensors(body2):
                 rel_bodies = []
@@ -1681,11 +1677,11 @@ class TrimeshTouch(Touch):
             body_name (str|None): The name of the body. This is ignored if the ID is provided!
             title (str): The title of the plot. Empty by default.
         """
-        body_id = env_utils.get_body_id(self.m_model, body_id=body_id, body_name=body_name)
+        body_id = env_utils.get_body_id(self.env.model, body_id=body_id, body_name=body_name)
 
         points = self.meshes[body_id].vertices
         limit = self.plotting_limits[body_id]
-        title = self.m_model.body(body_id).name
+        title = self.env.model.body(body_id).name
         env_utils.plot_points(points, limit=limit, title=title)
 
     # Plot forces for single body
@@ -1702,11 +1698,11 @@ class TrimeshTouch(Touch):
         Returns:
             Tuple[plt.Figure, plt.Axes]: A tuple (fig, ax) with the pyplot figure and axis objects.
         """
-        body_id = env_utils.get_body_id(self.m_model, body_id=body_id, body_name=body_name)
+        body_id = env_utils.get_body_id(self.env.model, body_id=body_id, body_name=body_name)
 
         sensor_points = self.sensor_positions[body_id]
         force_vectors = self.sensor_outputs[body_id] / 20
-        title = self.m_model.body(body_id).name + " forces"
+        title = self.env.model.body(body_id).name + " forces"
         if force_vectors.shape[1] == 1:
             normals = self.meshes[body_id].vertex_normals[self.active_vertices[body_id], :]
             force_vectors = force_vectors * normals
@@ -1741,7 +1737,7 @@ class TrimeshTouch(Touch):
         assert len(body_ids) > 0 or len(body_names) > 0
         assert focus in ["world", "first"]
         if len(body_ids) == 0:
-            body_ids = [env_utils.get_body_id(self.m_model, body_name=body_name) for body_name in body_names]
+            body_ids = [env_utils.get_body_id(self.env.model, body_name=body_name) for body_name in body_names]
 
         points = []
         forces = []
@@ -1753,12 +1749,12 @@ class TrimeshTouch(Touch):
                 force_vectors = force_vectors * normals
             # Convert sensor locations and force vectors for this body into appropriate common coordinates
             if focus == "world":
-                sensor_points_common = env_utils.body_pos_to_world(self.m_data, position=sensor_points, body_id=body_id)
-                forces_common = env_utils.body_rot_to_world(self.m_data, vector=force_vectors, body_id=body_id)
+                sensor_points_common = env_utils.body_pos_to_world(self.env.data, position=sensor_points, body_id=body_id)
+                forces_common = env_utils.body_rot_to_world(self.env.data, vector=force_vectors, body_id=body_id)
             else:       # Focus == first
-                sensor_points_common = env_utils.body_pos_to_body(self.m_data, position=sensor_points,
+                sensor_points_common = env_utils.body_pos_to_body(self.env.data, position=sensor_points,
                                                                   body_id_source=body_id, body_id_target=body_ids[0])
-                forces_common = env_utils.body_rot_to_body(self.m_data, vector=force_vectors,
+                forces_common = env_utils.body_rot_to_body(self.env.data, vector=force_vectors,
                                                            body_id_source=body_id, body_id_target=body_ids[0])
             points.append(sensor_points_common)
             forces.append(forces_common)
@@ -1772,11 +1768,11 @@ class TrimeshTouch(Touch):
                 if contact_body_id in body_ids:
                     contact_position = self.get_contact_position_relative(contact_id, contact_body_id)
                     if focus == "world":
-                        contact_position = env_utils.body_pos_to_world(self.m_data,
+                        contact_position = env_utils.body_pos_to_world(self.env.data,
                                                                        position=contact_position,
                                                                        body_id=contact_body_id)
                     else:
-                        contact_position = env_utils.body_pos_to_body(self.m_data,
+                        contact_position = env_utils.body_pos_to_body(self.env.data,
                                                                       position=contact_position,
                                                                       body_id_source=contact_body_id,
                                                                       body_id_target=body_ids[0])
@@ -1802,15 +1798,15 @@ class TrimeshTouch(Touch):
         Returns:
             Tuple[plt.Figure, plt.Axes]: A tuple (fig, ax) with the pyplot figure and axis objects.
         """
-        body_id = env_utils.get_body_id(self.m_model, body_id=body_id, body_name=body_name)
+        body_id = env_utils.get_body_id(self.env.model, body_id=body_id, body_name=body_name)
         # Go through all bodies and note their child bodies
-        subtree = env_utils.get_child_bodies(self.m_model, body_id)
+        subtree = env_utils.get_child_bodies(self.env.model, body_id)
         fig, ax = self.plot_force_bodies(body_ids=subtree, title=title, focus="world",
                                          show_contact_points=show_contact_points)
         return fig, ax
 
-    def visualize_contacts_subtree(self, root_id=None, root_name=None, show_contact_points=False, focus_body=None,
-                                   camera_offset=None):
+    def visualize_contacts_subtree(self, root_id=None, root_name=None, show_contact_points=False, show_body_parts=False,
+                                   focus_body=None, camera_offset=None):
         """ Generates a neat visualization of parts of MIMo and their contact forces.
 
         Starting from a root body, renders the child parts of MIMo and the contact sensors on them. Contact forces are
@@ -1836,39 +1832,40 @@ class TrimeshTouch(Touch):
 
         def get_bodypart_vis(body_id, offsets=0):
             meshes = []
-            for geom_id in env_utils.get_geoms_for_body(self.m_model, body_id):
+            for geom_id in env_utils.get_geoms_for_body(self.env.model, body_id):
                 mesh = self._get_mesh(geom_id, scale=.001)
-                mesh.vertices = env_utils.geom_pos_to_body(self.m_data, mesh.vertices.copy(), geom_id, body_id)
+                mesh.vertices = env_utils.geom_pos_to_body(self.env.data, mesh.vertices.copy(), geom_id, body_id)
                 meshes.append(mesh)
             body_mesh = trimesh.util.concatenate(meshes)
-            vertex_position = env_utils.body_pos_to_world(self.m_data, position=body_mesh.vertices,
+            vertex_position = env_utils.body_pos_to_world(self.env.data, position=body_mesh.vertices,
                                                           body_id=body_id) + offsets
             triangles = body_mesh.faces
             return vertex_position, triangles
 
-        root_id = env_utils.get_body_id(self.m_model, body_id=root_id, body_name=root_name)
-        # Go through all bodies and note their child bodies
-        subtree = env_utils.get_child_bodies(self.m_model, root_id)
+        root_id = env_utils.get_body_id(self.env.model, body_id=root_id, body_name=root_name)
         points_no_contact = []
         points_contact = []
         contact_magnitudes = []
+        # Go through all bodies and note their child bodies
+        subtree = env_utils.get_child_bodies(self.env.model, root_id)
         for body_id in subtree:
-            sensor_points = self.sensor_positions[body_id]
-            force_vectors = self.sensor_outputs[body_id]
+            if (body_id in self.sensor_positions) and (body_id in self.sensor_outputs):
+                sensor_points = self.sensor_positions[body_id]
+                force_vectors = self.sensor_outputs[body_id]
 
-            force_magnitude = np.linalg.norm(force_vectors, axis=-1, ord=2)
-            no_touch_points = sensor_points[force_magnitude <= 1e-7]
-            touch_points = sensor_points[force_magnitude > 1e-7]
-            no_touch_points = env_utils.body_pos_to_world(self.m_data, position=no_touch_points, body_id=body_id)
-            touch_points = env_utils.body_pos_to_world(self.m_data, position=touch_points, body_id=body_id)
+                force_magnitude = np.linalg.norm(force_vectors, axis=-1, ord=2)
+                no_touch_points = sensor_points[force_magnitude <= 1e-7]
+                touch_points = sensor_points[force_magnitude > 1e-7]
+                no_touch_points = env_utils.body_pos_to_world(self.env.data, position=no_touch_points, body_id=body_id)
+                touch_points = env_utils.body_pos_to_world(self.env.data, position=touch_points, body_id=body_id)
 
-            points_no_contact.append(no_touch_points)
-            points_contact.append(touch_points)
-            contact_magnitudes.append(force_magnitude[force_magnitude > 1e-7])
+                points_no_contact.append(no_touch_points)
+                points_contact.append(touch_points)
+                contact_magnitudes.append(force_magnitude[force_magnitude > 1e-7])
 
         points_gray = np.concatenate(points_no_contact)
         points_red = np.concatenate(points_contact)
-        forces = np.concatenate(contact_magnitudes)
+        forces = np.concatenate(contact_magnitudes) + EPS
         size_min = 10
         size_max = 80
         sizes = forces / np.amax(forces) * (size_max - size_min) + size_min
@@ -1880,9 +1877,12 @@ class TrimeshTouch(Touch):
         red_colors[:, 3] = opacities
 
         if focus_body:
-            target_pos = self.m_data.get_body_xpos(focus_body)
+            target_pos = self.env.data.get_body_xpos(focus_body)
         else:
             target_pos = np.zeros((3,))
+
+        if camera_offset is None:
+            camera_offset = np.zeros((3,))
 
         # Subtract all by ball position to center on ball
         xs_gray = points_gray[:, 0] - target_pos[0] + camera_offset[0]
@@ -1893,11 +1893,14 @@ class TrimeshTouch(Touch):
         ys_red = points_red[:, 1] - target_pos[1] + camera_offset[1]
         zs_red = points_red[:, 2] - target_pos[2] + camera_offset[2]
 
-        fig = plt.figure(figsize=(5, 5), dpi=200)
-        ax = fig.add_subplot(111, projection='3d')
+        fig,ax = plt.subplots(figsize=(5, 5), dpi=100)
+        #fig = plt.figure(figsize=(5, 5), dpi=200)
+        #ax = fig.add_subplot(111, projection='3d')
         # Draw sensor points
-        ax.scatter(xs_gray, ys_gray, zs_gray, color="k", s=15, depthshade=False, alpha=.15)
-        ax.scatter(xs_red, ys_red, zs_red, color=red_colors, s=sizes, depthshade=False)
+        ax.scatter(xs_gray, ys_gray, color="k", s=15, alpha=.15)
+        ax.scatter(xs_red, ys_red, color=red_colors, s=sizes)
+        #ax.scatter(xs_gray, ys_gray, zs_gray, color="k", s=15, depthshade=False, alpha=.15)
+        #ax.scatter(xs_red, ys_red, zs_red, color=red_colors, s=sizes, depthshade=False)
 
         # Draw contact points
         if show_contact_points:
@@ -1905,24 +1908,27 @@ class TrimeshTouch(Touch):
                 for contact_id, contact_body_id, forces in self.contact_tuples:
                     if body_id == contact_body_id:
                         contact_position = self.get_contact_position_relative(contact_id, body_id)
-                        contact_position = env_utils.body_pos_to_world(self.m_data,
+                        contact_position = env_utils.body_pos_to_world(self.env.data,
                                                                        position=contact_position,
                                                                        body_id=body_id)
                         ax.scatter(contact_position[0], contact_position[1], contact_position[2],
                                    color="y", s=15, depthshade=True, alpha=0.8)
 
         # Draw body parts
-        for body_id in subtree:
-            vertex_pos, tris = get_bodypart_vis(body_id, offsets=camera_offset - target_pos)
-            ax.plot_trisurf(vertex_pos[:, 0], vertex_pos[:, 1], triangles=tris, Z=vertex_pos[:, 2], color="tab:orange",
-                            alpha=0.05, shade=True)
+        if show_body_parts:
+            for body_id in subtree:
+                vertex_pos, tris = get_bodypart_vis(body_id, offsets=camera_offset - target_pos)
+                ax.plot_trisurf(vertex_pos[:, 0], vertex_pos[:, 1], triangles=tris, Z=vertex_pos[:, 2], color="tab:orange",
+                                alpha=0.05, shade=True)
 
         dists = np.linalg.norm(np.stack([xs_gray, ys_gray, zs_gray], axis=-1), axis=-1, ord=2)
+        dists = np.linalg.norm(np.stack([xs_gray, ys_gray], axis=-1), axis=-1, ord=2)
         limit = np.amax(np.abs(dists)) * 4
         ax.set_xlim([-limit, limit])
         ax.set_ylim([-limit, limit])
-        ax.set_zlim([-limit, limit])
-        ax.set_box_aspect((1, 1, 1))
+        #ax.set_zlim([-limit, limit])
+        #ax.set_box_aspect((1, 1, 1))
+        ax.set_box_aspect(1)
         ax.set_axis_off()
 
         return fig, ax
