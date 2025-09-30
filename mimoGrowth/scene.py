@@ -61,6 +61,16 @@ def create_growth_scene(growth_params: dict, path_scene: str) -> None:
         pos = growth_params["bodies"][name]["pos"]
         body.attrib["pos"] = " ".join(np.array(pos, dtype=str))
 
+    for joint in tree_model.getroot().findall(".//joint"):
+
+        name = joint.attrib["name"]
+
+        if name not in growth_params["joints"]:
+            continue
+
+        pos = growth_params["joints"][name]["pos"]
+        joint.attrib["pos"] = " ".join(np.array(pos, dtype=str))
+
     for motor in tree_meta.getroot().find("actuator").findall(".//motor"):
 
         name = motor.attrib["name"]
