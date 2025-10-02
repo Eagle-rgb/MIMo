@@ -63,8 +63,8 @@ class SimpleVision(Vision):
     The parameter `camera_parameters` should be a dictionary with the following structure::
 
         {
-            'camera_name': {'width': width, 'height': height, 'acuity': age_for_visual_acuity, 'foveation': True/False},
-            'other_camera_name': {'width': width, 'height': height, 'acuity': age_for_visual_acuity, 'foveation': True/False},
+            'camera_name': {'width': width, 'height': height, 'acuity': age_for_visual_acuity, 'foveation': strength_of_foveation},
+            'other_camera_name': {'width': width, 'height': height, 'acuity': age_for_visual_acuity, 'foveation': strength_of_foveation},
         }
 
     The default MIMo model has two cameras, one in each eye, named `eye_left` and `eye_right`. Note that the cameras in
@@ -95,13 +95,10 @@ class SimpleVision(Vision):
             if camera_parameters[camera]["acuity"]:
                 self._acuity_functions[camera] = self._get_acuity_function(
                     camera_parameters[camera]["width"], camera_parameters[camera]["height"],
-                    acuity_age=camera_parameters[camera]["acuity"], fovy=60)
+                    acuity_age=camera_parameters[camera]["acuity"], fovy=camera_parameters[camera]["fovy"])
             else:
                 self._acuity_functions[camera] = None
-            if camera_parameters[camera]["foveation"]:
-                self._foveation[camera] = True
-            else:
-                self._foveation[camera] = False            
+            self._foveation[camera] = camera_parameters[camera]["foveation"]
 
     def get_vision_obs(self):
         """ Produces the current vision output.
@@ -137,7 +134,7 @@ class SimpleVision(Vision):
             if self._acuity_functions[camera] is not None: # Apply age-dependent visual acuity
                 img = self._apply_acuity(img, camera)
             if self._foveation[camera]: # Apply foveation
-                img = self._apply_foveation(img)
+                img = self._apply_foveation(img, self._foveation[camera])
             imgs[camera] = img
         self.sensor_outputs = imgs
 
@@ -242,22 +239,46 @@ class SimpleVision(Vision):
         fx = a * x**b
         return np.clip(fx, 0.01, 0.99)
         
-    def _apply_foveation(self, img):
-        """ Applies foveation to the image by warping the image to a log polar space and unwarping the polar mapping.
+    def _apply_foveation(self, img, strength):
         """
-        h, w, c = img.shape
-        logpolar_img = cv2.warpPolar(img,
-            maxRadius=h//2,
-            dsize=(h, h),
-            center=(h // 2, h / 2),
-            flags=cv2.WARP_POLAR_LOG + cv2.WARP_FILL_OUTLIERS
-        )
-        log_img = cv2.warpPolar(logpolar_img,
-            maxRadius=h//2,
-            dsize=(h, h),
-            center=(h // 2, h / 2),
-            flags=cv2.WARP_INVERSE_MAP + cv2.WARP_FILL_OUTLIERS
-        )
-        return log_img
-        
+        Applies foveation to the image by warping to a logarithmic mapping.
+
+        Args:
+            img: The original image to be foveated
+            strength: The strength of the foveation (0: no foveation, <5: mild, >20: strong)
+
+        Returns: 
+            numpy.ndarray: A numpy array containing the foveated RGB image.
+        """
+
+        # Compute image center
+        H, W = img.shape[:2]
+        cx, cy = W/2.0, H/2.0
+
+        # Compute maximum radius for mapping
+        R = max(np.hypot(cx, cy), np.hypot(W-cx, cy), np.hypot(cx, H-cy), np.hypot(W-cx, H-cy))
+
+        # Compute polar coordinates of pixels
+        yy, xx = np.indices((H, W), dtype=np.float32)
+        x = xx - cx
+        y = yy - cy
+        r_dst = np.hypot(x, y)
+        theta = np.arctan2(y, x)
+
+        # Apply logarithmic mapping to eccentricities
+        if strength <= 0:
+            r_src = r_dst
+        else:
+            logK = np.log1p(strength).astype(np.float32)
+            r_src = R * (np.expm1((r_dst / R) * logK)) / strength
+
+        # Compute new cartesian coordinates of pixels
+        map_x = (cx + r_src * np.cos(theta)).astype(np.float32)
+        map_y = (cy + r_src * np.sin(theta)).astype(np.float32)
+
+        # Apply remapping
+        out = cv2.remap(img, map_x, map_y, interpolation=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REFLECT)
+
+        return out
+            
 

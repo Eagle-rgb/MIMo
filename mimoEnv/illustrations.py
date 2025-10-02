@@ -113,7 +113,7 @@ def main():
                         help='RL algorithm from Stable Baselines3')
     parser.add_argument('--load_model', default=False, type=str,
                         help='Name of model to load')
-    parser.add_argument('--save_model', default='', type=str,
+    parser.add_argument('--save_model', default='model', type=str,
                         help='Name of model to save')
     parser.add_argument('--render_video', action='store_true',
                         help='Renders a video for each episode during the test run.')
@@ -132,6 +132,8 @@ def main():
     use_muscle = args.use_muscle
 
     save_dir = os.path.join("models", env_name, save_model)
+    if not os.path.exists(save_dir):
+        os.makedirs(save_dir)
 
     actuation_model = MuscleModel if use_muscle else SpringDamperModel
 
@@ -171,6 +173,8 @@ def main():
         counter += 1
         train_for_iter = min(train_for, save_every)
         train_for = train_for - train_for_iter
+        if model is None:
+            raise RuntimeError("Model not defined. Please provide an algorithm name.")
         model.learn(total_timesteps=train_for_iter, reset_num_timesteps=False)
         model.save(os.path.join(save_dir, "model_" + str(counter)))
 
