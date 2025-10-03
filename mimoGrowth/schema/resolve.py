@@ -64,9 +64,11 @@ def mirror_left_elements(params: dict) -> None:
                 mirrored_name = name.replace("left", "right")
                 mirrored_attrs = copy.deepcopy(attributes)
 
-                # Negate the y-pos for bodies (left/right movement) so that
-                # the body is correctly placed.
-                if element_type == "bodies" and "pos" in mirrored_attrs:
+                # Negate the y-pos (left/right movement) for bodies and joints
+                # so that they are correctly placed.
+                cond1 = element_type == "bodies" and "pos" in mirrored_attrs
+                cond2 = element_type == "joints" and "pos" in mirrored_attrs
+                if cond1 or cond2:
                     mirrored_attrs["pos"][1] *= -1
 
                 mirrored_elements[mirrored_name] = mirrored_attrs

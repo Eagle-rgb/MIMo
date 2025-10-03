@@ -330,11 +330,13 @@ SCHEMA_BODIES = {
 
     "left_upper_arm": {
         "pos": [
-            -0.005,
+            0,
             add(
                 ref("geoms", "ub3", "size", 0),
                 ref("geoms", "ub3", "size", 1),
-                ref("geoms", "left_uarm1", "size", 0),
+                # The multiplication determines the overlap between shoulder
+                # and upper body. Multiplying by 1 means no overlap.
+                mul(ref("geoms", "left_uarm1", "size", 0), 0.25)
             ),
             ref("bodies", "upper_body", "pos", 2)
         ]
@@ -348,7 +350,7 @@ SCHEMA_BODIES = {
     "left_hand": {
         "pos": [
             0,
-            0.007,
+            0,  # 0.007,
             mul(add(
                 ref("geoms", "left_larm", "size", 0),
                 mul(ref("geoms", "left_larm", "size", 1), 2),
@@ -390,6 +392,59 @@ SCHEMA_BODIES = {
     "left_toes": {
         "pos": [ref("geoms", "geom:left_foot3", "pos", 0), 0, 0]
     }
+
+}
+
+SCHEMA_JOINTS = {
+
+    # === HIP ===
+    "robot:hip_lean1": {
+        "pos": [0, 0, neg(ref("geoms", "cb", "size", 0))]
+    },
+    "robot:hip_rot1": {
+        "pos": [0, 0, neg(ref("geoms", "cb", "size", 0))]
+    },
+    "robot:hip_bend1": {
+        "pos": [0, 0, neg(ref("geoms", "cb", "size", 0))]
+    },
+    "robot:hip_lean2": {
+        "pos": [0, 0, neg(ref("geoms", "ub1", "size", 0))]
+    },
+    "robot:hip_rot2": {
+        "pos": [0, 0, neg(ref("geoms", "ub1", "size", 0))]
+    },
+    "robot:hip_bend2": {
+        "pos": [0, 0, neg(ref("geoms", "ub1", "size", 0))]
+    },
+
+    # === HEAD ===
+    "robot:head_tilt": {
+        "pos": [0, 0, mul(ref("bodies", "left_eye", "pos", 1), 0.5)]
+    },
+    "robot:head_tilt_side": {
+        "pos": [0, 0, ref("bodies", "left_eye", "pos", 1)]
+    },
+
+    # == SHOULDER ===
+    "robot:left_shoulder_horizontal": {
+        "pos": [0, 0, 0]
+    },
+
+    # === HAND ===
+    "robot:left_hand1": {
+        "pos": [0, ref("bodies", "left_hand", "pos", 1), 0]
+    },
+
+    # === FOOT ===
+    "robot:left_foot1": {
+        "pos": [0, 0, mul(FOOT_HEIGHT, 1.5)]
+    },
+    "robot:left_foot2": {
+        "pos": [0, 0, mul(FOOT_HEIGHT, 1.5)]
+    },
+    "robot:left_foot3": {
+        "pos": [0, 0, mul(FOOT_HEIGHT, 1.5)]
+    },
 
 }
 
@@ -666,7 +721,7 @@ SCHEMA_BODIES_V2 = {
     "left_hand": {
         "pos": [
             mul("hand_breadth", RATIOS_V2["hand_pos_x"]),
-            mul(HAND_HEIGHT_V2, RATIOS_V2["hand_pos_y"]),
+            0,  # mul(HAND_HEIGHT_V2, RATIOS_V2["hand_pos_y"]),
             mul(add(
                 mul(ref("geoms", "left_larm", "size", 0), 2),
                 mul(ref("geoms", "left_larm", "size", 1), 2),
@@ -812,18 +867,49 @@ SCHEMA_BODIES_V2 = {
 
 }
 
+SCHEMA_JOINTS_V2 = {
+
+    # === HAND ===
+    "robot:left_hand1": {
+        "pos": [
+            neg(ref("bodies", "left_hand", "pos", 0)),
+            0,  # neg(ref("bodies", "left_hand", "pos", 0)),
+            mul(neg(ref("geoms", "geom:left_hand1", "size", 2)), 3/5)
+        ]
+    },
+    "robot:left_hand2": {
+        "pos": [
+            neg(ref("bodies", "left_hand", "pos", 0)),
+            0,  # missing
+            mul(neg(ref("geoms", "geom:left_hand1", "size", 2)), 4/5)
+        ]
+    },
+    "robot:left_hand3": {  # done
+        "pos": [
+            neg(ref("bodies", "left_hand", "pos", 0)),
+            0,
+            neg(ref("geoms", "geom:left_hand1", "size", 2))  # temp/wrong
+        ]
+    }
+
+}
+
 SCHEMA = {
     "geoms": SCHEMA_GEOMS,
-    "bodies": SCHEMA_BODIES
+    "bodies": SCHEMA_BODIES,
+    "joints": SCHEMA_JOINTS
 }
 
+# Merge the schema dicts for MIMo_v2. Note that if a key appears
+# twice, the key from the right-hand dict will be used.
 SCHEMA_V2 = {
     "geoms": SCHEMA_GEOMS | SCHEMA_GEOMS_V2,
-    "bodies": SCHEMA_BODIES | SCHEMA_BODIES_V2
+    "bodies": SCHEMA_BODIES | SCHEMA_BODIES_V2,
+    "joints": SCHEMA_JOINTS | SCHEMA_JOINTS_V2
 }
 
-# Remove entries from schema_v2 that are not overwritten and are also not
-# defined in the second version of MIMo.
+# Remove entries from schema_v2 that are not overwritten and
+# are also not defined in the second version of MIMo.
 SCHEMA_V2["geoms"].pop("geom:left_fingers1")
 SCHEMA_V2["geoms"].pop("geom:left_fingers2")
 SCHEMA_V2["bodies"].pop("left_fingers")
