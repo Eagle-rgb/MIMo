@@ -20,9 +20,9 @@ One that links to the meta file of MIMo and another one that links
 to the actual model file. Is is important the the words *meta* and
 *model* are within the file names.
 
-It is possible to use custom measurements in addition to the specified age.
-Custom measurements should be provided in form of a dict where the keys match
-the measurement names in the `mimoGrowth/data/update.py` script.
+It is possible to specify custom geom sizes in addition to the specified age.
+Custom sizes should be provided as a dictionary with keys in the form of
+`(geom_name, index)` and the values providing the geom size in meters.
 
 Example Code:
 ```
@@ -32,14 +32,13 @@ from mimoGrowth.scene import delete_growth_scene
 scene = "path/to/the/scene.xml"
 age = 2  # months
 
-# Provide custom measurements.
-custom_measurements = {
-    "head_circumference_cm": 35,
-    "upper_arm_circumference_cm": 20,
+# Provide custom geom sizes.
+custom = {
+    # ("left_larm", 1): 0.07,  # Increase the lower arm length.
 }
 
 # Create a duplicate of your scene that includes MIMo with the specified age.
-growth_scene = adjust_mimo_to_age(scene, age, custom_measurements)
+growth_scene = adjust_mimo_to_age(scene, age, custom)
 
 # Load the MuJoCo model and data.
 model = mujoco.MjModel.from_xml_path(growth_scene)
@@ -60,10 +59,13 @@ from mimoGrowth.scene import create_growth_scene
 import os
 import re
 import json
+import logging
 import datetime
 import xml.etree.ElementTree as ET
 
 DIRNAME = os.path.dirname(__file__)
+
+logging.basicConfig(format="%(levelname)s: %(message)s")
 
 
 def log(age: float, path_scene: str) -> None:
@@ -116,8 +118,7 @@ def get_version(path: str) -> str:
 
 
 def get_growth_params(
-        age: float, mimo_version: str,
-        custom_measurements: dict = None) -> dict:
+        age: float, mimo_version: str, custom: dict = None) -> dict:
     """
     Calculates all growth parameters for the given age and MIMo version.
     Parameters include:
@@ -128,7 +129,8 @@ def get_growth_params(
     Arguments:
         age (float): The age of MIMo. Must be between 0 and 24.
         mimo_version (str): Version of MIMo. Must be 'v1' or 'v2'.
-        custom_measurements (dict): Custom measurements for MIMo (optional).
+        custom (dict): Custom geom sizes for MIMo. Default is None. See the
+            `adjust_mimo_to_age()` function for more details.
 
     Returns:
         dict: All relevant growth parameters.
@@ -155,33 +157,36 @@ def get_growth_params(
         name = "_".join(body_part.split("_")[:-1])  # Remove unit.
         sizes[name] = growth_function(age, *params)
 
-    # Add the custom measurements.
-    if custom_measurements is not None:
-        for name, custom_size in custom_measurements.items():
-            name = "_".join(name.split("_")[:-1])
-            sizes[name] = custom_size
-
     # Convert all sizes to the expected MuJoCo format.
     for body_part, size in sizes.items():
         measure = re.search("(circ|diam|len|breadth)", body_part).group(0)
         unit = units[body_part]
         sizes[body_part] = mj_unit(size, unit, measure)
 
+    # Select schema based on the version of MIMo.
+    schema = SCHEMA_V2 if mimo_version == "v2" else SCHEMA
+
+    # Update the schema based on the custom geom sizes.
+    if custom:
+        for (geom_name, index), custom_size in custom.items():
+            if "right" in geom_name:
+                logging.warning(
+                    "Custom sizes should only contain left geoms. "
+                    + f"Geom '{geom_name}' will be ignored."
+                )
+                continue
+            schema["geoms"][geom_name]["size"][int(index)] = custom_size
+
+    # Resolve the schema with the calculated sizes.
+    growth_params = resolve(schema, sizes, mimo_version)
+
     # Load default values from original MIMo model.
     path = os.path.join(DIRNAME, "data/defaults.json")
     with open(path) as f:
         defaults = json.load(f)
 
-    # Update the schema based on the version of MIMo.
-    schema = SCHEMA_V2 if mimo_version == "v2" else SCHEMA
-
-    # Resolve the schema with the calculated sizes.
-    growth_params = resolve(schema, sizes, mimo_version)
-
-    # Calculate and add mass.
+    # Calculate and add mass for geoms and gear values for motors.
     calc_geom_masses(growth_params, defaults)
-
-    # Calculate and add gear values for motors.
     calc_motor_gear(growth_params, defaults, mimo_version)
 
     # Mirror the left elements in order get the right elements.
@@ -192,7 +197,7 @@ def get_growth_params(
 
 def adjust_mimo_to_age(
         age: float, path_scene: str,
-        custom_measurements: dict = None, create_log: bool = True) -> str:
+        custom: dict = None, create_log: bool = True) -> str:
     """
     Creates a temporary duplicate of the provided scene where MIMo is adjusted
     to the provided age.
@@ -200,9 +205,16 @@ def adjust_mimo_to_age(
     Arguments:
         age (float): The age of MIMo. Possible values are between 0 and 24.
         path_scene (str): The path to the MuJoCo scene.
-        custom_measurements (dict): Custom measurements for MIMo at the given
-            age. Keys need to match the measurement names in the
-            `mimoGrowth/data/update.py` file. Default is none.
+        custom (dict): Custom geom sizes for MIMo. Default is None.
+
+            The dict keys need to be tuples in the form of `(geom_name, index)`
+            where index refers to the position in the geom size array.
+            Only left-side geoms need to be specified (e.g. "left_arm").
+            The corresponding right-side geoms will be mirrored automatically.
+            The dict values need to be floating numbers representing the size
+            of the geom in meters. All conventions for geoms follow the
+            official MuJoCo specifications.
+
         create_log (bool): If log files should be created. Default is true.
 
     Returns:
@@ -222,7 +234,7 @@ def adjust_mimo_to_age(
 
     mimo_version = get_version(path_scene)
 
-    params = get_growth_params(age, mimo_version, custom_measurements)
+    params = get_growth_params(age, mimo_version, custom)
 
     path_growth_scene = create_growth_scene(params, path_scene)
 
