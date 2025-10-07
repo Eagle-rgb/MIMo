@@ -94,6 +94,7 @@
 		<torque name="proprio:left_eye" site="torque_left_eye"/>
 		<torque name="proprio:right_eye" site="torque_right_eye"/>
 		
+		<torque name="proprio:chest" site="torque_chest"/>
 		<torque name="proprio:trunk_upper" site="torque_ub"/>
 		<torque name="proprio:trunk_lower" site="torque_lb"/>
 		
@@ -122,6 +123,9 @@
 		<motor class="mimo"	name="act:hip_bend" 						joint="robot:hip_bend1" 				gear="10.58" 		forcerange="-1 .765"	user=".8574 32.93 22.97"/>
 		<motor class="mimo"	name="act:hip_twist" 						joint="robot:hip_rot1" 					gear="3.63" 		forcerange="-1 1"		user="1.699 8.136 8.136"/>
 		<motor class="mimo"	name="act:hip_lean" 						joint="robot:hip_lean1" 				gear="7.25" 		forcerange="-1 1"		user="1.278 1.264 1.264"/>
+
+		<motor class="mimo"	name="act:chest_twist" 						joint="robot:chest_rot" 				gear="0.36" 		forcerange="-1 1"		user="1.699 8.136 8.136"/>
+		<motor class="mimo"	name="act:chest_lean" 						joint="robot:chest_lean" 				gear="0.72" 		forcerange="-1 1"		user="1.278 1.264 1.264"/>
 
 		<motor class="mimo"	name="act:head_swivel" 						joint="robot:head_swivel" 				gear="1.8" 			forcerange="-1 1"		user=".6665 24.87 24.87"/>
 		<motor class="mimo"	name="act:head_tilt" 						joint="robot:head_tilt" 				gear="3.3" 			forcerange="-1 .55"		user=".9338 31.39 16.86"/>

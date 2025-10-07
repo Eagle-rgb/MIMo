@@ -20,8 +20,69 @@
 				<site name="torque_ub" type="sphere" size="0.01" pos="0 0 0" group="4"/>
 				<geom name="ub1" type="capsule" size=".052 .035" mass="1.0882" material="top_down" pos="0.007 0 -.032" euler="90 0 0"/>
 				<geom name="ub2" type="capsule" size=".048 .039" mass="0.9499" material="top_middle" pos="0.004 0 0.03" euler="90 0 0"/>
-				<geom name="ub3" type="capsule" size=".041 .047" mass="0.7217" material="top_up" pos="0 0 0.09" euler="90 0 0"/>
+				
+				<body name="chest" pos="0 0 0.09">
+					<joint name="robot:chest_lean" type="hinge" pos="0 0 0" axis="1 0 0" range="-9 9" stiffness="1.69" damping="0.38" frictionloss=".024" armature="0.01"/>
+					<joint name="robot:chest_rot" type="hinge" pos="0 0 0" axis="0 0 1" range="-18 18" stiffness="1.45" damping="0.29" frictionloss=".018" armature="0.01"/>
+					<site name="torque_chest" type="sphere" size="0.01" pos="0 0 0" group="4"/>
+					<geom name="ub3" type="capsule" size=".041 .047" mass="0.7217" material="top_up" pos="0 0 0" euler="90 0 0"/>
+				
+					<body name="right_upper_arm" pos="-.005 -0.105 .003" euler="170 0 0">
+						<!-- Arm length is 31.36cm -->
+						<joint name="robot:right_shoulder_horizontal" type="hinge" pos="0 -.024 0" axis="0 1 -4" range="-28 118" stiffness=".09" damping=".05" frictionloss=".0009" armature="0.004"/>
+						<joint name="robot:right_shoulder_ad_ab" type="hinge" pos="0 0 0" axis="-1 0 0" range="-84 183" stiffness=".11" damping=".10" frictionloss=".0014" armature="0.004"/>
+						<joint name="robot:right_shoulder_rotation" type="hinge" pos="0 0 0" axis="0 0 -1" range="-99 67" stiffness=".12" damping=".07" frictionloss=".0008" armature="0.004"/>
+						<site name="torque_right_shoulder" type="sphere" size="0.01" pos="0 0 0" group="4"/>
+						<geom name="right_uarm1" type="capsule" material="top_sleeve" size="0.024 0.0536" mass=".2684" pos="0 0 .0536" euler="0 0 0"/>
+						<body name="right_lower_arm" pos="0 0 .1076" euler="0 0 0">
+							<joint name="robot:right_elbow" type="hinge" pos="0 0 0" axis="0 -1 0" springref="-20" range="-146 5" stiffness=".13" damping=".11" frictionloss=".030" armature="0.002"/>
+							<site name="torque_right_elbow" type="sphere" size="0.01" pos="0 0 0" group="4"/>
+							<geom name="right_larm" type="capsule" size=".023 0.037" mass=".1853" pos="0 0 .037"/>
+							<body name="right_hand" pos="0 -.007 .087" euler="0 0 0"> <!-- Hand length is 9.3, Palm length is 5.16 -->
+								<joint name="robot:right_hand1" type="hinge" pos="0 .007 0" axis="0 0 -1" springref="-20" range="-90 90" stiffness=".22" damping=".03" frictionloss=".007" armature="0.001"/>
+								<joint name="robot:right_hand2" type="hinge" pos="0 0 0" axis="-1 0 0" range="-92 86" stiffness=".33" damping=".11" frictionloss=".007" armature="0.001"/>
+								<joint name="robot:right_hand3" type="hinge" pos="0 0 0" axis="0 1 0" range="-53 48" stiffness=".38" damping=".11" frictionloss=".007" armature="0.001"/>
+								<site name="torque_right_wrist" type="sphere" size="0.01" pos="0 0 0" group="4"/>
+								<geom name="geom:right_hand1" type="box" size=".0281 .01 .0208" mass=".04315" pos=".005 0 .0208"/>
+								<geom name="geom:right_hand2" type="cylinder" size=".0102 .0278" mass=".01602" pos=".005 0 .0416" euler="0 90 0"/>
+								<body name="right_fingers" pos="0 0 .0416"> <!-- Finger length is 5.14 cm, 1 cm overlap between palm and fingers -->
+									<joint name="robot:right_fingers" type="hinge" pos="0 0 0" axis="-1 0 0" springref="-40" range="-160 8" stiffness=".017" damping=".018" frictionloss=".0023" armature="0.0001"/>
+									<site name="torque_right_fingers" type="sphere" size="0.01" pos="0 0 0" group="4"/>
+									<geom name="geom:right_fingers1" type="box" size=".0228 .01 .0207" mass=".03494" pos="0 0 .0207" friction="5 0.02 0.01"/>
+									<geom name="geom:right_fingers2" type="cylinder" size=".0102 .023" mass=".01323" pos="0 0 .0414" euler="0 90 0" friction="5 0.02 0.01"/>
+								</body>
+							</body>
+						</body>
+					</body>
 					
+					<body name="left_upper_arm" pos="-.005 0.105 .003" euler="-170 0 0">
+						<!-- Arm length is 31.36cm -->
+						<joint name="robot:left_shoulder_horizontal" type="hinge" pos="0 .024 0" axis="0 1 4" range="-28 118" stiffness=".09" damping=".05" frictionloss=".0009" armature="0.004"/>
+						<joint name="robot:left_shoulder_ad_ab" type="hinge" pos="0 0 0" axis="1 0 0" range="-84 183" stiffness=".11" damping=".10" frictionloss=".0014" armature="0.004"/>
+						<joint name="robot:left_shoulder_rotation" type="hinge" pos="0 0 0" axis="0 0 1" range="-99 67" stiffness=".12" damping=".07" frictionloss=".0008" armature="0.004"/>
+						<site name="torque_left_shoulder" type="sphere" size="0.01" pos="0 0 0" group="4"/>
+						<geom name="left_uarm1" type="capsule" material="top_sleeve" size="0.024 0.0536" mass=".2684" pos="0 0 .0536" euler="0 0 0"/>
+						<body name="left_lower_arm" pos="0 0 .1076" euler="0 0 0">
+							<joint name="robot:left_elbow" type="hinge" pos="0 0 0" axis="0 -1 0" springref="-20" range="-146 5" stiffness=".13" damping=".11" frictionloss=".030" armature="0.002"/>
+							<site name="torque_left_elbow" type="sphere" size="0.01" pos="0 0 0" group="4"/>
+							<geom name="left_larm" type="capsule" size=".023 0.037" mass=".1853" pos="0 0 .037"/>
+							<body name="left_hand" pos="0 .007 .087" euler="0 0 0"> <!-- Hand length is 9.3, Palm length is 5.16 -->
+								<joint name="robot:left_hand1" type="hinge" pos="0 .007 0" axis="0 0 1" springref="-20" range="-90 90" stiffness=".22" damping=".03" frictionloss=".007" armature="0.001"/>
+								<joint name="robot:left_hand2" type="hinge" pos="0 0 0" axis="1 0 0" range="-92 86" stiffness=".33" damping=".11" frictionloss=".007" armature="0.001"/>
+								<joint name="robot:left_hand3" type="hinge" pos="0 0 0" axis="0 1 0" range="-53 48" stiffness=".38" damping=".11" frictionloss=".007" armature="0.001"/>
+								<site name="torque_left_wrist" type="sphere" size="0.01" pos="0 0 0" group="4"/>
+								<geom name="geom:left_hand1" type="box" size=".0281 .01 .0208" mass=".04315" pos=".005 0 .0208"/>
+								<geom name="geom:left_hand2" type="cylinder" size=".0102 .0278" mass=".01602" pos=".005 0 .0416" euler="0 90 0"/>
+								<body name="left_fingers" pos="0 0 .0416"> <!-- Finger length is 5.14 cm, 1 cm overlap between palm and fingers -->
+									<joint name="robot:left_fingers" type="hinge" pos="0 0 0" axis="1 0 0" springref="-40" range="-160 8" stiffness=".017" damping=".018" frictionloss=".0023" armature="0.0001"/>
+									<site name="torque_left_fingers" type="sphere" size="0.01" pos="0 0 0" group="4"/>
+									<geom name="geom:left_fingers1" type="box" size=".0228 .01 .0207" mass=".03494" pos="0 0 .0207" friction="5 0.02 0.01"/>
+									<geom name="geom:left_fingers2" type="cylinder" size=".0102 .023" mass=".01323" pos="0 0 .0414" euler="0 90 0" friction="5 0.02 0.01"/>
+								</body>
+							</body>
+						</body>
+					</body>
+				</body>
 				<body name="head" pos="0 0 .135">
 					<geom name="head" type="sphere" size=".0735" mass="1.7748" material="head" pos="0.01 0 0.0735"/>
 					<site name="vestibular" type="sphere" size="0.01" pos="0.01 0 0.0735" group="4"/>
@@ -46,62 +107,7 @@
 						<camera name="eye_right" mode="fixed" fovy="60" pos="0.01125 0 0" euler="90 -90 0"/>
 					</body>
 				</body>
-				
-				<body name="right_upper_arm" pos="-.005 -0.105 .093" euler="170 0 0">
-					<!-- Arm length is 31.36cm -->
-					<joint name="robot:right_shoulder_horizontal" type="hinge" pos="0 -.024 0" axis="0 1 -4" range="-28 118" stiffness=".09" damping=".05" frictionloss=".0009" armature="0.004"/>
-					<joint name="robot:right_shoulder_ad_ab" type="hinge" pos="0 0 0" axis="-1 0 0" range="-84 183" stiffness=".11" damping=".10" frictionloss=".0014" armature="0.004"/>
-					<joint name="robot:right_shoulder_rotation" type="hinge" pos="0 0 0" axis="0 0 -1" range="-99 67" stiffness=".12" damping=".07" frictionloss=".0008" armature="0.004"/>
-					<site name="torque_right_shoulder" type="sphere" size="0.01" pos="0 0 0" group="4"/>
-					<geom name="right_uarm1" type="capsule" material="top_sleeve" size="0.024 0.0536" mass=".2684" pos="0 0 .0536" euler="0 0 0"/>
-					<body name="right_lower_arm" pos="0 0 .1076" euler="0 0 0">
-						<joint name="robot:right_elbow" type="hinge" pos="0 0 0" axis="0 -1 0" springref="-20" range="-146 5" stiffness=".13" damping=".11" frictionloss=".030" armature="0.002"/>
-						<site name="torque_right_elbow" type="sphere" size="0.01" pos="0 0 0" group="4"/>
-						<geom name="right_larm" type="capsule" size=".023 0.037" mass=".1853" pos="0 0 .037"/>
-						<body name="right_hand" pos="0 -.007 .087" euler="0 0 0"> <!-- Hand length is 9.3, Palm length is 5.16 -->
-							<joint name="robot:right_hand1" type="hinge" pos="0 .007 0" axis="0 0 -1" springref="-20" range="-90 90" stiffness=".22" damping=".03" frictionloss=".007" armature="0.001"/>
-							<joint name="robot:right_hand2" type="hinge" pos="0 0 0" axis="-1 0 0" range="-92 86" stiffness=".33" damping=".11" frictionloss=".007" armature="0.001"/>
-							<joint name="robot:right_hand3" type="hinge" pos="0 0 0" axis="0 1 0" range="-53 48" stiffness=".38" damping=".11" frictionloss=".007" armature="0.001"/>
-							<site name="torque_right_wrist" type="sphere" size="0.01" pos="0 0 0" group="4"/>
-							<geom name="geom:right_hand1" type="box" size=".0281 .01 .0208" mass=".04315" pos=".005 0 .0208"/>
-							<geom name="geom:right_hand2" type="cylinder" size=".0102 .0278" mass=".01602" pos=".005 0 .0416" euler="0 90 0"/>
-							<body name="right_fingers" pos="0 0 .0416"> <!-- Finger length is 5.14 cm, 1 cm overlap between palm and fingers -->
-								<joint name="robot:right_fingers" type="hinge" pos="0 0 0" axis="-1 0 0" springref="-40" range="-160 8" stiffness=".017" damping=".018" frictionloss=".0023" armature="0.0001"/>
-								<site name="torque_right_fingers" type="sphere" size="0.01" pos="0 0 0" group="4"/>
-								<geom name="geom:right_fingers1" type="box" size=".0228 .01 .0207" mass=".03494" pos="0 0 .0207" friction="5 0.02 0.01"/>
-								<geom name="geom:right_fingers2" type="cylinder" size=".0102 .023" mass=".01323" pos="0 0 .0414" euler="0 90 0" friction="5 0.02 0.01"/>
-							</body>
-						</body>
-					</body>
-				</body>
-				
-				<body name="left_upper_arm" pos="-.005 0.105 .093" euler="-170 0 0">
-					<!-- Arm length is 31.36cm -->
-					<joint name="robot:left_shoulder_horizontal" type="hinge" pos="0 .024 0" axis="0 1 4" range="-28 118" stiffness=".09" damping=".05" frictionloss=".0009" armature="0.004"/>
-					<joint name="robot:left_shoulder_ad_ab" type="hinge" pos="0 0 0" axis="1 0 0" range="-84 183" stiffness=".11" damping=".10" frictionloss=".0014" armature="0.004"/>
-					<joint name="robot:left_shoulder_rotation" type="hinge" pos="0 0 0" axis="0 0 1" range="-99 67" stiffness=".12" damping=".07" frictionloss=".0008" armature="0.004"/>
-					<site name="torque_left_shoulder" type="sphere" size="0.01" pos="0 0 0" group="4"/>
-					<geom name="left_uarm1" type="capsule" material="top_sleeve" size="0.024 0.0536" mass=".2684" pos="0 0 .0536" euler="0 0 0"/>
-					<body name="left_lower_arm" pos="0 0 .1076" euler="0 0 0">
-						<joint name="robot:left_elbow" type="hinge" pos="0 0 0" axis="0 -1 0" springref="-20" range="-146 5" stiffness=".13" damping=".11" frictionloss=".030" armature="0.002"/>
-						<site name="torque_left_elbow" type="sphere" size="0.01" pos="0 0 0" group="4"/>
-						<geom name="left_larm" type="capsule" size=".023 0.037" mass=".1853" pos="0 0 .037"/>
-						<body name="left_hand" pos="0 .007 .087" euler="0 0 0"> <!-- Hand length is 9.3, Palm length is 5.16 -->
-							<joint name="robot:left_hand1" type="hinge" pos="0 .007 0" axis="0 0 1" springref="-20" range="-90 90" stiffness=".22" damping=".03" frictionloss=".007" armature="0.001"/>
-							<joint name="robot:left_hand2" type="hinge" pos="0 0 0" axis="1 0 0" range="-92 86" stiffness=".33" damping=".11" frictionloss=".007" armature="0.001"/>
-							<joint name="robot:left_hand3" type="hinge" pos="0 0 0" axis="0 1 0" range="-53 48" stiffness=".38" damping=".11" frictionloss=".007" armature="0.001"/>
-							<site name="torque_left_wrist" type="sphere" size="0.01" pos="0 0 0" group="4"/>
-							<geom name="geom:left_hand1" type="box" size=".0281 .01 .0208" mass=".04315" pos=".005 0 .0208"/>
-							<geom name="geom:left_hand2" type="cylinder" size=".0102 .0278" mass=".01602" pos=".005 0 .0416" euler="0 90 0"/>
-							<body name="left_fingers" pos="0 0 .0416"> <!-- Finger length is 5.14 cm, 1 cm overlap between palm and fingers -->
-								<joint name="robot:left_fingers" type="hinge" pos="0 0 0" axis="1 0 0" springref="-40" range="-160 8" stiffness=".017" damping=".018" frictionloss=".0023" armature="0.0001"/>
-								<site name="torque_left_fingers" type="sphere" size="0.01" pos="0 0 0" group="4"/>
-								<geom name="geom:left_fingers1" type="box" size=".0228 .01 .0207" mass=".03494" pos="0 0 .0207" friction="5 0.02 0.01"/>
-								<geom name="geom:left_fingers2" type="cylinder" size=".0102 .023" mass=".01323" pos="0 0 .0414" euler="0 90 0" friction="5 0.02 0.01"/>
-							</body>
-						</body>
-					</body>
-				</body>
+
 			</body>
 		</body>
 			
