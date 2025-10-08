@@ -24,6 +24,7 @@ from mimoGrowth.utils import calc_volume
 # will be done via code.
 MAPPING_MOTOR = {
     "cb": ["act:hip_bend", "act:hip_twist", "act:hip_lean"],
+    "ub3": ["act:chest_twist", "act:chest_lean"],
     "head": ["act:head_swivel", "act:head_tilt", "act:head_tilt_side"],
     "geom:left_eye1": [
         "act:left_eye_horizontal",

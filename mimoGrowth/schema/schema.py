@@ -99,7 +99,7 @@ SCHEMA_GEOMS = {
     },
     "ub3": {
         "size": torso_geom_size("ub3"),
-        "pos": [0, 0, torso_geom_pos_z("ub3")]
+        "pos": [0, 0, 0]
     },
 
     # === HEAD & EYES ===
@@ -285,7 +285,6 @@ SCHEMA_BODIES = {
     "hip": {
         "pos": [0, 0, 0]
     },
-
     "lower_body": {
         "pos": [
             0.002,
@@ -306,6 +305,9 @@ SCHEMA_BODIES = {
             ), RATIOS["upper_body"])
         ]
     },
+    "chest": {
+        "pos": [0, 0, torso_geom_pos_z("ub3")]
+    },
 
     # === HEAD & EYES ===
 
@@ -315,7 +317,7 @@ SCHEMA_BODIES = {
             0,
             add(
                 ref("geoms", "ub3", "size", 0),
-                ref("geoms", "ub3", "pos", 2),
+                ref("bodies", "chest", "pos", 2),
             )
         ]
     },
@@ -338,7 +340,7 @@ SCHEMA_BODIES = {
                 # and upper body. Multiplying by 1 means no overlap.
                 mul(ref("geoms", "left_uarm1", "size", 0), 0.25)
             ),
-            ref("bodies", "upper_body", "pos", 2)
+            0
         ]
     },
     "left_lower_arm": {

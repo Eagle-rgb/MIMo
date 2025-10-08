@@ -25,21 +25,6 @@
             "density": 919.2328058204266,
             "vol": 0.0007851112312684204
         },
-        "head": {
-            "type": "sphere",
-            "density": 1067.0844555490235,
-            "vol": 0.0016632235534598347
-        },
-        "geom:left_eye1": {
-            "type": "sphere",
-            "density": 1052.1255168017315,
-            "vol": 5.964117303299372e-06
-        },
-        "geom:right_eye1": {
-            "type": "sphere",
-            "density": 1052.1255168017315,
-            "vol": 5.964117303299372e-06
-        },
         "right_uarm1": {
             "type": "capsule",
             "density": 1065.5428521577844,
@@ -99,6 +84,21 @@
             "type": "cylinder",
             "density": 879.9374392398306,
             "vol": 1.5035159785256176e-05
+        },
+        "head": {
+            "type": "sphere",
+            "density": 1067.0844555490235,
+            "vol": 0.0016632235534598347
+        },
+        "geom:left_eye1": {
+            "type": "sphere",
+            "density": 1052.1255168017315,
+            "vol": 5.964117303299372e-06
+        },
+        "geom:right_eye1": {
+            "type": "sphere",
+            "density": 1052.1255168017315,
+            "vol": 5.964117303299372e-06
         },
         "geom:right_upper_leg1": {
             "type": "capsule",
@@ -401,6 +401,12 @@
         "act:hip_lean": {
             "gear": 7.25
         },
+        "act:chest_twist": {
+            "gear": 0.36
+        },
+        "act:chest_lean": {
+            "gear": 0.72
+        },
         "act:head_swivel": {
             "gear": 1.8
         },
@@ -498,7 +504,7 @@
             "gear": 1.2
         },
         "act:right_toes": {
-            "gear": 0.33
+            "gear": 0.165
         },
         "act:left_hip_flex": {
             "gear": 8.0
@@ -522,7 +528,7 @@
             "gear": 1.2
         },
         "act:left_toes": {
-            "gear": 0.33
+            "gear": 0.165
         },
         "act:right_ff_side": {
             "gear": 0.05
