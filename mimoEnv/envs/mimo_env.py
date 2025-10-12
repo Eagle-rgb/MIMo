@@ -308,7 +308,7 @@ class MIMoEnv(MujocoEnv, utils.EzPickle):
                  width=DEFAULT_SIZE,
                  height=DEFAULT_SIZE,
                  default_camera_config=None,
-                 age=18,
+                 age=None,
                  custom_measurements=None,
                  proprio_params=None,
                  touch_params=None,
