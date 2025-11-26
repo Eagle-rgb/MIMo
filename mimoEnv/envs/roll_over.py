@@ -28,7 +28,7 @@ import mujoco
 import numpy as np
 import os
 
-STARTING_POSITION = "prone"
+STARTING_POSITION = "supine"
 """ Initial position of MIMo. Can be 'prone' or 'supine'.
 
 :meta hide-value:
