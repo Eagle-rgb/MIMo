@@ -69,9 +69,10 @@ class MIMoRollOverEnv(MIMoEnv):
                  vision_params=None,
                  vestibular_params=DEFAULT_VESTIBULAR_PARAMS,
                  actuation_model=SpringDamperModel,
+                 starting_position='prone'
                  **kwargs):
 
-        if STARTING_POSITION not in ["prone", "supine"]:
+        if starting_position not in ["prone", "supine"]:
             msg = f"Unknown starting position '{STARTING_POSITION}'. "
             msg += "Needs to be 'prone' or 'supine'."
             raise ValueError(msg)
@@ -89,10 +90,11 @@ class MIMoRollOverEnv(MIMoEnv):
                          done_active=False,
                          **kwargs)
 
+        self.starting_position=starting_position
         self.model.body("hip").pos = [0, 0, 0.2]
 
         self.model.body("hip").quat = [0, -0.7071068, 0, 0.7071068]
-        if STARTING_POSITION == "supine":
+        if starting_position == "supine":
             self.model.body("hip").quat *= np.array([1, -1, 1, 1])
 
         for _ in range(100):
@@ -199,7 +201,7 @@ class MIMoRollOverEnv(MIMoEnv):
         angle_norm = (angle - (-90)) / (90 - (-90))
 
         # Invert the angle depending on the starting position.
-        if STARTING_POSITION == "prone":
+        if self.starting_position == "prone":
             angle_norm = 1 - angle_norm
 
         return angle_norm

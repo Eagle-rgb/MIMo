@@ -119,6 +119,11 @@ def main():
                         help='Renders a video for each episode during the test run.')
     parser.add_argument('--use_muscle', action='store_true',
                         help='Use the muscle actuation model instead of spring-damper model if provided.')
+    parser.add_argument('--roll_over_starting_position', required=False,
+                        choices=['supine', 'prone'],
+                        default='prone',
+                        help='Choose the starting position of MIMo in the roll_over environment. Put '
+                             'either \'supine\' or \'prone\'. Default: \'prone\'.')
     
     args = parser.parse_args()
     env_name = args.env
@@ -130,6 +135,7 @@ def main():
     test_for = args.test_for
     render = args.render_video
     use_muscle = args.use_muscle
+    roll_over_starting_position = args.roll_over_starting_position
 
     save_dir = os.path.join("models", env_name, save_model)
     if not os.path.exists(save_dir):
@@ -143,7 +149,11 @@ def main():
                  "catch": "MIMoCatch-v0",
                  "roll_over": "MIMoRollOver-v0"}
 
-    env = gym.make(env_names[env_name], actuation_model=actuation_model)
+    if env_name == 'roll_over':
+        env = gym.make(env_names[env_name], actuation_model=actuation_model,
+            starting_position=roll_over_starting_position)
+    else:
+        env = gym.make(env_names[env_name], actuation_model=actuation_model)
     env.reset()
 
     if algorithm == 'PPO':
