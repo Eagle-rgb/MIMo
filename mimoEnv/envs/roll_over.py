@@ -69,12 +69,12 @@ class MIMoRollOverEnv(MIMoEnv):
                  vision_params=None,
                  vestibular_params=DEFAULT_VESTIBULAR_PARAMS,
                  actuation_model=SpringDamperModel,
-                 starting_position='prone'
+                 starting_position='prone',
                  **kwargs):
 
-        if starting_position not in ["prone", "supine"]:
-            msg = f"Unknown starting position '{STARTING_POSITION}'. "
-            msg += "Needs to be 'prone' or 'supine'."
+        if starting_position not in ["prone", "supine", "alternating"]:
+            msg = f"Unknown starting position '{starting_position}'. "
+            msg += "Needs to be 'prone', 'supine' or 'alternating'."
             raise ValueError(msg)
 
         super().__init__(model_path=model_path,
@@ -91,6 +91,9 @@ class MIMoRollOverEnv(MIMoEnv):
                          **kwargs)
 
         self.starting_position=starting_position
+        self.alternating_starting_position=self.starting_position='alternating'
+        if self.alternating_starting_position:
+            self.starting_position='supine'  # start in 'supine' starting position and alternate from there.
         self.model.body("hip").pos = [0, 0, 0.2]
 
         self.model.body("hip").quat = [0, -0.7071068, 0, 0.7071068]
@@ -148,6 +151,12 @@ class MIMoRollOverEnv(MIMoEnv):
         Returns:
             Dict: Observations after reset.
         """
+        # Alternate starting position if that setting is enabled.
+        if self.alternating_starting_position:
+            if self.starting_position=='prone':
+                self.starting_position='supine'
+            else:
+                self.starting_position='prone'
 
         self.set_state(self.init_qpos, self.init_qvel)
         qpos = self.init_position.copy()

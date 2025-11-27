@@ -120,10 +120,10 @@ def main():
     parser.add_argument('--use_muscle', action='store_true',
                         help='Use the muscle actuation model instead of spring-damper model if provided.')
     parser.add_argument('--roll_over_starting_position', required=False,
-                        choices=['supine', 'prone'],
+                        choices=['supine', 'prone', 'alternating'],
                         default='prone',
                         help='Choose the starting position of MIMo in the roll_over environment. Put '
-                             'either \'supine\' or \'prone\'. Default: \'prone\'.')
+                             'either \'supine\', \'prone\' or \'alternating\'. Default: \'prone\'.')
     
     args = parser.parse_args()
     env_name = args.env
