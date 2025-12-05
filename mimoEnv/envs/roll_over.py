@@ -34,7 +34,7 @@ STARTING_POSITION = "supine"
 :meta hide-value:
 """
 
-ROLL_OVER_XML = os.path.join(SCENE_DIRECTORY, "roll_over_scene.xml")
+ROLL_OVER_XML = os.path.join(SCENE_DIRECTORY, "roll_over_prone_scene.xml")
 """ Path to the roll over scene.
 
 :meta hide-value:
@@ -91,19 +91,12 @@ class MIMoRollOverEnv(MIMoEnv):
                          **kwargs)
 
         self.starting_position=starting_position
-        self.alternating_starting_position=self.starting_position='alternating'
+        self.alternating_starting_position=self.starting_position=='alternating'
         if self.alternating_starting_position:
-            self.starting_position='supine'  # start in 'supine' starting position and alternate from there.
-        self.model.body("hip").pos = [0, 0, 0.2]
+            self.starting_position='prone'  # start in 'prone' starting position and alternate from there.
 
-        self.model.body("hip").quat = [0, -0.7071068, 0, 0.7071068]
-        if starting_position == "supine":
-            self.model.body("hip").quat *= np.array([1, -1, 1, 1])
-
-        for _ in range(100):
-            mujoco.mj_step(self.model, self.data)
-
-        self.init_position = self.data.qpos.copy()
+        self.init_position=self.data.qpos.copy()
+        self.put_in_starting_position()
 
     def is_success(self, achieved_goal, desired_goal):
         """ Did we reach our goal rotation.
@@ -140,26 +133,30 @@ class MIMoRollOverEnv(MIMoEnv):
         """
         return False
 
-    def reset_model(self):
-        """ Resets the simulation.
-
-        Return the simulation to the XML state, then slightly randomize all
-        joint positions. Afterwards we let the simulation settle for a fixed
-        number of steps. This leads to MIMo settling into a slightly random
-        prone or supine position.
-
+    def put_in_starting_position(self):
+        """ Puts MIMo back in starting position - prone or supine.
+        
         Returns:
-            Dict: Observations after reset.
+            Nothing     
         """
-        # Alternate starting position if that setting is enabled.
-        if self.alternating_starting_position:
-            if self.starting_position=='prone':
-                self.starting_position='supine'
-            else:
-                self.starting_position='prone'
-
-        self.set_state(self.init_qpos, self.init_qvel)
         qpos = self.init_position.copy()
+
+        # qpos[0:3] describe the location of MIMo, qPos[3:7] describe the quaternion
+        # rotation.
+
+        # Put MIMo in the correct starting rotation.
+        if self.starting_position=='prone':
+            # Euler rotation (in degrees) 0 90 0, so 90° rotation around y-axis.
+            qpos[3] = 0.707
+            qpos[4] = 0.
+            qpos[5] = 0.707
+            qpos[6] = 0.
+        else: # supine starting position
+            # Euler rotation (in degrees) 0 -90 0, so -90° rotation around y-axis.
+            qpos[3] = -0.707
+            qpos[4] = 0.
+            qpos[5] = 0.707
+            qpos[6] = 0.
 
         # Set initial positions stochastically.
         random = self.np_random.uniform(
@@ -177,6 +174,26 @@ class MIMoRollOverEnv(MIMoEnv):
         self._set_action(actions)
         mujoco.mj_step(self.model, self.data, nstep=100)
 
+    def reset_model(self):
+        """ Resets the simulation.
+
+        Return the simulation to the XML state, then slightly randomize all
+        joint positions. Afterwards we let the simulation settle for a fixed
+        number of steps. This leads to MIMo settling into a slightly random
+        prone or supine position.
+
+        Returns:
+            Dict: Observations after reset.
+        """
+                # Alternate starting position if that setting is enabled.
+        if self.alternating_starting_position:
+            if self.starting_position=='prone':
+                self.starting_position='supine'
+            else:
+                self.starting_position='prone'
+
+        # self.set_state(self.init_qpos, self.init_qvel)
+        self.put_in_starting_position()
         return self._get_obs()
 
     def sample_goal(self):
