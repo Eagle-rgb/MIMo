@@ -30,6 +30,8 @@ from mimoEnv.envs.mimo_env import MIMoEnv
 from mimoActuation.actuation import SpringDamperModel
 from mimoActuation.muscle import MuscleModel
 
+from datetime import datetime
+
 
 def test(env, save_dir, test_for=1000, model=None, render_video=False):
     """ Testing function to view the behaviour of a model.
@@ -124,6 +126,20 @@ def main():
                         default='prone',
                         help='Choose the starting position of MIMo in the roll_over environment. Put '
                              'either \'supine\', \'prone\' or \'alternating\'. Default: \'prone\'.')
+    parser.add_argument('--roll_over_reward_function', required=False,
+                        choices=['winkel', 'linear', 'quad'],
+                        default='linear',
+                        help='Choose the reward function for the roll_over environment. Put '
+                             'either \'winkel\', \'linear\' or \'quad\'. Default: \'linear\'.')
+
+    parser.add_argument('--roll_over_model_path_auto', action='store_false',
+                        help="""If set, the path of the model for the roll_over environment
+is automatically set to the following:
+- Folder structure models/roll_over/<starting_position>/<date>
+- The name of the model is <date>_<starting_position>_<reward_function>_<--save_model suffix>
+'--save_model' is used as a suffix in model names.
+An example is '251206_prone_linear_1e6_test'
+""")
     
     args = parser.parse_args()
     env_name = args.env
@@ -136,10 +152,8 @@ def main():
     render = args.render_video
     use_muscle = args.use_muscle
     roll_over_starting_position = args.roll_over_starting_position
-
-    save_dir = os.path.join("models", env_name, save_model)
-    if not os.path.exists(save_dir):
-        os.makedirs(save_dir)
+    roll_over_reward_function = args.roll_over_reward_function
+    roll_over_model_path_auto = args.roll_over_model_path_auto
 
     actuation_model = MuscleModel if use_muscle else SpringDamperModel
 
@@ -151,7 +165,8 @@ def main():
 
     if env_name == 'roll_over':
         env = gym.make(env_names[env_name], actuation_model=actuation_model,
-            starting_position=roll_over_starting_position)
+            starting_position=roll_over_starting_position,
+            reward_function=roll_over_reward_function)
     else:
         env = gym.make(env_names[env_name], actuation_model=actuation_model)
     env.reset()
@@ -176,6 +191,23 @@ def main():
         model = RL("MultiInputPolicy", env,
                    tensorboard_log=os.path.join("models", "tensorboard_logs", env_name, save_model),
                    verbose=1)
+                   
+    if env_name == 'roll_over' and roll_over_model_path_auto:
+        date_str_yymmdd = datetime.today().strftime('%y-%m-%d')
+        save_model_suffix = save_model
+        save_model = date_str_yymmdd +
+            "_" + roll_over_starting_position +
+            "_" + roll_over_reward_function +
+            "_" + save_model_suffix
+        save_dir = os.path.join("models", env_name, roll_over_starting_position, date_str_yymmdd, save_model)
+        print("Saving model under '" + save_dir + "'")
+
+    else:
+        save_dir = os.path.join("models", env_name, save_model)
+
+    if not os.path.exists(save_dir):
+        print("Creating folders for model save path '" + save_dir + "'")
+        os.makedirs(save_dir)
 
     # train model
     counter = 0

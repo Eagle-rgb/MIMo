@@ -70,12 +70,20 @@ class MIMoRollOverEnv(MIMoEnv):
                  vestibular_params=DEFAULT_VESTIBULAR_PARAMS,
                  actuation_model=SpringDamperModel,
                  starting_position='prone',
+                 reward_function='linear',
                  **kwargs):
 
         if starting_position not in ["prone", "supine", "alternating"]:
             msg = f"Unknown starting position '{starting_position}'. "
             msg += "Needs to be 'prone', 'supine' or 'alternating'."
             raise ValueError(msg)
+
+        if reward_function not in ['winkel', 'linear', 'quad']:
+            msg = f"Unknown reward function '{reward_function}'. "
+            msg += "Needs to be 'winkel', 'linear' or 'quad'."
+            raise ValueError(msg)
+
+        self.reward_function=reward_function
 
         self.starting_position=starting_position
         self.alternating_starting_position=self.starting_position=='alternating'
@@ -326,7 +334,12 @@ class MIMoRollOverEnv(MIMoEnv):
     def get_achieved_goal(self):
         """ Returns the goal calculated from either of the tree goal functions.
         """
-        return self.get_reward_quad()
+        if self.reward_function=='winkel':
+            return self.get_reward_winkel()
+        elif self.reward_function=='linear':
+            return self.get_reward_linear()
+        else:  # 'quad'
+            return self.get_reward_quad()
 
     def compute_reward(self, achieved_goal, desired_goal, info):
         """
