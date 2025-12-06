@@ -77,6 +77,11 @@ class MIMoRollOverEnv(MIMoEnv):
             msg += "Needs to be 'prone', 'supine' or 'alternating'."
             raise ValueError(msg)
 
+        self.starting_position=starting_position
+        self.alternating_starting_position=self.starting_position=='alternating'
+        if self.alternating_starting_position:
+            self.starting_position='prone'  # start in 'prone' starting position and alternate from there.
+
         super().__init__(model_path=model_path,
                          initial_qpos=initial_qpos,
                          frame_skip=frame_skip,
@@ -89,11 +94,6 @@ class MIMoRollOverEnv(MIMoEnv):
                          goals_in_observation=False,
                          done_active=False,
                          **kwargs)
-
-        self.starting_position=starting_position
-        self.alternating_starting_position=self.starting_position=='alternating'
-        if self.alternating_starting_position:
-            self.starting_position='prone'  # start in 'prone' starting position and alternate from there.
 
         self.init_position=self.data.qpos.copy()
         self.put_in_starting_position()
@@ -206,41 +206,140 @@ class MIMoRollOverEnv(MIMoEnv):
         """
         return 0.8
 
-    def get_achieved_goal(self):
-        """ Get the standardized hip rotation of MIMo.
+    def _get_standardized_rotation(self, body_name):
+        """ Get the standardized rotation of a body specified by name.
+
+        Arguments:
+            body_name (str): Name of the body to get the rotation for.
+                We usually only use 'hip' or 'chest' here.
 
         Returns:
-            float: The standardized hip rotation of MIMo.
+            float: The standardized rotation of the body.
         """
+        # Get the rotation matrix of the body.
+        xmat = self.data.body(body_name).xmat.reshape(3, 3)
+        R_20 = xmat[2, 0]  # Entry row 2, col 0 in the rotation matrix. This entry describes how much the local
+            # x axis looks in the direction of the global z-axis. MIMo has its local axis as follows:
+            # local x axis: looking back-to-stomach where he is looking at.
+            # local y axis: left arm to right arm
+            # local z axis: feet to head
+            # So the local axis without modifications are the same as the global axis. After putting MIMo in prone
+            # position, the entry xmat[2, 0] is -1: The local x axis looks down to the ground, i.e. in the negative
+            # direction of the global z-axis.
+            # We define a roll over prone-to-supine so that the local x-axis looks up, i.e. exactly in the direction
+            # of the global z-axis. So we want to measure the angle between the global z-axis and the local x-axis.
 
-        # Get the rotation matrix of the hip.
-        xmat = self.data.body("hip").xmat.reshape(3, 3)
-
+        # To do this, we calculate the pitch angle. MIMos local z-axis now goes along the global x-axis and we want
+        # that axis 'to stay the same'. He should roll around that z-axis and not stand up.
         # Calculate the euler angle of the y-axis.
-        angle = np.arctan2(
+        angle_in_radiants = np.arctan2(
             -xmat[2, 0],
             np.sqrt(xmat[2, 1] ** 2 + xmat[2, 2] ** 2)
         )
-        angle *= (180 / np.pi)
+        angle_in_degrees = angle_in_radiants * (180 / np.pi)
 
         # Normalize the angle to [0, 1].
-        angle_norm = (angle - (-90)) / (90 - (-90))
-
-        # Invert the angle depending on the starting position.
-        if self.starting_position == "prone":
-            angle_norm = 1 - angle_norm
+        angle_norm = (angle_in_degrees - (-90)) / (90 - (-90))
 
         return angle_norm
+
+    def get_vertical_component_of_local_x_axis(self, body_name):
+        """ Returns the component R[2,0] of the rotation matrix for the specified body.
+        This measurement is how much the local x-axis points in the direction of the global z-axis,
+        i.e. how much it points up. In the prone position, the local x axis of the hip and chest of MIMo
+        point towards (-z) global axis.
+
+        Parameters:
+            body_name (str): Name of the body to get the rotation for.
+
+        Returns:
+            float: The vertical component R[2,0] of the local x-axis.
+        """
+        return self.data.body(body_name).xmat.reshape(3, 3)[2, 0]
+
+    def get_reward_winkel(self):
+        """ The very first goal function - with the slight addition that I added
+        chest rotation. Calculates the normalized angle of the chest and hip rotation
+        and returns the average of them.
+
+        Returns:
+            float: The average normalized angle of the chest and hip rotation.
+        """
+        rot_hip = self._get_standardized_rotation("hip")
+        rot_chest = self._get_standardized_rotation("chest")
+
+        # Goal rotation is exactly the opposite for prone starting position.
+        if self.starting_position=="prone":
+            rot_hip = 1 - rot_hip
+            rot_chest = 1 - rot_chest
+
+        return (rot_hip + rot_chest) / 2.0
+
+    def get_reward_linear(self):
+        """ The second goal function - it is linear in xmat[2,0], i.e. the vertical
+        component of the local x axis of the hip and the chest. Here also, the values
+        are averaged.
+
+        Returns:
+            float: The average vertical component of the local x axis of the hip and chest.
+        """
+        rot_hip = self.get_vertical_component_of_local_x_axis("hip")
+        rot_chest = self.get_vertical_component_of_local_x_axis("chest")
+
+        # Goal rotation is exactly the opposite for supine starting position.
+        if self.starting_position=="supine":
+            rot_hip *= -1
+            rot_chest *= -1
+
+        rot_hip = (rot_hip + 1) / 2.0
+        rot_chest = (rot_chest + 1) / 2.0
+        return (rot_hip + rot_chest) / 2.0
+
+    def get_reward_quad(self):
+        """ The third goal function - it is quadratic in xmat[2,0], i.e. the vertical
+        component of the local x axis of the hip and the chest. Here also, the values
+        are averaged.
+
+        The idea is the following: We want to accelerate learning and penalize values
+        that are very far from the desired rotation. For exmple, the value (R[2,0]+1) / 2)
+        is squared to accelerate learning, because it punishes MIMo much more severely if 
+        he is far away from the  desired rotation. For example - lying on the side
+        would already grant 0.5 reward, which now only results 0.25.
+
+        Returns:
+            float: The average vertical component of the local x axis of the hip and chest.
+        """
+        rot_hip = self.get_vertical_component_of_local_x_axis("hip")
+        rot_chest = self.get_vertical_component_of_local_x_axis("chest")
+
+        # Goal rotation is exactly the opposite for supine starting position.
+        if self.starting_position=="supine":
+            rot_hip *= -1
+            rot_chest *= -1
+
+        rot_hip = (rot_hip + 1) / 2.0
+        rot_chest = (rot_chest + 1) / 2.0
+        rot_hip **= 2.0
+        rot_chest **= 2.0
+        return (rot_hip + rot_chest) / 2.0
+
+    def get_achieved_goal(self):
+        """ Returns the goal calculated from either of the tree goal functions.
+        """
+        return self.get_reward_quad()
 
     def compute_reward(self, achieved_goal, desired_goal, info):
         """
         Computes the reward.
 
-        The reward consists of the standardized hip rotation with a
+        The reward consists of the standardized hip and chest rotation with a
         penalty of the square of the control signal.
 
+        Before, we were only using the hip rotation, but this led to MIMo only
+        turning the hip and not the chest - not performing a full roll over.
+        
         Arguments:
-            achieved_goal (float): The achieved hip rotation.
+            achieved_goal (float): The achieved hip and chest rotation.
             desired_goal (float): This parameter is ignored.
             info (dict): This parameter is ignored.
 
@@ -248,7 +347,7 @@ class MIMoRollOverEnv(MIMoEnv):
             float: The reward as described above.
         """
 
-        # Use the hip rotation as the main reward.
+        # Use the hip and chest rotation as the main reward.
         reward = achieved_goal  # [0, 1]
 
         # Penalize excessive use of force.
