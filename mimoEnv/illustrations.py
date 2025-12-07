@@ -32,14 +32,17 @@ from mimoActuation.muscle import MuscleModel
 
 from render.utils import evaluation_img, evaluation_video
 
+from mimoEnv.envs.roll_over_wrapper import MIMoRollOverWrapper
+from stable_baselines3.common.vec_env import DummyVecEnv
+
 from datetime import datetime
 
 
-def test(env, save_dir, test_for=1000, model=None, render_video=False):
+def test(wrapped_env, save_dir, test_for=1000, model=None, render_video=False):
     """ Testing function to view the behaviour of a model.
 
     Args:
-        env (MIMoEnv): The environment on which the model should be tested. This does not have to be the same training
+        wrapped_env (MIMoEnv): The wrapped (!) environment on which the model should be tested. This does not have to be the same training
             environment, but action and observation spaces must match.
         save_dir (str): The directory in which any rendered videos will be saved.
         test_for (int): The number of timesteps the testing runs in total. This will be broken into multiple episodes
@@ -47,8 +50,8 @@ def test(env, save_dir, test_for=1000, model=None, render_video=False):
         model:  The stable baselines model object. If ``None`` we take random actions instead. Default ``None``.
         render_video (bool): If ``True``, all episodes during testing will be recorded and saved as videos in
             `save_dir`.
-    """
-    obs, _ = env.reset()
+    """ 
+    obs, _ = wrapped_env.reset()
     images = []
     im_counter = 0
 
@@ -57,28 +60,28 @@ def test(env, save_dir, test_for=1000, model=None, render_video=False):
     for idx in range(test_for):
         if model is None:
             print("No model, taking random actions")
-            action = env.action_space.sample()
+            action = wrapped_env.action_space.sample()
         else:
             action, _ = model.predict(obs)
-        obs, _, done, trunc, _ = env.step(action)
+        obs, _, done, trunc, _ = wrapped_env.step(action)
         if render_video:
-            img = evaluation_img(env, up='actuations')
+            img = evaluation_img(wrapped_env.unwrapped, up='actuations')
             # img = env.mujoco_renderer.render(render_mode="rgb_array")
             images.append(img)
         if idx == test_for-1:
             done=True
         if done or trunc:
-            print("Rendering video...")
             time.sleep(1)
-            obs, _ = env.reset()
+            obs, _ = wrapped_env.reset()
             if render_video:
-                evaluation_video(images, save_name=os.path.join(save_dir, 'episode_{}.avi'.format(im_counter)))
+                save_name=os.path.join(save_dir, 'episode_{}.avi'.format(im_counter))
+                print("Rendering video as '"+save_name+"'")
+                evaluation_video(images, save_name=save_name)
 
                 images = []
                 im_counter += 1
 
-    env.reset()
-
+    wrapped_env.reset()
 
 def main():
     """ CLI for the demonstration environments.
@@ -113,7 +116,7 @@ def main():
                         help='Total timesteps of testing of trained policy')               
     parser.add_argument('--save_every', default=100000, type=int,
                         help='Number of timesteps between model saves')
-    parser.add_argument('--algorithm', default=None, type=str,
+    parser.add_argument('--algorithm', default=None, type=str, required=True,
                         choices=['PPO', 'SAC', 'TD3', 'DDPG', 'A2C', 'HER'],
                         help='RL algorithm from Stable Baselines3')
     parser.add_argument('--load_model', default=False, type=str,
@@ -160,25 +163,6 @@ An example is '251206_prone_linear_1e6_test'
 
     actuation_model = MuscleModel if use_muscle else SpringDamperModel
 
-    env_names = {"reach": "MIMoReach-v0",
-                 "standup": "MIMoStandup-v0",
-                 "selfbody": "MIMoSelfBody-v0",
-                 "catch": "MIMoCatch-v0",
-                 "roll_over": "MIMoRollOver-v0"}
-
-    # Set render size to 480, because babybench used this render size
-    # and we copy-pasted the utils from there.
-
-    if env_name == 'roll_over':
-        env = gym.make(env_names[env_name], actuation_model=actuation_model,
-            starting_position=roll_over_starting_position,
-            reward_function=roll_over_reward_function,
-            width=480,
-            height=480)
-    else:
-        env = gym.make(env_names[env_name], actuation_model=actuation_model)
-    env.reset()
-
     if algorithm == 'PPO':
         from stable_baselines3 import PPO as RL
     elif algorithm == 'SAC':
@@ -189,17 +173,15 @@ An example is '251206_prone_linear_1e6_test'
         from stable_baselines3 import DDPG as RL
     elif algorithm == 'A2C':
         from stable_baselines3 import A2C as RL
-
-    # load pretrained model or create new one
-    if algorithm is None:
-        model = None
-    elif load_model:
-        model = RL.load(load_model, env)
     else:
-        model = RL("MultiInputPolicy", env,
-                   tensorboard_log=os.path.join("models", "tensorboard_logs", env_name, save_model),
-                   verbose=1)
-                   
+        raise RuntimeError("Algorithm not defined. Please provide a valid algorithm name.")
+
+    env_names = {"reach": "MIMoReach-v0",
+                 "standup": "MIMoStandup-v0",
+                 "selfbody": "MIMoSelfBody-v0",
+                 "catch": "MIMoCatch-v0",
+                 "roll_over": "MIMoRollOver-v0"}
+
     if env_name == 'roll_over' and roll_over_model_path_auto:
         date_str_yymmdd = datetime.today().strftime('%y-%m-%d')
         save_model_suffix = save_model
@@ -209,13 +191,38 @@ An example is '251206_prone_linear_1e6_test'
             "_" + save_model_suffix
         save_dir = os.path.join("models", env_name, roll_over_starting_position, date_str_yymmdd, save_model)
         print("Saving model under '" + save_dir + "'")
-
     else:
         save_dir = os.path.join("models", env_name, save_model)
 
     if not os.path.exists(save_dir):
         print("Creating folders for model save path '" + save_dir + "'")
         os.makedirs(save_dir)
+
+    wrapped_env = None
+
+    # Set render size to 480, because babybench used this render size
+    # and we copy-pasted the utils from there.
+    if env_name == 'roll_over':
+        env = gym.make(env_names[env_name], actuation_model=actuation_model,
+            starting_position=roll_over_starting_position,
+            reward_function=roll_over_reward_function,
+            width=480,
+            height=480)
+        wrapped_env = MIMoRollOverWrapper(env, log_file="actuation_log.csv")
+    else:
+        env = gym.make(env_names[env_name], actuation_model=actuation_model,
+            width=480,
+            height=480)
+        wrapped_env = env
+    env.reset()
+
+    # load pretrained model or create new one
+    if load_model:
+        model = RL.load(load_model, wrapped_env)
+    else:
+        model = RL("MultiInputPolicy", wrapped_env,
+                   tensorboard_log=os.path.join("models", "tensorboard_logs", env_name, save_model),
+                   verbose=1)
 
     # train model
     counter = 0
@@ -228,7 +235,8 @@ An example is '251206_prone_linear_1e6_test'
         model.learn(total_timesteps=train_for_iter, reset_num_timesteps=False)
         model.save(os.path.join(save_dir, "model_" + str(counter)))
 
-    test(env, save_dir, model=model, test_for=test_for, render_video=render)
+    test(wrapped_env, save_dir, model=model, test_for=test_for, render_video=render)
+    wrapped_env.close()
 
 
 if __name__ == '__main__':

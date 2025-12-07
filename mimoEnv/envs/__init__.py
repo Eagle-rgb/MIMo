@@ -11,3 +11,4 @@ from mimoEnv.envs.muscle_test import MIMoStaticMuscleTestV2Env
 from mimoEnv.envs.muscle_test import MIMoVelocityMuscleTestV2Env
 from mimoEnv.envs.muscle_test import MIMoComplianceEnv, MIMoComplianceMuscleEnv
 from mimoEnv.envs.roll_over import MIMoRollOverEnv
+from mimoEnv.envs.roll_over_wrapper import MIMoRollOverWrapper

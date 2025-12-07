@@ -837,3 +837,91 @@ def determine_geom_masses(mujoco_model, mujoco_data, body_ids, target_mass, prin
             print(body_name, ":", ", ".join(["{:.4e}".format(mass) for mass in output_dict[body_name]]))
 
     return output_dict
+
+# ======================== Actuator utils =============================================
+# =================================================================================
+actuator_joint_map = None
+def get_actuator_joint_map(model):
+    """ Lazily initializes and returns map of actuators to their respective joints for the given model.
+
+    Args:
+        model (mujoco.MjModel): The MuJoCo model object.
+
+    Returns:
+        Dict[str, str, int, int, int]: Dictionary with following entries:
+            - 'act_name' (str): Name of this actuator. Example: 'act_hip'.
+            - 'body_id' (int): body_id for the joint.
+            - 'act_index' (int): index of this actuator.
+    """
+    global actuator_joint_map
+    if actuator_joint_map is not None:
+        return actuator_joint_map
+
+    actuator_joint_map = []
+
+    for i in range(model.nu):  # 'nu' is the amount of actuators.
+        # 1. actuator name
+        act_name = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_ACTUATOR, i)
+
+        # 2. get joint-id of this actuator. For this first check
+        # whether this actuator is connected to a joint.
+        if model.actuator_trntype[i] != mujoco.mjtTrn.mjTRN_JOINT:
+            continue
+
+        # 3. The joint-id is the first element of the pair in actuator_trnid
+        joint_id = model.actuator_trnid[i][0]
+
+        if joint_id < 0:
+            continue
+
+        # 4. Joint name
+        joint_name = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_JOINT, joint_id)
+        
+        # 5. body_id of this joint.
+        body_id = model.jnt_bodyid[joint_id]
+
+        actuator_joint_map.append({
+            'act_name': act_name, # name of this actuator.
+            'body_id': body_id, # body id of this joint.
+            'act_index': i # index in mjData.ctrl/qfrc_applied
+        })
+
+    return actuator_joint_map
+
+def get_actuation_values(model, data):
+    """ Returns a dictionary for each actuator containing position of its joint and its actuation value.
+
+    Args:
+        model (mujoco.MjModel): The MuJoCo model object.
+        data (mujoco.MjData): The data of the environment.
+
+    Returns:
+        Dict[str, float, float, float, float]: Dictionary with following entries:
+            - 'act_name' (str): Name of this actuator. Example: 'act_hip'.
+            - 'x' (float): The global x position of the joint of this actuator.
+            - 'y' (float): The global y position of the joint of this actuator.
+            - 'z' (float): The global z position of the joint of this actuator.
+            - 'actuation' (float): The amount of actuation (i.e. the muscle strength) 
+    """
+    if actuator_joint_map is None:
+        get_actuator_joint_map(model)
+
+    actuator_data=[]
+    for entry in actuator_joint_map:
+        act_val = data.ctrl[entry['act_index']]
+        body_id = entry['body_id']
+        x_pos = data.xpos[body_id, 0]
+        y_pos = data.xpos[body_id, 1]
+        z_pos = data.xpos[body_id, 2]
+
+        actuator_data.append({
+            'act_name': entry['act_name'],
+            'x': x_pos,
+            'y': y_pos,
+            'z': z_pos,
+            'actuation': act_val
+        })
+
+    return actuator_data
+
+    

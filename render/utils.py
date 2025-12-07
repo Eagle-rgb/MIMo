@@ -58,90 +58,54 @@ def view_binocular(env):
     stereo[:,:,2] = to_grayscale(img_right_eye[::2,::2,:])
     return stereo
 
-actuator_joint_map = []
+def view_actuations(env, focus_body='hip', act_thresh=1e-6):
+    plt_data = np.array(env_utils.get_actuation_values(env.model, env.data))
 
-def view_actuations(env, focus_body='hip'):
-    root_id = env_utils.get_body_id(env.model, body_name='mimo_location')
-    # actuator_joint_map = []
+    # Partition in gray/red points: Gray points where actuation is below threshold.
+    indx_red = [entry['actuation'] >= act_thresh for entry in plt_data]
+    indx_gray = [entry['actuation'] < act_thresh for entry in plt_data]
+    plt_data_red = plt_data[indx_red]
+    plt_data_gray = plt_data[indx_gray]
 
-    if len(actuator_joint_map) == 0:
-        for i in range(env.model.nu):  # 'nu' is the amount of actuators.
-            # 1. actuator name
-            act_name = mujoco.mj_id2name(env.model, mujoco.mjtObj.mjOBJ_ACTUATOR, i)
+    xs_red = np.array([entry['x'] for entry in plt_data_red])
+    ys_red = np.array([entry['y'] for entry in plt_data_red])
+    zs_red = np.array([entry['z'] for entry in plt_data_red])
+    acts_red = np.array([entry['actuation'] for entry in plt_data_red])
 
-            # 2. get joint-id of this actuator. For this first check
-            # whether this actuator is connected to a joint.
-            if env.model.actuator_trntype[i] != mujoco.mjtTrn.mjTRN_JOINT:
-                continue
+    xs_gray = np.array([entry['x'] for entry in plt_data_gray])
+    ys_gray = np.array([entry['y'] for entry in plt_data_gray])
+    zs_gray = np.array([entry['z'] for entry in plt_data_gray])
+    acts_gray = np.array([entry['actuation'] for entry in plt_data_gray])
 
-            # 3. The joint-id is the first element of the pair in actuator_trnid
-            joint_id = env.model.actuator_trnid[i][0]
+    # Subtract to focus on the hip.
+    if focus_body:
+        xs_red -= env.data.body(focus_body).xpos[0]
+        ys_red -= env.data.body(focus_body).xpos[1]
+        zs_red -= env.data.body(focus_body).xpos[2]
+        xs_gray -= env.data.body(focus_body).xpos[0]
+        ys_gray -= env.data.body(focus_body).xpos[1]
+        zs_gray -= env.data.body(focus_body).xpos[2]
 
-            if joint_id < 0:
-                continue
-
-            # 4. Joint name
-            joint_name = mujoco.mj_id2name(env.model, mujoco.mjtObj.mjOBJ_JOINT, joint_id)
-
-            # 5. startindx in qpos-vector.
-            qpos_start_index = env.model.jnt_qposadr[joint_id]
-            
-            # 6. body_id of this joint.
-            body_id = env.model.jnt_bodyid[joint_id]
-
-            actuator_joint_map.append({
-                'act_name': act_name,
-                'jnt_name': joint_name,
-                'qpos_index': qpos_start_index,
-                'body_id': body_id, # body id of this joint
-                'act_index': i # index in mjData.ctrl/qfrc_applied
-            })
-
-    plt_data = []
-
-    for entry in actuator_joint_map:
-        act_val = env.data.ctrl[entry['act_index']]
-        body_id = entry['body_id']
-
-        x_pos = env.data.xpos[body_id, 0]
-        y_pos = env.data.xpos[body_id, 1]
-
-        plt_data.append({
-            'name': entry['jnt_name'],
-            'x': x_pos,
-            'y': y_pos,
-            'actuation': act_val
-        })
-
-    xs = np.array([entry['x'] for entry in plt_data])
-    ys = np.array([entry['y'] for entry in plt_data])
-    acts = np.array([entry['actuation'] for entry in plt_data])
-
-    if len(acts) > 0:
+    if len(acts_red) > 0:
         size_min = 5
         size_max = 10
-        sizes = acts / np.amax(acts) * (size_max - size_min) + size_min
-        opacity_min = 0.4
-        opacity_max = 0.5
-        opacities = acts / np.amax(acts) * (opacity_max - opacity_min) + opacity_min
+        sizes = acts_red / np.amax(acts_red) * (size_max - size_min) + size_min
+        opacity_min = 0.3
+        opacity_max = 1.0
+        opacities = acts_red / np.amax(acts_red) * (opacity_max - opacity_min) + opacity_min
         # Opacities can't be set as an array, so must be set using color array
-        red_colors = np.tile(np.array([1.0, 0, 0, 0]), (xs.shape[0], 1))
+        red_colors = np.tile(np.array([1.0, 0, 0, 0]), (xs_red.shape[0], 1))
         red_colors[:, 3] = opacities
     else:
         sizes = 5
         red_colors = [0.4,0,0]
 
-    if focus_body:
-        target_pos = env.data.body(focus_body).xpos
-    else:
-        target_pos = np.zeros((3,))
-
     fig = plt.figure(figsize=(6,6), dpi=100)
     ax = fig.add_subplot(111, projection='3d')
     ax.view_init(elev=90, azim=0, roll=0)
     # Draw sensor points
-    # ax.scatter(xs_gray, ys_gray, zs_gray, color="k", s=10, depthshade=False, alpha=.15)
-    ax.scatter(xs, ys, [0 for _ in xs], color=red_colors, s=sizes, depthshade=False)
+    ax.scatter(xs_gray, ys_gray, zs_gray, color="k", s=10, depthshade=False, alpha=.15)
+    ax.scatter(xs_red, ys_red, zs_red, color=red_colors, s=sizes, depthshade=False)
     ax.set_xlim([-0.75, 0.75])     
     ax.set_ylim([-0.75, 0.75])     
     ax.set_zlim([-0.75, 0.75])     

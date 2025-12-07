@@ -11,3 +11,4 @@ test*
 models*
 MJDATA.TXT
 mjmodel.mjb
+*.csv
