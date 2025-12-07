@@ -30,6 +30,8 @@ from mimoEnv.envs.mimo_env import MIMoEnv
 from mimoActuation.actuation import SpringDamperModel
 from mimoActuation.muscle import MuscleModel
 
+from render.utils import evaluation_img, evaluation_video
+
 from datetime import datetime
 
 
@@ -50,6 +52,8 @@ def test(env, save_dir, test_for=1000, model=None, render_video=False):
     images = []
     im_counter = 0
 
+    print("Testing model...")
+
     for idx in range(test_for):
         if model is None:
             print("No model, taking random actions")
@@ -58,18 +62,17 @@ def test(env, save_dir, test_for=1000, model=None, render_video=False):
             action, _ = model.predict(obs)
         obs, _, done, trunc, _ = env.step(action)
         if render_video:
-            img = env.mujoco_renderer.render(render_mode="rgb_array")
+            img = evaluation_img(env, up='actuations')
+            # img = env.mujoco_renderer.render(render_mode="rgb_array")
             images.append(img)
+        if idx == test_for-1:
+            done=True
         if done or trunc:
+            print("Rendering video...")
             time.sleep(1)
             obs, _ = env.reset()
             if render_video:
-                fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-                video = cv2.VideoWriter(os.path.join(save_dir, 'episode_{}.avi'.format(im_counter)), fourcc, 50, (500, 500))
-                for img in images:
-                    video.write(cv2.cvtColor(img, cv2.COLOR_RGB2BGR))
-                cv2.destroyAllWindows()
-                video.release()
+                evaluation_video(images, save_name=os.path.join(save_dir, 'episode_{}.avi'.format(im_counter)))
 
                 images = []
                 im_counter += 1
@@ -132,7 +135,7 @@ def main():
                         help='Choose the reward function for the roll_over environment. Put '
                              'either \'winkel\', \'linear\' or \'quad\'. Default: \'linear\'.')
 
-    parser.add_argument('--roll_over_model_path_auto', action='store_false',
+    parser.add_argument('--roll_over_model_path_auto', action='store_true',
                         help="""If set, the path of the model for the roll_over environment
 is automatically set to the following:
 - Folder structure models/roll_over/<starting_position>/<date>
@@ -163,10 +166,15 @@ An example is '251206_prone_linear_1e6_test'
                  "catch": "MIMoCatch-v0",
                  "roll_over": "MIMoRollOver-v0"}
 
+    # Set render size to 480, because babybench used this render size
+    # and we copy-pasted the utils from there.
+
     if env_name == 'roll_over':
         env = gym.make(env_names[env_name], actuation_model=actuation_model,
             starting_position=roll_over_starting_position,
-            reward_function=roll_over_reward_function)
+            reward_function=roll_over_reward_function,
+            width=480,
+            height=480)
     else:
         env = gym.make(env_names[env_name], actuation_model=actuation_model)
     env.reset()
@@ -195,9 +203,9 @@ An example is '251206_prone_linear_1e6_test'
     if env_name == 'roll_over' and roll_over_model_path_auto:
         date_str_yymmdd = datetime.today().strftime('%y-%m-%d')
         save_model_suffix = save_model
-        save_model = date_str_yymmdd +
-            "_" + roll_over_starting_position +
-            "_" + roll_over_reward_function +
+        save_model = date_str_yymmdd +\
+            "_" + roll_over_starting_position +\
+            "_" + roll_over_reward_function +\
             "_" + save_model_suffix
         save_dir = os.path.join("models", env_name, roll_over_starting_position, date_str_yymmdd, save_model)
         print("Saving model under '" + save_dir + "'")
