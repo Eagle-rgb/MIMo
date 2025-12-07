@@ -9,3 +9,5 @@ mimoEnv/benchmarks
 mimoGrowth/log.txt
 test*
 models*
+MJDATA.TXT
+mjmodel.mjb
