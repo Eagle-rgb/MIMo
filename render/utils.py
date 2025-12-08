@@ -58,24 +58,51 @@ def view_binocular(env):
     stereo[:,:,2] = to_grayscale(img_right_eye[::2,::2,:])
     return stereo
 
-def view_actuations(env, focus_body='hip', act_thresh=1e-6):
+def view_actuations(env, focus_body='hip', act_thresh=1e-6, abs_actuation=True):
+    """ Plots actuation strenghts of each actuator (i.e. joint) of MIMo.
+
+    Params:
+        env (MIMoEnv): The mimo environment.
+        focus_body (str): The body part to focus. Default: 'hip'.
+        act_thresh (float): The absolute (!) threshold at which an actuator is drawn as gray
+            (meaning 'not actuated').
+        abs_actuation (bool): Whether to display absolute actuations (only red/gray) or
+            include negative actuations. If false, negative actuations are drawn too and
+            they are displayed in blue.
+    """
     plt_data = np.array(env_utils.get_actuation_values(env.model, env.data))
 
     # Partition in gray/red points: Gray points where actuation is below threshold.
-    indx_red = [entry['actuation'] >= act_thresh for entry in plt_data]
-    indx_gray = [entry['actuation'] < act_thresh for entry in plt_data]
+    if abs_actuation:
+        indx_red = [abs(entry['actuation']) >= act_thresh for entry in plt_data]
+        indx_gray = [abs(entry['actuation']) < act_thresh for entry in plt_data]
+        indx_blue = []
+    else:
+        indx_red = [entry['actuation'] >= act_thresh for entry in plt_data]
+        indx_gray = [abs(entry['actuation']) < act_thresh for entry in plt_data]
+        indx_blue = [entry['actuation'] <= -act_thresh for entry in plt_data]
+
     plt_data_red = plt_data[indx_red]
     plt_data_gray = plt_data[indx_gray]
+    plt_data_blue = plt_data[indx_blue]
 
     xs_red = np.array([entry['x'] for entry in plt_data_red])
     ys_red = np.array([entry['y'] for entry in plt_data_red])
     zs_red = np.array([entry['z'] for entry in plt_data_red])
-    acts_red = np.array([entry['actuation'] for entry in plt_data_red])
+    if abs_actuation:
+        acts_red = np.array([abs(entry['actuation']) for entry in plt_data_red])
+    else:
+        acts_red = np.array([entry['actuation'] for entry in plt_data_red])
 
     xs_gray = np.array([entry['x'] for entry in plt_data_gray])
     ys_gray = np.array([entry['y'] for entry in plt_data_gray])
     zs_gray = np.array([entry['z'] for entry in plt_data_gray])
     acts_gray = np.array([entry['actuation'] for entry in plt_data_gray])
+
+    xs_blue = np.array([entry['x'] for entry in plt_data_blue])
+    ys_blue = np.array([entry['y'] for entry in plt_data_blue])
+    zs_blue = np.array([entry['z'] for entry in plt_data_blue])
+    acts_blue = np.array([entry['actuation'] for entry in plt_data_blue])
 
     # Subtract to focus on the hip.
     if focus_body:
@@ -85,27 +112,32 @@ def view_actuations(env, focus_body='hip', act_thresh=1e-6):
         xs_gray -= env.data.body(focus_body).xpos[0]
         ys_gray -= env.data.body(focus_body).xpos[1]
         zs_gray -= env.data.body(focus_body).xpos[2]
+        xs_blue -= env.data.body(focus_body).xpos[0]
+        ys_blue -= env.data.body(focus_body).xpos[1]
+        zs_blue -= env.data.body(focus_body).xpos[2]
 
     if len(acts_red) > 0:
-        size_min = 5
-        size_max = 10
-        sizes = acts_red / np.amax(acts_red) * (size_max - size_min) + size_min
-        opacity_min = 0.3
-        opacity_max = 1.0
-        opacities = acts_red / np.amax(acts_red) * (opacity_max - opacity_min) + opacity_min
-        # Opacities can't be set as an array, so must be set using color array
+        opacities_red = acts_red
         red_colors = np.tile(np.array([1.0, 0, 0, 0]), (xs_red.shape[0], 1))
-        red_colors[:, 3] = opacities
-    else:
-        sizes = 5
-        red_colors = [0.4,0,0]
+        red_colors[:, 3] = opacities_red
+
+    if len(acts_blue) > 0:
+        opacities_blue = acts_blue * (-1)
+        blue_colors = np.tile(np.array([0, 0, 1.0, 0]), (xs_blue.shape[0], 1))
+        blue_colors[:, 3] = opacities_blue
 
     fig = plt.figure(figsize=(6,6), dpi=100)
     ax = fig.add_subplot(111, projection='3d')
     ax.view_init(elev=90, azim=0, roll=0)
     # Draw sensor points
-    ax.scatter(xs_gray, ys_gray, zs_gray, color="k", s=10, depthshade=False, alpha=.15)
-    ax.scatter(xs_red, ys_red, zs_red, color=red_colors, s=sizes, depthshade=False)
+    ax.scatter(xs_gray, ys_gray, zs_gray, color="k", s=5, depthshade=False, alpha=.15)
+
+    if len(xs_red) > 0:
+        ax.scatter(xs_red, ys_red, zs_red, color=red_colors, s=5, depthshade=False)
+
+    if len(xs_blue) > 0:
+        ax.scatter(xs_blue, ys_blue, zs_blue, color=blue_colors, s=5, depthshade=False)
+
     ax.set_xlim([-0.75, 0.75])     
     ax.set_ylim([-0.75, 0.75])     
     ax.set_zlim([-0.75, 0.75])     
