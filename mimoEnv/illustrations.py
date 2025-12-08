@@ -38,7 +38,7 @@ from stable_baselines3.common.vec_env import DummyVecEnv
 from datetime import datetime
 
 
-def test(wrapped_env, save_dir, test_for=1000, model=None, render_video=False):
+def test(wrapped_env, save_dir, test_for=1000, model=None, render_video=False, render_actuations=False):
     """ Testing function to view the behaviour of a model.
 
     Args:
@@ -50,6 +50,7 @@ def test(wrapped_env, save_dir, test_for=1000, model=None, render_video=False):
         model:  The stable baselines model object. If ``None`` we take random actions instead. Default ``None``.
         render_video (bool): If ``True``, all episodes during testing will be recorded and saved as videos in
             `save_dir`.
+        render_actuations (bool): If ``True``, renders on the top right corner a plot of the muscle actuations.
     """ 
     obs, _ = wrapped_env.reset()
     images = []
@@ -65,8 +66,10 @@ def test(wrapped_env, save_dir, test_for=1000, model=None, render_video=False):
             action, _ = model.predict(obs)
         obs, _, done, trunc, _ = wrapped_env.step(action)
         if render_video:
-            img = evaluation_img(wrapped_env.unwrapped, up='actuations')
-            # img = env.mujoco_renderer.render(render_mode="rgb_array")
+            if render_actuations:
+                img = evaluation_img(wrapped_env.unwrapped, up='actuations')
+            else:
+                img = env.mujoco_renderer.render(render_mode="rgb_array")
             images.append(img)
         if idx == test_for-1:
             done=True
@@ -82,6 +85,23 @@ def test(wrapped_env, save_dir, test_for=1000, model=None, render_video=False):
                 im_counter += 1
 
     wrapped_env.reset()
+
+def train(model, train_for, save_every, save_dir):
+    """ Training function of a model.
+
+    Args:
+        model: The stable baselines model object. Must not be ``None``.
+        train_for (int): The number of timesteps to train. This will be broken into multiple episodes.
+        save_every (int): Number of timesteps where we save a model.
+        save_dir (str): The path to save the model.
+    """ 
+    counter = 0
+    while train_for > 0:
+        counter += 1
+        train_for_iter = min(train_for, save_every)
+        train_for = train_for - train_for_iter
+        model.learn(total_timesteps=train_for_iter, reset_num_timesteps=False)
+        model.save(os.path.join(save_dir, "model_" + str(counter)))
 
 def main():
     """ CLI for the demonstration environments.
@@ -137,7 +157,6 @@ def main():
                         default='linear',
                         help='Choose the reward function for the roll_over environment. Put '
                              'either \'winkel\', \'linear\' or \'quad\'. Default: \'linear\'.')
-
     parser.add_argument('--roll_over_model_path_auto', action='store_true',
                         help="""If set, the path of the model for the roll_over environment
 is automatically set to the following:
@@ -146,6 +165,10 @@ is automatically set to the following:
 '--save_model' is used as a suffix in model names.
 An example is '251206_prone_linear_1e6_test'
 """)
+    parser.add_argument('--render_actuations', action='store_true',
+                        help="Render plot of muscle actuations additionally to scene video.")
+    parser.add_argument('--log_actuations', action='store_true',
+                        help="Create a .csv log file of actuations of all actuators per step of the environment.")
     
     args = parser.parse_args()
     env_name = args.env
@@ -160,6 +183,8 @@ An example is '251206_prone_linear_1e6_test'
     roll_over_starting_position = args.roll_over_starting_position
     roll_over_reward_function = args.roll_over_reward_function
     roll_over_model_path_auto = args.roll_over_model_path_auto
+    render_actuations = args.render_actuations
+    log_actuations = args.log_actuations
 
     actuation_model = MuscleModel if use_muscle else SpringDamperModel
 
@@ -208,7 +233,10 @@ An example is '251206_prone_linear_1e6_test'
             reward_function=roll_over_reward_function,
             width=480,
             height=480)
-        wrapped_env = MIMoRollOverWrapper(env, log_file="actuation_log.csv")
+        if log_actuations:
+            wrapped_env = MIMoRollOverWrapper(env, log_file=os.path.join(save_dir,"actuation_log.csv"))
+        else:
+            wrapped_env = env
     else:
         env = gym.make(env_names[env_name], actuation_model=actuation_model,
             width=480,
@@ -224,20 +252,17 @@ An example is '251206_prone_linear_1e6_test'
                    tensorboard_log=os.path.join("models", "tensorboard_logs", env_name, save_model),
                    verbose=1)
 
-    # train model
-    counter = 0
-    while train_for > 0:
-        counter += 1
-        train_for_iter = min(train_for, save_every)
-        train_for = train_for - train_for_iter
+    if train_for > 0:
         if model is None:
             raise RuntimeError("Model not defined. Please provide an algorithm name.")
-        model.learn(total_timesteps=train_for_iter, reset_num_timesteps=False)
-        model.save(os.path.join(save_dir, "model_" + str(counter)))
+        train(model=model, save_dir=save_dir, train_for=train_for, save_every=save_every)
 
-    test(wrapped_env, save_dir, model=model, test_for=test_for, render_video=render)
+    if test_for > 0:
+        # Note here we do not check for 'model is None', because we allow it. If in testing the model is
+        # 'None', we just take random actions.
+        test(wrapped_env, save_dir, model=model, test_for=test_for, render_video=render, render_actuations=render_actuations)
+
     wrapped_env.close()
-
 
 if __name__ == '__main__':
     main()

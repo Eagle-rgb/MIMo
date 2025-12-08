@@ -233,21 +233,34 @@ class MIMoRollOverEnv(MIMoEnv):
             # local z axis: feet to head
             # So the local axis without modifications are the same as the global axis. After putting MIMo in prone
             # position, the entry xmat[2, 0] is -1: The local x axis looks down to the ground, i.e. in the negative
-            # direction of the global z-axis.
+            # direction of the global z-axis. In supine, this value is +1.
             # We define a roll over prone-to-supine so that the local x-axis looks up, i.e. exactly in the direction
             # of the global z-axis. So we want to measure the angle between the global z-axis and the local x-axis.
 
         # To do this, we calculate the pitch angle. MIMos local z-axis now goes along the global x-axis and we want
         # that axis 'to stay the same'. He should roll around that z-axis and not stand up.
         # Calculate the euler angle of the y-axis.
+
+        # np.arctan2 returns an angle \phi between -pi and +pi (including both endpoints).
+        # The angle is the angle between the unit-length vector (x,y) and the x-axis. The
+        # point (x,y) is defined as x=-xmat[2,0] and y chosen as normalizing factor. You will
+        # always find an angle between -180 and +180 degrees that works here.
         angle_in_radiants = np.arctan2(
             -xmat[2, 0],
             np.sqrt(xmat[2, 1] ** 2 + xmat[2, 2] ** 2)
         )
+        # 'angle_in_degrees' is around 90° for prone starting position and around -90° for supine starting position.
         angle_in_degrees = angle_in_radiants * (180 / np.pi)
 
-        # Normalize the angle to [0, 1].
-        angle_norm = (angle_in_degrees - (-90)) / (90 - (-90))
+        # We use prone as default starting position. We want 0 reward
+        # at 'angle_in_degrees' 90°, 0.5 reward at 180° or -180° and 
+        # 1 reward at -90°.
+        if angle_in_degrees >= -90 and angle_in_degrees <= 90:
+            angle_norm = 1 - (angle_in_degrees + 90) / 180
+        elif angle_in_degrees < -90: # -180° to -90°
+            angle_norm = 1 - (angle_in_degrees + 90) / -180
+        else: # 90° to 180°
+            angle_norm = (angle_in_degrees - 90) / 180
 
         return angle_norm
 
@@ -276,8 +289,8 @@ class MIMoRollOverEnv(MIMoEnv):
         rot_hip = self._get_standardized_rotation("hip")
         rot_chest = self._get_standardized_rotation("chest")
 
-        # Goal rotation is exactly the opposite for prone starting position.
-        if self.starting_position=="prone":
+        # Goal rotation is exactly the opposite for supine starting position.
+        if self.starting_position=="supine":
             rot_hip = 1 - rot_hip
             rot_chest = 1 - rot_chest
 
