@@ -71,6 +71,7 @@ class MIMoRollOverEnv(MIMoEnv):
                  actuation_model=SpringDamperModel,
                  starting_position='prone',
                  reward_function='linear',
+                 reward_success=500,  # the big reward granted on success.
                  **kwargs):
 
         if starting_position not in ["prone", "supine", "alternating"]:
@@ -84,6 +85,7 @@ class MIMoRollOverEnv(MIMoEnv):
             raise ValueError(msg)
 
         self.reward_function=reward_function
+        self.reward_success=reward_success
 
         self.starting_position=starting_position
         self.alternating_starting_position=self.starting_position=='alternating'
@@ -99,7 +101,7 @@ class MIMoRollOverEnv(MIMoEnv):
                          vision_params=vision_params,
                          vestibular_params=vestibular_params,
                          actuation_model=actuation_model,
-                         goals_in_observation=False,
+                         goals_in_observation=True,
                          done_active=False,
                          **kwargs)
 
@@ -278,7 +280,7 @@ class MIMoRollOverEnv(MIMoEnv):
         """
         return self.data.body(body_name).xmat.reshape(3, 3)[2, 0]
 
-    def get_reward_winkel(self):
+    def get_achieved_goal_winkel(self):
         """ The very first goal function - with the slight addition that I added
         chest rotation. Calculates the normalized angle of the chest and hip rotation
         and returns the average of them.
@@ -296,7 +298,7 @@ class MIMoRollOverEnv(MIMoEnv):
 
         return (rot_hip + rot_chest) / 2.0
 
-    def get_reward_linear(self):
+    def get_achieved_goal_linear(self):
         """ The second goal function - it is linear in xmat[2,0], i.e. the vertical
         component of the local x axis of the hip and the chest. Here also, the values
         are averaged.
@@ -316,7 +318,7 @@ class MIMoRollOverEnv(MIMoEnv):
         rot_chest = (rot_chest + 1) / 2.0
         return (rot_hip + rot_chest) / 2.0
 
-    def get_reward_quad(self):
+    def get_achieved_goal_quad(self):
         """ The third goal function - it is quadratic in xmat[2,0], i.e. the vertical
         component of the local x axis of the hip and the chest. Here also, the values
         are averaged.
@@ -348,15 +350,18 @@ class MIMoRollOverEnv(MIMoEnv):
         """ Returns the goal calculated from either of the tree goal functions.
         """
         if self.reward_function=='winkel':
-            return self.get_reward_winkel()
+            return self.get_achieved_goal_winkel()
         elif self.reward_function=='linear':
-            return self.get_reward_linear()
+            return self.get_achieved_goal_linear()
         else:  # 'quad'
-            return self.get_reward_quad()
+            return self.get_achieved_goal_quad()
 
-    def compute_reward(self, achieved_goal, desired_goal, info):
+    def compute_reward_v1(self, achieved_goal, desired_goal, info):
         """
         Computes the reward.
+
+        Note this function is archived. We now only want to return a negative
+        reward when the goal is not reached.
 
         The reward consists of the standardized hip and chest rotation with a
         penalty of the square of the control signal.
@@ -381,3 +386,40 @@ class MIMoRollOverEnv(MIMoEnv):
         reward -= quad_ctrl_cost
 
         return reward
+
+    def compute_reward(self, achieved_goal, desired_goal, info):
+        """ Computes the reward.
+
+        If the desired goal is not reached, this function returns a lazy penalty
+        based on the euler distance between the desired goal and the achieved goal.
+        See [https://arxiv.org/pdf/2201.08299 Goal-Conditioned Reinforcement Learning:
+        Problems and Solutions by Liu et al. 2022 pp2-3 section 'Sample Efficiency:
+        Towards Sparse Rewards'] for a discussion and the motivation behind this
+        lazy approach.
+
+        If the desired goal is reached, this function returns a high positive reward
+        specified as a parameter in this environment's constructor.
+
+        In both cases a penalty of the square of the control signal is subtracted
+        from the reward in order to discourage excessive muscle usage.
+
+        Arguments:
+            achieved_goal (float): The achieved hip and chest rotation.
+            desired_goal (float): The desired hip and chest rotation so as to
+                classify this trajectory as a successfull roll over.
+            info (dict): This parameter is ignored.
+
+        Returns:
+            float: The reward as described above.
+        """
+        # Penalize excessive use of force.
+        quad_ctrl_cost = 0.01 * np.square(self.data.ctrl).sum()  # [0, 0.44]
+
+        if achieved_goal < desired_goal:
+            # Goal not reached. Return reward as squared distance penalty.
+            return -(desired_goal - achieved_goal)**2.0 - quad_ctrl_cost
+
+        # Goal reached. Return high positive reward configured as parameter
+        # in environment constructor.
+        return self.reward_success - quad_ctrl_cost
+    

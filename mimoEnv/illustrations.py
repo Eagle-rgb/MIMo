@@ -69,7 +69,7 @@ def test(wrapped_env, save_dir, test_for=1000, model=None, render_video=False, r
             if render_actuations:
                 img = evaluation_img(wrapped_env.unwrapped, up='actuations')
             else:
-                img = env.mujoco_renderer.render(render_mode="rgb_array")
+                img = wrapped_env.unwrapped.mujoco_renderer.render(render_mode="rgb_array")
             images.append(img)
         if idx == test_for-1:
             done=True
@@ -227,12 +227,16 @@ An example is '251206_prone_linear_1e6_test'
 
     # Set render size to 480, because babybench used this render size
     # and we copy-pasted the utils from there.
+
+    # 15.12.2025 Added 'done_active=True' to allow environment termination
+    # when we reached a goal state.
     if env_name == 'roll_over':
         env = gym.make(env_names[env_name], actuation_model=actuation_model,
             starting_position=roll_over_starting_position,
             reward_function=roll_over_reward_function,
             width=480,
-            height=480)
+            height=480,
+            done_active=True)
         if log_actuations:
             wrapped_env = MIMoRollOverWrapper(env, log_file=os.path.join(save_dir,"actuation_log.csv"))
         else:
@@ -240,7 +244,8 @@ An example is '251206_prone_linear_1e6_test'
     else:
         env = gym.make(env_names[env_name], actuation_model=actuation_model,
             width=480,
-            height=480)
+            height=480,
+            done_active=True)
         wrapped_env = env
     env.reset()
 
