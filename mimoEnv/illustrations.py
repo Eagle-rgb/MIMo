@@ -79,7 +79,9 @@ def test(wrapped_env, save_dir, test_for=1000, model=None, render_video=False, r
             if render_video:
                 save_name=os.path.join(save_dir, 'episode_{}.avi'.format(im_counter))
                 print("Rendering video as '"+save_name+"'")
-                evaluation_video(images, save_name=save_name)
+                render_height = 720 if render_actuations else 480
+                render_width = 480
+                evaluation_video(images, save_name=save_name, resolution=((render_width, render_height)))
 
                 images = []
                 im_counter += 1
@@ -136,7 +138,7 @@ def main():
                         help='Total timesteps of testing of trained policy')               
     parser.add_argument('--save_every', default=100000, type=int,
                         help='Number of timesteps between model saves')
-    parser.add_argument('--algorithm', default=None, type=str, required=True,
+    parser.add_argument('--algorithm', type=str,
                         default='PPO',
                         choices=['PPO', 'SAC', 'TD3', 'DDPG', 'A2C', 'HER'],
                         help='RL algorithm from Stable Baselines3')
@@ -225,6 +227,7 @@ An example is '251206_prone_linear_1e6_test'
         os.makedirs(save_dir)
 
     wrapped_env = None
+    render_height = 720 if render_actuations else 480
 
     # Set render size to 480, because babybench used this render size
     # and we copy-pasted the utils from there.
@@ -235,9 +238,8 @@ An example is '251206_prone_linear_1e6_test'
         env = gym.make(env_names[env_name], actuation_model=actuation_model,
             starting_position=roll_over_starting_position,
             reward_function=roll_over_reward_function,
-            width=480,
-            height=480,
-            done_active=True)
+            width=480, # always 480 regardless whether we render actuations or not.
+            height=render_height)
         if log_actuations:
             wrapped_env = MIMoRollOverWrapper(env, log_file=os.path.join(save_dir,"actuation_log.csv"))
         else:
@@ -245,8 +247,7 @@ An example is '251206_prone_linear_1e6_test'
     else:
         env = gym.make(env_names[env_name], actuation_model=actuation_model,
             width=480,
-            height=480,
-            done_active=True)
+            height=render_height)
         wrapped_env = env
     env.reset()
 

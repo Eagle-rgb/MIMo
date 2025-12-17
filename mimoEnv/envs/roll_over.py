@@ -102,7 +102,7 @@ class MIMoRollOverEnv(MIMoEnv):
                          vestibular_params=vestibular_params,
                          actuation_model=actuation_model,
                          goals_in_observation=True,
-                         done_active=False,
+                         done_active=True,
                          **kwargs)
 
         self.init_position=self.data.qpos.copy()
