@@ -126,17 +126,18 @@ def main():
     """
 
     parser = argparse.ArgumentParser()
-    parser.add_argument('--env', required=True,
+    parser.add_argument('--env', default='roll_over',
                         choices=['reach', 'standup', 'selfbody', 'catch', 'roll_over'],
                         help='The demonstration environment to use. Must be one of "reach", "standup", "selfbody", '
                              '"catch", "roll_over"')
     parser.add_argument('--train_for', default=0, type=int,
                         help='Total timesteps of training')
-    parser.add_argument('--test_for', default=1000, type=int,
+    parser.add_argument('--test_for', default=0, type=int,
                         help='Total timesteps of testing of trained policy')               
     parser.add_argument('--save_every', default=100000, type=int,
                         help='Number of timesteps between model saves')
     parser.add_argument('--algorithm', default=None, type=str, required=True,
+                        default='PPO',
                         choices=['PPO', 'SAC', 'TD3', 'DDPG', 'A2C', 'HER'],
                         help='RL algorithm from Stable Baselines3')
     parser.add_argument('--load_model', default=False, type=str,
@@ -154,9 +155,9 @@ def main():
                              'either \'supine\', \'prone\' or \'alternating\'. Default: \'prone\'.')
     parser.add_argument('--roll_over_reward_function', required=False,
                         choices=['winkel', 'linear', 'quad'],
-                        default='linear',
+                        default='winkel',
                         help='Choose the reward function for the roll_over environment. Put '
-                             'either \'winkel\', \'linear\' or \'quad\'. Default: \'linear\'.')
+                             'either \'winkel\', \'linear\' or \'quad\'. Default: \'winkel\'.')
     parser.add_argument('--roll_over_model_path_auto', action='store_true',
                         help="""If set, the path of the model for the roll_over environment
 is automatically set to the following:
