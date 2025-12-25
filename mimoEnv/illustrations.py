@@ -69,7 +69,7 @@ def test(wrapped_env, save_dir, test_for=1000, model=None, render_video=False, r
             if render_actuations:
                 img = evaluation_img(wrapped_env.unwrapped, up='actuations')
             else:
-                img = env.mujoco_renderer.render(render_mode="rgb_array")
+                img = wrapped_env.unwrapped.mujoco_renderer.render(render_mode="rgb_array")
             images.append(img)
         if idx == test_for-1:
             done=True
@@ -79,7 +79,9 @@ def test(wrapped_env, save_dir, test_for=1000, model=None, render_video=False, r
             if render_video:
                 save_name=os.path.join(save_dir, 'episode_{}.avi'.format(im_counter))
                 print("Rendering video as '"+save_name+"'")
-                evaluation_video(images, save_name=save_name)
+                render_height = 720 if render_actuations else 480
+                render_width = 480
+                evaluation_video(images, save_name=save_name, resolution=((render_width, render_height)))
 
                 images = []
                 im_counter += 1
@@ -126,17 +128,18 @@ def main():
     """
 
     parser = argparse.ArgumentParser()
-    parser.add_argument('--env', required=True,
+    parser.add_argument('--env', default='roll_over',
                         choices=['reach', 'standup', 'selfbody', 'catch', 'roll_over'],
                         help='The demonstration environment to use. Must be one of "reach", "standup", "selfbody", '
                              '"catch", "roll_over"')
     parser.add_argument('--train_for', default=0, type=int,
                         help='Total timesteps of training')
-    parser.add_argument('--test_for', default=1000, type=int,
+    parser.add_argument('--test_for', default=0, type=int,
                         help='Total timesteps of testing of trained policy')               
     parser.add_argument('--save_every', default=100000, type=int,
                         help='Number of timesteps between model saves')
-    parser.add_argument('--algorithm', default=None, type=str, required=True,
+    parser.add_argument('--algorithm', type=str,
+                        default='PPO',
                         choices=['PPO', 'SAC', 'TD3', 'DDPG', 'A2C', 'HER'],
                         help='RL algorithm from Stable Baselines3')
     parser.add_argument('--load_model', default=False, type=str,
@@ -154,9 +157,9 @@ def main():
                              'either \'supine\', \'prone\' or \'alternating\'. Default: \'prone\'.')
     parser.add_argument('--roll_over_reward_function', required=False,
                         choices=['winkel', 'linear', 'quad'],
-                        default='linear',
+                        default='winkel',
                         help='Choose the reward function for the roll_over environment. Put '
-                             'either \'winkel\', \'linear\' or \'quad\'. Default: \'linear\'.')
+                             'either \'winkel\', \'linear\' or \'quad\'. Default: \'winkel\'.')
     parser.add_argument('--roll_over_model_path_auto', action='store_true',
                         help="""If set, the path of the model for the roll_over environment
 is automatically set to the following:
@@ -224,15 +227,19 @@ An example is '251206_prone_linear_1e6_test'
         os.makedirs(save_dir)
 
     wrapped_env = None
+    render_height = 720 if render_actuations else 480
 
     # Set render size to 480, because babybench used this render size
     # and we copy-pasted the utils from there.
+
+    # 15.12.2025 Added 'done_active=True' to allow environment termination
+    # when we reached a goal state.
     if env_name == 'roll_over':
         env = gym.make(env_names[env_name], actuation_model=actuation_model,
             starting_position=roll_over_starting_position,
             reward_function=roll_over_reward_function,
-            width=480,
-            height=480)
+            width=480, # always 480 regardless whether we render actuations or not.
+            height=render_height)
         if log_actuations:
             wrapped_env = MIMoRollOverWrapper(env, log_file=os.path.join(save_dir,"actuation_log.csv"))
         else:
@@ -240,7 +247,7 @@ An example is '251206_prone_linear_1e6_test'
     else:
         env = gym.make(env_names[env_name], actuation_model=actuation_model,
             width=480,
-            height=480)
+            height=render_height)
         wrapped_env = env
     env.reset()
 
