@@ -168,8 +168,5 @@ if __name__ == "__main__":
         # 3. Plots erstellen
         print("\nErstelle Plots...")
         
-        # Plot für die durchschnittliche Episodenbelohnung
-        create_and_save_individual_plots(full_df, '.')
-        
-        # Plot für die Erfolgsrate
+        # Plot für die durchschnittliche Episodenbelohnung und Erfolgsrate
         create_and_save_individual_plots(full_df, '.')

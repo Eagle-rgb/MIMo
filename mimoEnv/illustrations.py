@@ -256,7 +256,7 @@ An example is '251206_prone_linear_1e6_test'
         model = RL.load(load_model, wrapped_env)
     else:
         model = RL("MultiInputPolicy", wrapped_env,
-                   tensorboard_log=os.path.join("models", "tensorboard_logs", env_name, save_model),
+                   tensorboard_log=save_dir,
                    verbose=1)
 
     if train_for > 0:
