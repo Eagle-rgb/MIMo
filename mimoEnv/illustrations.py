@@ -160,7 +160,7 @@ def main():
     parser.add_argument('--roll_over_model_path_auto', action='store_true',
                         help="""If set, the path of the model for the roll_over environment
 is automatically set to the following:
-- Folder structure models/roll_over/<starting_position>/<date>
+- Folder structure models/roll_over/<date>/<starting_position>
 - The name of the model is <date>_<starting_position>_<reward_function>_<--save_model suffix>
 '--save_model' is used as a suffix in model names.
 An example is '251206_prone_linear_1e6_test'
@@ -214,7 +214,7 @@ An example is '251206_prone_linear_1e6_test'
             "_" + roll_over_starting_position +\
             "_" + roll_over_reward_function +\
             "_" + save_model_suffix
-        save_dir = os.path.join("models", env_name, roll_over_starting_position, date_str_yymmdd, save_model)
+        save_dir = os.path.join("models", env_name, date_str_yymmdd, roll_over_starting_position, save_model)
         print("Saving model under '" + save_dir + "'")
     else:
         save_dir = os.path.join("models", env_name, save_model)
