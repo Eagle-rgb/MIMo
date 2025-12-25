@@ -770,8 +770,8 @@ class MIMoEnv(MujocoEnv, utils.EzPickle):
 
         if self.goals_in_observation:
             achieved_goal = self.get_achieved_goal()
-            observation_dict["achieved_goal"] = copy.deepcopy(achieved_goal)
-            observation_dict["desired_goal"] = copy.deepcopy(self.goal)
+            observation_dict["achieved_goal"] = np.array([achieved_goal])
+            observation_dict["desired_goal"] = np.array([self.goal])
 
         if self.sensory_delay == 0:
             return observation_dict

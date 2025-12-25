@@ -214,7 +214,7 @@ class MIMoRollOverEnv(MIMoEnv):
         Returns:
             float: 0.8
         """
-        return 0.8
+        return 0.95
 
     def _get_standardized_rotation(self, body_name):
         """ Get the standardized rotation of a body specified by name.
