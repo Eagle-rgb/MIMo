@@ -15,7 +15,7 @@ DATE_FORMAT = r'%y-%m-%d'
 
 # --- 1. Daten laden und zusammenführen ---
 
-def load_tensorboard_runs(base_dir, date, suffixes, tags):
+def load_tensorboard_runs(base_dir, date, suffix, tags):
     """
     Durchsucht rekursiv das Basisverzeichnis, lädt die angegebenen TensorBoard-Tags
     aus den PPO_0-Ordnern und fasst die Daten in einer einzigen DataFrame zusammen.
@@ -23,13 +23,13 @@ def load_tensorboard_runs(base_dir, date, suffixes, tags):
     all_data_list = []
     
     # Muster für die Ordnerstruktur:
-    # <date>_<haltung>_<modelsuffix>_run_<nummer>/PPO_0/...
+    # <date>_<haltung>_<belohnung>_<modelsuffix>_run_<nummer>/PPO_0/...
     # Dabei ist <date> als YY-mm-dd (also %Y-%m-%d) formatiert.
     date_str = date.strftime(DATE_FORMAT)
 
-    # Regex-Muster zum Extrahieren von Haltung, suffix und run_num aus dem **Elternordner**
+    # Regex-Muster zum Extrahieren von Haltung und Belohnung aus dem **Elternordner**
     # Der Ordnername muss exakt dem Muster entsprechen, bevor PPO_0 kommt.
-    re_str = date_str + r'_([a-z]+)_([a-z0-9_]+)_run_(\d+)'
+    re_str = date_str + r'_([a-z]+)_([a-z]+)_' + suffix + r'_run_(\d+)'
     pattern = re.compile(re_str)
 
     print(f"Suche nach TensorBoard Logs in {base_dir}...")
@@ -49,14 +49,9 @@ def load_tensorboard_runs(base_dir, date, suffixes, tags):
         if not match:
             continue
 
-        haltung, suffix, run_num = match.groups()
-
-        # Überprüfe, ob suffix erlaubt ist, also als Konsolenargument spezifiziert ist. Falls keine suffixe angegeben sind,
-        # erlaube alle.
-        if len(suffixes) != 0 and suffix not in suffixes:
-            continue  # Suffixe angegeben, aber dieser suffix passt leider nicht.
+        haltung, belohnung, run_num = match.groups()
         
-        print(f"Lade Run: Date={date_str}, Haltung={haltung}, Suffix={suffix}, Run={run_num} aus {root}")
+        print(f"Lade Run: Date={date_str}, Haltung={haltung}, Belohnung={belohnung}, Suffix={suffix}, Run={run_num} aus {root}")
 
         try:
             # SummaryReader erwartet den Pfad zum Ordner (hier: PPO_0),
@@ -71,15 +66,15 @@ def load_tensorboard_runs(base_dir, date, suffixes, tags):
             
             if not tag_data.empty:
                 # Hinzufügen der Experiment-Metadaten
+                tag_data['Belohnung'] = belohnung
                 tag_data['Haltung'] = haltung
                 tag_data['Run'] = int(run_num)
-                tag_data['Suffix'] = suffix
                 
                 # Umbenennen der Spalten für Konsistenz
                 tag_data.rename(columns={'step': 'Step', 'value': 'Value', 'tag': 'Tag'}, inplace=True)
                 
                 # Hinzufügen zur Gesamtliste
-                all_data_list.append(tag_data[['Haltung', 'Run', 'Suffix', 'Tag', 'Step', 'Value']])
+                all_data_list.append(tag_data[['Belohnung', 'Haltung', 'Run', 'Tag', 'Step', 'Value']])
                 
         except Exception as e:
             print(f"Fehler beim Laden von {root}: {e}")
@@ -93,14 +88,14 @@ def load_tensorboard_runs(base_dir, date, suffixes, tags):
 
 # --- 2. Datenaggregieren und Plotten ---
 
-def create_and_save_individual_plots(df, plot_dir, date):
+def create_and_save_individual_plots(df, plot_dir, date, suffix):
     """
     Aggregiert die Daten und speichert vier individuelle Plots (Tag x Haltung).
     """
     os.makedirs(plot_dir, exist_ok=True)
     
     # Berechne den Mittelwert und die Standardabweichung einmal für alle Daten
-    aggregated = df.groupby(['Haltung', 'Suffix', 'Tag', 'Step'])['Value'].agg(['mean', 'std']).reset_index()
+    aggregated = df.groupby(['Haltung', 'Belohnung', 'Tag', 'Step'])['Value'].agg(['mean', 'std']).reset_index()
     
     haltungen = ['prone', 'supine']
     date_str = date.strftime(DATE_FORMAT)
@@ -124,23 +119,22 @@ def create_and_save_individual_plots(df, plot_dir, date):
             # 1. Filtern der aggregierten Daten für die aktuelle Haltung und
             # check, ob mindestens ein Eintrag mit der Haltung existiert.
             haltung_group = tag_data[tag_data['Haltung'] == haltung]
-            if (len(haltung_group) == 0):
-                continue  # Es gibt keinen Eintrag für diese Haltung. Überspringe den plot.
+            if (len(haltung_group) == 0): continue
 
             # 2. Plot-Setup starten
             plt.figure(figsize=(10, 6))
             ax = plt.gca()
-
-            # 3. Iteriere über alle Suffixe.
-            for suffix, groupby in haltung_group.groupby(['Suffix']):
+            
+            # 3. Iteriere über die Belohnungsfunktionen
+            for belohnung, group in haltung_group.groupby('Belohnung'):
                 # Plot des Mittelwerts
-                ax.plot(groupby['Step'], groupby['mean'], label=suffix, linewidth=2)
+                ax.plot(group['Step'], group['mean'], label=label, linewidth=2)
                 
                 # Plot der Standardabweichung als Fehlerband
                 ax.fill_between(
-                    groupby['Step'], 
-                    groupby['mean'] - groupby['std'], 
-                    groupby['mean'] + groupby['std'], 
+                    group['Step'], 
+                    group['mean'] - group['std'], 
+                    group['mean'] + group['std'], 
                     alpha=0.15 
                 )
             
@@ -151,12 +145,12 @@ def create_and_save_individual_plots(df, plot_dir, date):
             ax.set_ylabel(y_label_map.get(tag, "Wert"), fontsize=12)
             if tag == 'rollout/success_rate':
                 ax.set_ylim(0.0, 1.0)
+            ax.legend(title='Goal Function', loc='best')
             ax.grid(True, linestyle='--', alpha=0.6)
-            plt.legend()
             plt.tight_layout()
 
             # 5. Speichern des Plots
-            filename = f"{date_str}_{haltung}_{tag.replace('/', '_')}.png"
+            filename = f"{date_str}_{suffix}_{haltung}_{tag.replace('/', '_')}.png"
             save_path = os.path.join(plot_dir, filename)
             plt.savefig(save_path)
             plt.close() # Schließt die Figur, um Speicher freizugeben
@@ -177,16 +171,16 @@ if __name__ == "__main__":
     # 0. Argumente laden. Zeit und Modelsuffix.
     parser = argparse.ArgumentParser()
     parser.add_argument('--date', required=True, type=valid_date, help="Date of the runs.")
+    parser.add_argument('--suffix', required=True, type=str, help="Model name suffix.")
     parser.add_argument('--save_df', required=False, action='store_true', help="If set, saved pandas Dataframe csv.")
-    parser.add_argument('--suffix', '--names-list', nargs='+', required=False, default=[], help="Model name suffixes to use. Leave empty if allow all.")
     args = parser.parse_args()
     date = args.date
-    suffixes = args.suffix
+    suffix = args.suffix
     save_df = args.save_df
 
     # 1. Daten laden
     base_dir = os.path.abspath(BASE_DIR)
-    full_df = load_tensorboard_runs(base_dir, date, suffixes, TAGS_TO_LOAD)
+    full_df = load_tensorboard_runs(base_dir, date, suffix, TAGS_TO_LOAD)
 
     if full_df.empty:
         print("Es wurden keine TensorBoard-Daten gefunden. Bitte überprüfen Sie den BASE_DIR und die Ordnerstruktur.")
@@ -200,4 +194,4 @@ if __name__ == "__main__":
         print("\nErstelle Plots...")
         
         # Plot für die durchschnittliche Episodenbelohnung und Erfolgsrate
-        create_and_save_individual_plots(full_df, '.', date)
+        create_and_save_individual_plots(full_df, '.', date, suffix)

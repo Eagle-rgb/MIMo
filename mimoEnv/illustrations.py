@@ -215,7 +215,6 @@ An example is '251206_prone_linear_1e6_test'
         save_model_suffix = save_model
         save_model = date_str_yymmdd +\
             "_" + roll_over_starting_position +\
-            "_" + roll_over_reward_function +\
             "_" + save_model_suffix
         save_dir = os.path.join("models", env_name, date_str_yymmdd, roll_over_starting_position, save_model)
         print("Saving model under '" + save_dir + "'")
