@@ -97,9 +97,15 @@ def load_tensorboard_runs(base_dir, date, suffixes, tags):
 
 # --- 2. Datenaggregieren und Plotten ---
 
-def create_and_save_individual_plots(df, plot_dir, date):
+def create_and_save_individual_plots(df, plot_dir, date, suffixes):
     """
     Aggregiert die Daten und speichert vier individuelle Plots (Tag x Haltung).
+
+    04.01.2026: Der Name der gespeicherten Datei ist:
+    yy-mm-dd_<suffix>_<prone/supine>_rollout_<ep_rew_mean/success_rate>.png
+
+    Ich habe in dieser Version den <suffix> hinzugefügt. Dieser steht dort nur, wenn 'suffixes' als
+    Liste genau einen Eintrag (genau einen Suffix) hat.
     """
     os.makedirs(plot_dir, exist_ok=True)
     
@@ -161,7 +167,14 @@ def create_and_save_individual_plots(df, plot_dir, date):
 
             # 5. Speichern des Plots
             filename = f"{date_str}_{haltung}_{tag.replace('/', '_')}.png"
+
+            # If there is exactly one suffix specified, we include that in
+            # the output file name.
+            if len(suffixes) == 1:
+                filename = f"{date_str}_{suffixes[0]}_{haltung}_{tag.replace('/', '_')}.png"
+
             save_path = os.path.join(plot_dir, filename)
+
             plt.savefig(save_path)
             plt.close() # Schließt die Figur, um Speicher freizugeben
             
@@ -204,4 +217,4 @@ if __name__ == "__main__":
         print("\nErstelle Plots...")
         
         # Plot für die durchschnittliche Episodenbelohnung und Erfolgsrate
-        create_and_save_individual_plots(full_df, '.', date)
+        create_and_save_individual_plots(full_df, '.', date, suffixes)

@@ -13,6 +13,11 @@ HOSTPREFIXES=("adrastos" "alkmene" "ajax" "anaxo" "achilles" "axylos" "aktor"
 NUMBER_OF_RUNS=$3
 MODEL_NAME=$2
 
+# Date. Used to run gemini_plot script after all runs are finished. Do this before
+# starting the runs in case we start them before midnight so we do not read a wrong
+# date.
+today=$(date +%y-%m-%d)
+
 if [ $NUMBER_OF_RUNS -ge ${#HOSTPREFIXES[@]} ]
 	then
 		echo "Error. Too many runs. Maximum ${#HOSTPREFIXES[@]} runs allowed."
@@ -22,6 +27,19 @@ fi
 for i in $(seq 1 $NUMBER_OF_RUNS); do
 	HOSTNAME="${HOSTPREFIXES[i]}"".rbi.cs.uni-frankfurt.de"
 	echo "Playing MIMo on host $HOSTNAME"
-	ssh -l ${USERNAME} ${HOSTNAME} "conda activate mimo && cd MIMo && python mimoEnv/illustrations.py" "--train_for=1000000" "--test_for=500" "--roll_over_starting_position=prone" "--roll_over_model_path_auto" "--save_model=${MODEL_NAME}_run_${i}" "--render_video" &
+	ssh -l ${USERNAME} ${HOSTNAME} "conda activate mimo && cd MIMo && python mimoEnv/illustrations.py" "--train_for=1000000" "--test_for=500" "--roll_over_starting_position=prone" "--algorithm=DDPG" "--roll_over_model_path_auto" "--save_model=${MODEL_NAME}_run_${i}" "--render_video" &
 done
+
+# Wait until all ssh commands finished, i.e. all MIMo simulations are finished. Then, plot the results.
+wait
+
+# Create gemini plots.
+ssh -l ${USERNAME} "adrastos.rbi.cs.uni-frankfurt.de" "conda activate mimo" "&&"\
+	"cd MIMo" "&&" \
+	"python" "results/gemini_plot.py" "--date=${today}" "--suffix=${MODEL_NAME}"
+
+# Copy gemini plots to our local machine.
+# Gemini plot files always have the same prefix: yy-mm-dd_<model sufix>_****.png
+scp "${USERNAME}@adrastos.rbi.cs.uni-frankfurt.de:~/MIMo/${today}_${MODEL_NAME}_*" "."
+
 
