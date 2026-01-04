@@ -12,32 +12,36 @@ BASE_DIR = "."  # Das Hauptverzeichnis, in dem Ihre Ordner liegen
 TAGS_TO_LOAD = ["rollout/ep_rew_mean", "rollout/success_rate"]
 OUTPUT_CSV = "rl_comparison_data.csv"
 DATE_FORMAT = r'%y-%m-%d'
+ALGORITHM_FOLDERS = ['PPO_0', 'SAC_0', 'TD3_0', 'DDPG_0', 'A2C_0']
 
 # --- 1. Daten laden und zusammenführen ---
-
 def load_tensorboard_runs(base_dir, date, suffixes, tags):
     """
     Durchsucht rekursiv das Basisverzeichnis, lädt die angegebenen TensorBoard-Tags
-    aus den PPO_0-Ordnern und fasst die Daten in einer einzigen DataFrame zusammen.
+    aus den <ALG>_0-Ordnern und fasst die Daten in einer einzigen DataFrame zusammen.
+    <ALG> ist dabei einer von 'PPO', 'SAC', 'TD3', 'DDPG', 'A2C'.
     """
     all_data_list = []
     
     # Muster für die Ordnerstruktur:
-    # <date>_<haltung>_<modelsuffix>_run_<nummer>/PPO_0/...
+    # <date>_<haltung>_<modelsuffix>_run_<nummer>/<ALG>_0/...
     # Dabei ist <date> als YY-mm-dd (also %Y-%m-%d) formatiert.
     date_str = date.strftime(DATE_FORMAT)
 
     # Regex-Muster zum Extrahieren von Haltung, suffix und run_num aus dem **Elternordner**
-    # Der Ordnername muss exakt dem Muster entsprechen, bevor PPO_0 kommt.
+    # Der Ordnername muss exakt dem Muster entsprechen, bevor <ALG>_0 kommt.
     re_str = date_str + r'_([a-z]+)_([a-z0-9_]+)_run_(\d+)'
     pattern = re.compile(re_str)
 
     print(f"Suche nach TensorBoard Logs in {base_dir}...")
     
-    # Rekursives Durchsuchen, um alle 'PPO_0'-Ordner zu finden
+    # Rekursives Durchsuchen, um alle '<ALG>_0'-Ordner zu finden
     for root, dirs, files in os.walk(base_dir):
-        # Wir sind im Ordner 'PPO_0'
-        if os.path.basename(root) != 'PPO_0':
+        # The name of the folder we are currently in. We want this to be in the format 'PPO_0'
+        # or any other algorithm prefix from the algorithm list above.
+        this_folder_name = os.path.basename(root)
+
+        if this_folder_name not in ALGORITHM_FOLDERS:
             continue
 
         # Der Elternordner von PPO_0 ist der eigentliche Run-Ordner
@@ -59,7 +63,7 @@ def load_tensorboard_runs(base_dir, date, suffixes, tags):
         print(f"Lade Run: Date={date_str}, Haltung={haltung}, Suffix={suffix}, Run={run_num} aus {root}")
 
         try:
-            # SummaryReader erwartet den Pfad zum Ordner (hier: PPO_0),
+            # SummaryReader erwartet den Pfad zum Ordner (hier: z.B. PPO_0),
             # der die 'events.out.tfevents'-Datei enthält.
             reader = SummaryReader(root)
             
