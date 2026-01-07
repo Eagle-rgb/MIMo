@@ -57,7 +57,7 @@ def test(wrapped_env, save_dir, model=None, render_video=False, render_actuation
 
     print("Testing model...")
 
-    while not done:
+    while not done and not trunc:
         if model is None:
             print("No model, taking random actions")
             action = wrapped_env.action_space.sample()

@@ -95,6 +95,53 @@ def load_tensorboard_runs(base_dir, date, suffixes, tags):
     else:
         return pd.DataFrame()
 
+def interpolate_runs(group_df, n_points):
+    """ 07.01.2026: DDPG and SAC have steps in their tensorboard logs that do not follow a "pattern", i.e.
+    we can not just do a group_by on the step and then get a list of the values for each run. We must
+    manipulate the pandas dataframe samples such that the steps match how we would have them in PPO or
+    A2C, i.e. each 500 steps in A2C or 2048 in PPO there is one entry in the tensorboard log.
+    
+    Args:
+      group_df (panda.DataFrame): DataFrame consisting of arbitrary number of runs.
+      n_points: Number of sample points on the x-axis.
+    
+    Returns:
+      resampled_values [List]: List of resampled values: One entry per point on the common x-axis.
+    """
+    if group_df.empty: return None
+
+    # Step 1: Build a common x axis to sample values from.
+    min_step = group_df['Step'].min()
+    max_step = group_df['Step'].max()
+    common_steps = np.linspace(min_step, max_step, n_points)
+
+    # Step 2: Resample values such that 'Step' lies on the 'common_steps' axis. After this, 'resampled_values'
+    # contains an entry for each run, with each run containing the list of resampled values for this run.
+    resampled_values = []
+
+    # Iterate over all runs.
+    for run in group_df['Run'].unique():
+        run_data = group_df[group_df['Run'] == run].sort_values('Step')
+        if len(run_data) < 2: continue
+
+        # Interpolate the values of this run.
+        interp_vals = np.interp(common_steps, run_data['Step'], run_data['Value'])
+        resampled_values.append(interp_vals)
+
+    if not resampled_values: return None
+
+    # Step 3: Average and std over resamples values.
+    resampled_values = np.array(resampled_values)
+    mean_vals = np.mean(resampled_values, axis=0)
+    std_vals = np.std(resampled_values, axis=0)
+
+    return pd.DataFrame({
+        'Step': common_steps,
+        'mean': mean_vals,
+        'std': std_vals
+    })
+
+
 # --- 2. Datenaggregieren und Plotten ---
 
 def create_and_save_individual_plots(df, plot_dir, date, suffixes):
@@ -108,10 +155,7 @@ def create_and_save_individual_plots(df, plot_dir, date, suffixes):
     Liste genau einen Eintrag (genau einen Suffix) hat.
     """
     os.makedirs(plot_dir, exist_ok=True)
-    
-    # Berechne den Mittelwert und die Standardabweichung einmal für alle Daten
-    aggregated = df.groupby(['Haltung', 'Suffix', 'Tag', 'Step'])['Value'].agg(['mean', 'std']).reset_index()
-    
+
     haltungen = ['prone', 'supine']
     date_str = date.strftime(DATE_FORMAT)
     
@@ -128,29 +172,29 @@ def create_and_save_individual_plots(df, plot_dir, date, suffixes):
     plot_count = 0
     
     for tag in TAGS_TO_LOAD:
-        tag_data = aggregated[aggregated['Tag'] == tag]
-        
         for haltung in haltungen:
-            # 1. Filtern der aggregierten Daten für die aktuelle Haltung und
-            # check, ob mindestens ein Eintrag mit der Haltung existiert.
-            haltung_group = tag_data[tag_data['Haltung'] == haltung]
-            if (len(haltung_group) == 0):
-                continue  # Es gibt keinen Eintrag für diese Haltung. Überspringe den plot.
-
-            # 2. Plot-Setup starten
+            # 1. Plot-Setup starten
             plt.figure(figsize=(10, 6))
             ax = plt.gca()
 
+            # 2. Daten nach Haltung und Tag filtern.
+            sub_df = df[(df['Tag'] == tag) & (df['Haltung'] == haltung)]
+            if len(sub_df) == 0:
+                continue # Es gibt keinen Eintrag für diese Haltung/Tag. Überspringe.
+
             # 3. Iteriere über alle Suffixe.
-            for suffix, groupby in haltung_group.groupby(['Suffix']):
+            for suffix, groupby in sub_df.groupby(['Suffix']):
+                # Die einzelnen runs dieses suffixes für den tag und die Haltung.
+                run_data = interpolate_runs(groupby, 100)
+
                 # Plot des Mittelwerts
-                ax.plot(groupby['Step'], groupby['mean'], label=suffix, linewidth=2)
+                ax.plot(run_data['Step'], run_data['mean'], label=suffix, linewidth=2)
                 
                 # Plot der Standardabweichung als Fehlerband
                 ax.fill_between(
-                    groupby['Step'], 
-                    groupby['mean'] - groupby['std'], 
-                    groupby['mean'] + groupby['std'], 
+                    run_data['Step'], 
+                    run_data['mean'] - run_data['std'], 
+                    run_data['mean'] + run_data['std'], 
                     alpha=0.15 
                 )
             
