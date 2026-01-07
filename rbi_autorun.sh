@@ -27,7 +27,8 @@ fi
 for i in $(seq 1 $NUMBER_OF_RUNS); do
 	HOSTNAME="${HOSTPREFIXES[i]}"".rbi.cs.uni-frankfurt.de"
 	echo "Playing MIMo on host $HOSTNAME"
-	ssh -l ${USERNAME} ${HOSTNAME} "conda activate mimo && cd MIMo && python mimoEnv/illustrations.py" "--train_for=1000000" "--test_for=500" "--roll_over_starting_position=prone" "--algorithm=DDPG" "--roll_over_model_path_auto" "--save_model=${MODEL_NAME}_run_${i}" "--render_video" &
+	# Putting '--save_every' as same value as '--train_for' saves only the very last model.
+	ssh -l ${USERNAME} ${HOSTNAME} "conda activate mimo && cd MIMo && python mimoEnv/illustrations.py" "--train_for=1000000" "--save_every=1000000" "--test" "--roll_over_starting_position=prone" "--algorithm=DDPG" "--roll_over_model_path_auto" "--save_model=${MODEL_NAME}_run_${i}" "--render_video" &
 done
 
 # Wait until all ssh commands finished, i.e. all MIMo simulations are finished. Then, plot the results.
