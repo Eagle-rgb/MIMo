@@ -387,8 +387,9 @@ class MIMoRollOverEnv(MIMoEnv):
         This overloaded function from mimo_env is used for PBRS (Potential Based Reward Shaping) to cache the
         potential of the current state for the reward function to use it in PBRS.
         """
-        self.pbrs_last_state_potential = get_potential()
-        return super().step(self, action)
+        # Cache potential of current state to be used in calculating next reward.
+        self.pbrs_last_state_potential = self.get_potential()
+        return super().step(action)
 
     def compute_reward_v1(self, achieved_goal, desired_goal, info):
         """
@@ -449,5 +450,5 @@ class MIMoRollOverEnv(MIMoEnv):
         # Potential of current state.
         curr_potential = self.get_potential()
 
-        return self.curr_potential - self.pbrs_last_state_potential - quad_ctrl_cost
+        return curr_potential - self.pbrs_last_state_potential - quad_ctrl_cost
     
