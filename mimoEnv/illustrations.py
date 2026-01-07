@@ -38,15 +38,13 @@ from stable_baselines3.common.vec_env import DummyVecEnv
 from datetime import datetime
 
 
-def test(wrapped_env, save_dir, test_for=1000, model=None, render_video=False, render_actuations=False):
-    """ Testing function to view the behaviour of a model.
+def test(wrapped_env, save_dir, model=None, render_video=False, render_actuations=False):
+    """ Tests the model for one episode.
 
     Args:
         wrapped_env (MIMoEnv): The wrapped (!) environment on which the model should be tested. This does not have to be the same training
             environment, but action and observation spaces must match.
         save_dir (str): The directory in which any rendered videos will be saved.
-        test_for (int): The number of timesteps the testing runs in total. This will be broken into multiple episodes
-            if necessary.
         model:  The stable baselines model object. If ``None`` we take random actions instead. Default ``None``.
         render_video (bool): If ``True``, all episodes during testing will be recorded and saved as videos in
             `save_dir`.
@@ -54,11 +52,12 @@ def test(wrapped_env, save_dir, test_for=1000, model=None, render_video=False, r
     """ 
     obs, _ = wrapped_env.reset()
     images = []
+    done=False
     im_counter = 0
 
     print("Testing model...")
 
-    for idx in range(test_for):
+    while not done:
         if model is None:
             print("No model, taking random actions")
             action = wrapped_env.action_space.sample()
@@ -71,8 +70,6 @@ def test(wrapped_env, save_dir, test_for=1000, model=None, render_video=False, r
             else:
                 img = wrapped_env.unwrapped.mujoco_renderer.render(render_mode="rgb_array")
             images.append(img)
-        if idx == test_for-1:
-            done=True
         if done or trunc:
             time.sleep(1)
             obs, _ = wrapped_env.reset()
@@ -112,8 +109,8 @@ def main():
 
     - ``--env``: The demonstration environment to use. Must be one of ``reach, standup, selfbody, catch, roll_over``.
     - ``--train_for``: The number of time steps to train. No training takes place if this is 0. Default 0.
-    - ``--test_for``: The number of time steps to test. Testing renders the environment to an interactive window, so
-      the trained behaviour can be observed. Default 1000.
+    - ``--test``: Whether to test the trained model. If set, tests the trained model for one episode. Use
+      flag '--render_video' to render the testing.
     - ``--save_every``: The number of time steps between model saves. This can be larger than the total training time,
       in which case we save once when training completes. Default 100000.
     - ``--algorithm``: The algorithm to train. This argument must be provided if you train. Must be one of
@@ -134,8 +131,8 @@ def main():
                              '"catch", "roll_over"')
     parser.add_argument('--train_for', default=0, type=int,
                         help='Total timesteps of training')
-    parser.add_argument('--test_for', default=0, type=int,
-                        help='Total timesteps of testing of trained policy')               
+    parser.add_argument('--test', action='store_true',
+                        help='Test trained policy for one episode.')               
     parser.add_argument('--save_every', default=100000, type=int,
                         help='Number of timesteps between model saves')
     parser.add_argument('--algorithm', type=str,
@@ -180,7 +177,7 @@ An example is '251206_prone_linear_1e6_test'
     save_model = args.save_model
     save_every = args.save_every
     train_for = args.train_for
-    test_for = args.test_for
+    should_test = args.test
     render = args.render_video
     use_muscle = args.use_muscle
     roll_over_starting_position = args.roll_over_starting_position
@@ -263,10 +260,10 @@ An example is '251206_prone_linear_1e6_test'
             raise RuntimeError("Model not defined. Please provide an algorithm name.")
         train(model=model, save_dir=save_dir, train_for=train_for, save_every=save_every)
 
-    if test_for > 0:
+    if should_test:
         # Note here we do not check for 'model is None', because we allow it. If in testing the model is
         # 'None', we just take random actions.
-        test(wrapped_env, save_dir, model=model, test_for=test_for, render_video=render, render_actuations=render_actuations)
+        test(wrapped_env, save_dir, model=model, render_video=render, render_actuations=render_actuations)
 
     wrapped_env.close()
 
