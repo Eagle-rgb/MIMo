@@ -53,6 +53,7 @@ def test(wrapped_env, save_dir, model=None, render_video=False, render_actuation
     obs, _ = wrapped_env.reset()
     images = []
     done=False
+    trunc=False
     im_counter = 0
 
     print("Testing model...")

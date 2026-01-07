@@ -371,13 +371,13 @@ class MIMoRollOverEnv(MIMoEnv):
         Problems and Solutions by Liu et al. 2022 pp2-3 section 'Sample Efficiency:
         Towards Sparse Rewards'] for a discussion and the motivation behind this
         lazy approach.
-          The potential of the goal state is a very high positive value specified
-        using 'reward_success'.
+          We handle reaching the goal state in the reward function. The potential of
+        a goal state is 0.
         """
         achieved_goal = self.get_achieved_goal()
         desired_goal = self.sample_goal()
         if achieved_goal >= desired_goal:
-            return self.reward_success
+            return 0
 
         return -(desired_goal - achieved_goal)**2.0
 
@@ -447,8 +447,16 @@ class MIMoRollOverEnv(MIMoEnv):
         # Penalize excessive use of force.
         quad_ctrl_cost = 0.01 * np.square(self.data.ctrl).sum()  # [0, 0.44]
 
+        # If the goal is reached, give a very high positive reward.
+        if achieved_goal >= desired_goal:
+            return self.reward_success - quad_ctrl_cost
+
         # Potential of current state.
         curr_potential = self.get_potential()
 
-        return curr_potential - self.pbrs_last_state_potential - quad_ctrl_cost
+        # Weight of potential. PBRS gives a very small reward signal without a high
+        # weight factor causing the model to not succeed at all.
+        w_potential = 100
+
+        return w_potential * (curr_potential - self.pbrs_last_state_potential) - quad_ctrl_cost
     
