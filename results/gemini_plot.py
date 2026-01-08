@@ -26,11 +26,19 @@ def load_tensorboard_runs(base_dir, date, suffixes, tags):
     # Muster für die Ordnerstruktur:
     # <date>_<haltung>_<modelsuffix>_run_<nummer>/<ALG>_0/...
     # Dabei ist <date> als YY-mm-dd (also %Y-%m-%d) formatiert.
-    date_str = date.strftime(DATE_FORMAT)
+
+    # If date is specified, then exactly this date string must be included
+    # in the model folder name.
+    if date:
+        date_str = date.strftime(DATE_FORMAT)
+        date_regex = date_str
+    else:
+        # Else we allow any valid date string.
+        date_regex = r'([0-9][0-9]-[0-9][0-9]-[0-9][0-9])' 
 
     # Regex-Muster zum Extrahieren von Haltung, suffix und run_num aus dem **Elternordner**
     # Der Ordnername muss exakt dem Muster entsprechen, bevor <ALG>_0 kommt.
-    re_str = date_str + r'_([a-z]+)_([a-z0-9_]+)_run_(\d+)'
+    re_str = date_regex + r'_([a-z]+)_([a-z0-9_]+)_run_(\d+)'
     pattern = re.compile(re_str)
 
     print(f"Suche nach TensorBoard Logs in {base_dir}...")
@@ -53,7 +61,10 @@ def load_tensorboard_runs(base_dir, date, suffixes, tags):
         if not match:
             continue
 
-        haltung, suffix, run_num = match.groups()
+        if date:
+            haltung, suffix, run_num = match.groups()
+        else:
+            date_str, haltung, suffix, run_num = match.groups()
 
         # Überprüfe, ob suffix erlaubt ist, also als Konsolenargument spezifiziert ist. Falls keine suffixe angegeben sind,
         # erlaube alle.
@@ -78,12 +89,13 @@ def load_tensorboard_runs(base_dir, date, suffixes, tags):
                 tag_data['Haltung'] = haltung
                 tag_data['Run'] = int(run_num)
                 tag_data['Suffix'] = suffix
+                tag_data['Date'] = date_str
                 
                 # Umbenennen der Spalten für Konsistenz
                 tag_data.rename(columns={'step': 'Step', 'value': 'Value', 'tag': 'Tag'}, inplace=True)
                 
                 # Hinzufügen zur Gesamtliste
-                all_data_list.append(tag_data[['Haltung', 'Run', 'Suffix', 'Tag', 'Step', 'Value']])
+                all_data_list.append(tag_data[['Date', 'Haltung', 'Run', 'Suffix', 'Tag', 'Step', 'Value']])
                 
         except Exception as e:
             print(f"Fehler beim Laden von {root}: {e}")
@@ -157,7 +169,6 @@ def create_and_save_individual_plots(df, plot_dir, date, suffixes):
     os.makedirs(plot_dir, exist_ok=True)
 
     haltungen = ['prone', 'supine']
-    date_str = date.strftime(DATE_FORMAT)
     
     # Übersetzungen für Titel und Achsenbeschriftungen
     title_map = {
@@ -210,12 +221,19 @@ def create_and_save_individual_plots(df, plot_dir, date, suffixes):
             plt.tight_layout()
 
             # 5. Speichern des Plots
-            filename = f"{date_str}_{haltung}_{tag.replace('/', '_')}.png"
-
             # If there is exactly one suffix specified, we include that in
             # the output file name.
-            if len(suffixes) == 1:
+            include_suffix_in_name = len(suffixes) == 1
+            if date and include_suffix_in_name:
+                date_str = date.strftime(DATE_FORMAT)
                 filename = f"{date_str}_{suffixes[0]}_{haltung}_{tag.replace('/', '_')}.png"
+            elif date and not include_suffix_in_name:
+                date_str = date.strftime(DATE_FORMAT)
+                filename = f"{date_str}_{haltung}_{tag.replace('/', '_')}.png"
+            elif not date and include_suffix_in_name:
+                filename = f"{suffixes[0]}_{haltung}_{tag.replace('/', '_')}.png"
+            else:
+                filename = f"{haltung}_{tag.replace('/', '_')}.png"
 
             save_path = os.path.join(plot_dir, filename)
 
@@ -236,8 +254,15 @@ def valid_date(s: str) -> datetime:
 
 if __name__ == "__main__":
     # 0. Argumente laden. Zeit und Modelsuffix.
+    # '--date' and '--suffix' are optional parameters used to filter which training
+    # data to include in the plot. '--date' may be specified and is specified followed
+    # by a date in 'yy-mm-dd' format. If a date is specified, this date is used in
+    # the output .png file name.
+    # '--suffix' is specified by following it up with
+    # a list of suffixes that should be allowed. If exactly one suffix is specified, then
+    # this suffix is included in the output .png file name.
     parser = argparse.ArgumentParser()
-    parser.add_argument('--date', required=True, type=valid_date, help="Date of the runs.")
+    parser.add_argument('--date', required=False, type=valid_date, help="Date of the runs.")
     parser.add_argument('--save_df', required=False, action='store_true', help="If set, saved pandas Dataframe csv.")
     parser.add_argument('--suffix', '--names-list', nargs='+', required=False, default=[], help="Model name suffixes to use. Leave empty if allow all.")
     args = parser.parse_args()
