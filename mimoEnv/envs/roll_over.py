@@ -72,6 +72,7 @@ class MIMoRollOverEnv(MIMoEnv):
                  starting_position='prone',
                  reward_function='linear',
                  reward_success=500,  # the big reward granted on success.
+                 reward_pbrs=True,  # use potential-based reward shaping
                  **kwargs):
 
         if starting_position not in ["prone", "supine", "alternating"]:
@@ -86,6 +87,8 @@ class MIMoRollOverEnv(MIMoEnv):
 
         self.reward_function=reward_function
         self.reward_success=reward_success
+        self.reward_pbrs=reward_pbrs
+        self.pbrs_last_potential=0  # Potential in PBRS of last step.
 
         self.starting_position=starting_position
         self.alternating_starting_position=self.starting_position=='alternating'
@@ -107,11 +110,6 @@ class MIMoRollOverEnv(MIMoEnv):
 
         self.init_position=self.data.qpos.copy()
         self.put_in_starting_position()
-
-        # 07.01.2026 The potential of the last state. Used in PBRS (Potential Based Reward Shaping) reward
-        # function. Set in overloaded function 'step(...)' before calling the parent 'step', i.e. before
-        # performing the environment dynamics to receive the next state. Reset to 0 on environment reset.
-        self.pbrs_last_state_potential=0
 
     def is_success(self, achieved_goal, desired_goal):
         """ Did we reach our goal rotation.
@@ -179,15 +177,23 @@ class MIMoRollOverEnv(MIMoEnv):
         )
         qpos[7:] = qpos[7:] + random
 
+        # Set initial x rotation stochastically between 0° and 90°.
+        # ISR: Initial State Randomization
+        random_start_rotation_sample = self.np_random.uniform(low=-1, high=1)
+        random_start_rotation_rad = random_start_rotation_sample * np.pi / 2.0
+        quat = np.zeros(4)
+        mujoco.mju_euler2Quat(quat, [random_start_rotation_rad, 0, 0], 'xyz')
+        qpos[3:7] = quat
+
         # Set initial velocities to zero.
         qvel = np.zeros(self.data.qvel.shape)
 
         self.set_state(qpos, qvel)
 
-        # Perform 100 steps with no actions to stabilize initial position.
+        # Perform 1 steps with no action to stabilize initial position.
         actions = np.zeros(self.action_space.shape)
         self._set_action(actions)
-        mujoco.mj_step(self.model, self.data, nstep=100)
+        mujoco.mj_step(self.model, self.data, nstep=1)
 
     def reset_model(self):
         """ Resets the simulation.
@@ -209,7 +215,6 @@ class MIMoRollOverEnv(MIMoEnv):
 
         # self.set_state(self.init_qpos, self.init_qvel)
         self.put_in_starting_position()
-        self.pbrs_last_state_potential=0
         return self._get_obs()
 
     def sample_goal(self):
@@ -362,35 +367,6 @@ class MIMoRollOverEnv(MIMoEnv):
         else:  # 'quad'
             return self.get_achieved_goal_quad()
 
-    def get_potential(self):
-        """ Returns the potential of the current state.
-
-        The potential of the current state is the euclidean distance between the desired
-        goal and the achieved goal.
-        See [https://arxiv.org/pdf/2201.08299 Goal-Conditioned Reinforcement Learning:
-        Problems and Solutions by Liu et al. 2022 pp2-3 section 'Sample Efficiency:
-        Towards Sparse Rewards'] for a discussion and the motivation behind this
-        lazy approach.
-          We handle reaching the goal state in the reward function. The potential of
-        a goal state is 0.
-        """
-        achieved_goal = self.get_achieved_goal()
-        desired_goal = self.sample_goal()
-        if achieved_goal >= desired_goal:
-            return 0
-
-        return -(desired_goal - achieved_goal)**2.0
-
-    def step(self, action):
-        """ Run one timestep of the environment's dynamics.
-
-        This overloaded function from mimo_env is used for PBRS (Potential Based Reward Shaping) to cache the
-        potential of the current state for the reward function to use it in PBRS.
-        """
-        # Cache potential of current state to be used in calculating next reward.
-        self.pbrs_last_state_potential = self.get_potential()
-        return super().step(action)
-
     def compute_reward_v1(self, achieved_goal, desired_goal, info):
         """
         Computes the reward.
@@ -425,15 +401,18 @@ class MIMoRollOverEnv(MIMoEnv):
     def compute_reward(self, achieved_goal, desired_goal, info):
         """ Computes the reward.
 
-        The reward is a shaped reward consisting of the sum of the sparse high
-        positive reward for reaching the goal and the difference of the potential
-        of the current state to the last state potential as a potential-based
-        shaping function.
-          See "Policy Invariance under reward transformations: Theory and
-        application to reward shaping" [Ng et. al 1999] for a definition of
-        PBRS and the potential-based shaping function.
-          Additionally, we subtract the square of the control signal from the
-        reward to discourage excessive muscle usage.
+        If the desired goal is not reached, this function returns a lazy penalty
+        based on the euler distance between the desired goal and the achieved goal.
+        See [https://arxiv.org/pdf/2201.08299 Goal-Conditioned Reinforcement Learning:
+        Problems and Solutions by Liu et al. 2022 pp2-3 section 'Sample Efficiency:
+        Towards Sparse Rewards'] for a discussion and the motivation behind this
+        lazy approach.
+
+        If the desired goal is reached, this function returns a high positive reward
+        specified as a parameter in this environment's constructor.
+
+        In both cases a penalty of the square of the control signal is subtracted
+        from the reward in order to discourage excessive muscle usage.
 
         Arguments:
             achieved_goal (float): The achieved hip and chest rotation.
@@ -447,16 +426,15 @@ class MIMoRollOverEnv(MIMoEnv):
         # Penalize excessive use of force.
         quad_ctrl_cost = 0.01 * np.square(self.data.ctrl).sum()  # [0, 0.44]
 
-        # If the goal is reached, give a very high positive reward.
-        if achieved_goal >= desired_goal:
-            return self.reward_success - quad_ctrl_cost
+        if achieved_goal < desired_goal:
+            # Goal not reached. Return reward as squared distance penalty.
+            if not self.reward_pbrs:
+                return -(desired_goal - achieved_goal)**2.0 - quad_ctrl_cost
+            else:
+                # 04.01.26: Potential-Based Reward Shaping []
+                
 
-        # Potential of current state.
-        curr_potential = self.get_potential()
-
-        # Weight of potential. PBRS gives a very small reward signal without a high
-        # weight factor causing the model to not succeed at all.
-        w_potential = 100
-
-        return w_potential * (curr_potential - self.pbrs_last_state_potential) - quad_ctrl_cost
+        # Goal reached. Return high positive reward configured as parameter
+        # in environment constructor.
+        return self.reward_success - quad_ctrl_cost
     
