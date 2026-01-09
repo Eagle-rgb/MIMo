@@ -27,6 +27,7 @@ from mimoActuation.actuation import SpringDamperModel
 import mujoco
 import numpy as np
 import os
+from utils import align_to_floor, get_minimal_z_coordinate
 
 STARTING_POSITION = "supine"
 """ Initial position of MIMo. Can be 'prone' or 'supine'.
@@ -72,6 +73,7 @@ class MIMoRollOverEnv(MIMoEnv):
                  starting_position='prone',
                  reward_function='linear',
                  reward_success=500,  # the big reward granted on success.
+                 isr=True, # Initial State Randomization. Turned off for testing.
                  **kwargs):
 
         if starting_position not in ["prone", "supine", "alternating"]:
@@ -86,6 +88,7 @@ class MIMoRollOverEnv(MIMoEnv):
 
         self.reward_function=reward_function
         self.reward_success=reward_success
+        self.isr=isr
 
         self.starting_position=starting_position
         self.alternating_starting_position=self.starting_position=='alternating'
@@ -148,6 +151,28 @@ class MIMoRollOverEnv(MIMoEnv):
         """
         return False
 
+    def get_starting_quat(self):
+        """ Returns the starting rotation of MIMo as quaternion.
+
+        Returns angles (x,y,z) as quaternion with
+        - x: Random between -90° and +90° if initial state randomization is
+            active, else 0.
+        - y: 90° if prone, else -90° if supine.
+        - z: 0°
+        """
+        euler = np.zeros(3)
+        if self.isr:
+            euler[0] = np.random.uniform(low=-1, high=1) * np.pi / 2.0
+
+        if self.starting_position=='prone':
+            euler[1] = np.pi / 2.0
+        else:
+            euler[1] = np.pi / 2.0
+
+        quat = np.zeros(4)
+        mujoco.mju_euler2Quat(quat, euler, 'xyz')
+        return quat
+
     def put_in_starting_position(self):
         """ Puts MIMo back in starting position - prone or supine.
         
@@ -159,38 +184,27 @@ class MIMoRollOverEnv(MIMoEnv):
         # qpos[0:3] describe the location of MIMo, qPos[3:7] describe the quaternion
         # rotation.
 
-        # Put MIMo in the correct starting rotation.
-        if self.starting_position=='prone':
-            # Euler rotation (in degrees) 0 90 0, so 90° rotation around y-axis.
-            qpos[3] = 0.707
-            qpos[4] = 0.
-            qpos[5] = 0.707
-            qpos[6] = 0.
-        else: # supine starting position
-            # Euler rotation (in degrees) 0 -90 0, so -90° rotation around y-axis.
-            qpos[3] = -0.707
-            qpos[4] = 0.
-            qpos[5] = 0.707
-            qpos[6] = 0.
-
         # Set initial positions stochastically.
         random = self.np_random.uniform(
             low=-0.01, high=0.01, size=len(qpos[7:])
         )
         qpos[7:] = qpos[7:] + random
 
-        # Set initial x rotation stochastically between 0° and 90°.
-        # ISR: Initial State Randomization
-        random_start_rotation_sample = self.np_random.uniform(low=-1, high=1)
-        random_start_rotation_rad = random_start_rotation_sample * np.pi / 2.0
-        quat = np.zeros(4)
-        mujoco.mju_euler2Quat(quat, [random_start_rotation_rad, 0, 0], 'xyz')
-        qpos[3:7] = quat
+        # Set initial rotation.
+        qpos[3:7] = self.get_starting_quat()
+
+        # Align MIMo to the floor by calculating minimal z coordinate of
+        # all geometries and offsetting MIMo by that negated amount.
+        self.data.qpos = qpos
+        mujoco.mj_forward(self.model, self.data)
+        min_z = get_minimal_z_coordinate(self.model, self.data)
+        self.data.qpos[2] += min_z
+        self.data.qpos[2] += 0.001 # security offset.
 
         # Set initial velocities to zero.
         qvel = np.zeros(self.data.qvel.shape)
 
-        self.set_state(qpos, qvel)
+        self.set_state(self.data.qpos, qvel)
 
         # Perform 1 step with no actions to stabilize initial position.
         actions = np.zeros(self.action_space.shape)
@@ -387,6 +401,7 @@ class MIMoRollOverEnv(MIMoEnv):
         if achieved_goal >= desired_goal:
             return 0
 
+        return -abs(desired_goal - achieved_goal)
         return -(desired_goal - achieved_goal)**2.0
 
     def step(self, action):
@@ -454,6 +469,7 @@ class MIMoRollOverEnv(MIMoEnv):
         """
         # Penalize excessive use of force.
         quad_ctrl_cost = 0.01 * np.square(self.data.ctrl).sum()  # [0, 0.44]
+        quad_ctrl_cost = 0
 
         # If the goal is reached, give a very high positive reward.
         if achieved_goal >= desired_goal:

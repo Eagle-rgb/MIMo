@@ -924,4 +924,26 @@ def get_actuation_values(model, data):
 
     return actuator_data
 
+def get_minimal_z_coordinate(model, data):
+    """ Returns the minimal z coordinate of all geometries of the model.
     
+    Args:
+        model (mujoco.MjModel): The MuJoCo model object.
+        data (mujoco.MjData): The data of the environment.
+        
+    Returns:
+        z-coordinate (float): The minimal z coordinate of all geometries of the model.
+    """
+    min_z = float('inf')
+
+    for i in range(model.ngeom):
+        geom_pos = data.geom_xpos[i]
+        geom_size = model.geom_size[i]
+        
+        # Simple assumption of the lowest part of the geometry.
+        current_bottom = geom_pos[2] - np.max(geom_size)
+        
+        if current_bottom < min_z:
+            min_z = current_bottom
+
+    return min_z

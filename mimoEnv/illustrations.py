@@ -55,6 +55,8 @@ def test(wrapped_env, save_dir, model=None, render_video=False, render_actuation
     done=False
     trunc=False
     im_counter = 0
+    # 08.01.2026 Lazy way of disabling initial state randomization in roll over.
+    wrapped_env.unwrapped.isr=False
 
     print("Testing model...")
 
