@@ -27,7 +27,7 @@ from mimoActuation.actuation import SpringDamperModel
 import mujoco
 import numpy as np
 import os
-from utils import align_to_floor, get_minimal_z_coordinate
+from utils import get_minimal_z_coordinate
 
 STARTING_POSITION = "supine"
 """ Initial position of MIMo. Can be 'prone' or 'supine'.
@@ -242,12 +242,12 @@ class MIMoRollOverEnv(MIMoEnv):
     def sample_goal(self):
         """ Returns the goal rotation.
 
-        We use a fixed goal rotation of 0.8.
+        We use a fixed goal rotation of 0.95 [previously: 0.8]
 
         Returns:
-            float: 0.8
+            np.array[float]: [0.95]
         """
-        return 0.95
+        return np.array([0.95])
 
     def _get_standardized_rotation(self, body_name):
         """ Get the standardized rotation of a body specified by name.
@@ -319,7 +319,7 @@ class MIMoRollOverEnv(MIMoEnv):
         and returns the average of them.
 
         Returns:
-            float: The average normalized angle of the chest and hip rotation.
+            np.array[float]: The average normalized angle of the chest and hip rotation.
         """
         rot_hip = self._get_standardized_rotation("hip")
         rot_chest = self._get_standardized_rotation("chest")
@@ -329,7 +329,7 @@ class MIMoRollOverEnv(MIMoEnv):
             rot_hip = 1 - rot_hip
             rot_chest = 1 - rot_chest
 
-        return (rot_hip + rot_chest) / 2.0
+        return np.array([(rot_hip + rot_chest) / 2.0])
 
     def get_achieved_goal_linear(self):
         """ The second goal function - it is linear in xmat[2,0], i.e. the vertical
@@ -337,7 +337,7 @@ class MIMoRollOverEnv(MIMoEnv):
         are averaged.
 
         Returns:
-            float: The average vertical component of the local x axis of the hip and chest.
+            np.array[float]: The average vertical component of the local x axis of the hip and chest.
         """
         rot_hip = self.get_vertical_component_of_local_x_axis("hip")
         rot_chest = self.get_vertical_component_of_local_x_axis("chest")
@@ -349,7 +349,7 @@ class MIMoRollOverEnv(MIMoEnv):
 
         rot_hip = (rot_hip + 1) / 2.0
         rot_chest = (rot_chest + 1) / 2.0
-        return (rot_hip + rot_chest) / 2.0
+        return np.array([(rot_hip + rot_chest) / 2.0])
 
     def get_achieved_goal_quad(self):
         """ The third goal function - it is quadratic in xmat[2,0], i.e. the vertical
@@ -363,7 +363,7 @@ class MIMoRollOverEnv(MIMoEnv):
         would already grant 0.5 reward, which now only results 0.25.
 
         Returns:
-            float: The average vertical component of the local x axis of the hip and chest.
+            np.array[float]: The average vertical component of the local x axis of the hip and chest.
         """
         rot_hip = self.get_vertical_component_of_local_x_axis("hip")
         rot_chest = self.get_vertical_component_of_local_x_axis("chest")
@@ -377,7 +377,7 @@ class MIMoRollOverEnv(MIMoEnv):
         rot_chest = (rot_chest + 1) / 2.0
         rot_hip **= 2.0
         rot_chest **= 2.0
-        return (rot_hip + rot_chest) / 2.0
+        return np.array([(rot_hip + rot_chest) / 2.0])
 
     def get_achieved_goal(self):
         """ Returns the goal calculated from either of the tree goal functions.
@@ -403,13 +403,13 @@ class MIMoRollOverEnv(MIMoEnv):
         """
         achieved_goal = self.get_achieved_goal()
         desired_goal = self.sample_goal()
-        if achieved_goal >= desired_goal:
+        if np.greater_equal(achieved_goal, desired_goal):
             return 0
 
         if self.potsq:
-            return -np.linalg.norm(desired_goal. achieved_goal)**2.0
+            return -np.linalg.norm(desired_goal - achieved_goal)**2.0
         else:
-            return -np.linalg.norm(desired_goal, achieved_goal)
+            return -np.linalg.norm(desired_goal - achieved_goal)
 
     def step(self, action):
         """ Run one timestep of the environment's dynamics.
@@ -481,7 +481,7 @@ class MIMoRollOverEnv(MIMoEnv):
             quad_ctrl_cost = 0
 
         # If the goal is reached, give a very high positive reward.
-        if achieved_goal >= desired_goal:
+        if np.greater_equal(achieved_goal, desired_goal):
             return self.reward_success - quad_ctrl_cost
 
         # Potential of current state.
