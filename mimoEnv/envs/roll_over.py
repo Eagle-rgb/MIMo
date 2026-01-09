@@ -74,6 +74,9 @@ class MIMoRollOverEnv(MIMoEnv):
                  reward_function='linear',
                  reward_success=500,  # the big reward granted on success.
                  isr=True, # Initial State Randomization. Turned off for testing.
+                 nopen=False, # No Penalize: Do not penalize actions.
+                 potsq=False, # Use squared euclidean potentials in PBRS instead of
+                    # simple euclidean distance from achieved_goal to desired_goal.
                  **kwargs):
 
         if starting_position not in ["prone", "supine", "alternating"]:
@@ -89,6 +92,8 @@ class MIMoRollOverEnv(MIMoEnv):
         self.reward_function=reward_function
         self.reward_success=reward_success
         self.isr=isr
+        self.nopen=nopen
+        self.potsq=potsq
 
         self.starting_position=starting_position
         self.alternating_starting_position=self.starting_position=='alternating'
@@ -401,8 +406,10 @@ class MIMoRollOverEnv(MIMoEnv):
         if achieved_goal >= desired_goal:
             return 0
 
-        return -abs(desired_goal - achieved_goal)
-        return -(desired_goal - achieved_goal)**2.0
+        if self.potsq:
+            return -np.linalg.norm(desired_goal. achieved_goal)**2.0
+        else:
+            return -np.linalg.norm(desired_goal, achieved_goal)
 
     def step(self, action):
         """ Run one timestep of the environment's dynamics.
@@ -467,9 +474,11 @@ class MIMoRollOverEnv(MIMoEnv):
         Returns:
             float: The reward as described above.
         """
-        # Penalize excessive use of force.
-        quad_ctrl_cost = 0.01 * np.square(self.data.ctrl).sum()  # [0, 0.44]
-        quad_ctrl_cost = 0
+        # Penalize excessive use of force unless disabled by '--nopen' argument.
+        if not self.nopen:
+            quad_ctrl_cost = 0.01 * np.square(self.data.ctrl).sum()  # [0, 0.44]
+        else:
+            quad_ctrl_cost = 0
 
         # If the goal is reached, give a very high positive reward.
         if achieved_goal >= desired_goal:

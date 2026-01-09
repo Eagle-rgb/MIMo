@@ -172,6 +172,11 @@ An example is '251206_prone_linear_1e6_test'
                         help="Render plot of muscle actuations additionally to scene video.")
     parser.add_argument('--log_actuations', action='store_true',
                         help="Create a .csv log file of actuations of all actuators per step of the environment.")
+    parser.add_argument('--potsq', action='store_true',
+                        help="Use squared euclidean distance instead of simple euclidean distance to desired goal " \
+                        "as potential in PBRS in roll over.")
+    parser.add_argument('--nopen', action='store_true',
+                        help="Disable action penalty in reward function.")
     
     args = parser.parse_args()
     env_name = args.env
@@ -188,6 +193,8 @@ An example is '251206_prone_linear_1e6_test'
     roll_over_model_path_auto = args.roll_over_model_path_auto
     render_actuations = args.render_actuations
     log_actuations = args.log_actuations
+    potsq = args.potsq
+    nopen = args.nopen
 
     actuation_model = MuscleModel if use_muscle else SpringDamperModel
 
@@ -238,7 +245,9 @@ An example is '251206_prone_linear_1e6_test'
             starting_position=roll_over_starting_position,
             reward_function=roll_over_reward_function,
             width=480, # always 480 regardless whether we render actuations or not.
-            height=render_height)
+            height=render_height,
+            nopen=nopen,
+            potsq=potsq)
         if log_actuations:
             wrapped_env = MIMoRollOverWrapper(env, log_file=os.path.join(save_dir,"actuation_log.csv"))
         else:
