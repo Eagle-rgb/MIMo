@@ -71,7 +71,7 @@ class MIMoRollOverEnv(MIMoEnv):
                  vestibular_params=DEFAULT_VESTIBULAR_PARAMS,
                  actuation_model=SpringDamperModel,
                  starting_position='prone',
-                 reward_function='linear',
+                 goal_function='angle',
                  reward_success=500,  # the big reward granted on success.
                  isr=True, # Initial State Randomization. Turned off for testing.
                  nopen=False, # No Penalize: Do not penalize actions.
@@ -84,12 +84,12 @@ class MIMoRollOverEnv(MIMoEnv):
             msg += "Needs to be 'prone', 'supine' or 'alternating'."
             raise ValueError(msg)
 
-        if reward_function not in ['winkel', 'linear', 'quad']:
-            msg = f"Unknown reward function '{reward_function}'. "
-            msg += "Needs to be 'winkel', 'linear' or 'quad'."
+        if goal_function not in ['angle', 'cos', 'quad']:
+            msg = f"Unknown reward function '{goal_function}'. "
+            msg += "Needs to be 'angle', 'cos' or 'quad'."
             raise ValueError(msg)
 
-        self.reward_function=reward_function
+        self.goal_function=goal_function
         self.reward_success=reward_success
         self.isr=isr
         self.nopen=nopen
@@ -314,7 +314,7 @@ class MIMoRollOverEnv(MIMoEnv):
         """
         return self.data.body(body_name).xmat.reshape(3, 3)[2, 0]
 
-    def get_achieved_goal_winkel(self):
+    def get_achieved_goal_angle(self):
         """ The very first goal function - with the slight addition that I added
         chest rotation. Calculates the normalized angle of the chest and hip rotation
         and returns the average of them.
@@ -332,13 +332,18 @@ class MIMoRollOverEnv(MIMoEnv):
 
         return np.array([(rot_hip + rot_chest) / 2.0])
 
-    def get_achieved_goal_linear(self):
-        """ The second goal function - it is linear in xmat[2,0], i.e. the vertical
-        component of the local x axis of the hip and the chest. Here also, the values
-        are averaged.
+    def get_achieved_goal_cos(self):
+        """ The second goal function. It is linear in xmat[2,0], i.e. in the
+        dot product between MIMo's local x axis of hip and chest and the global
+        z axis. This is the same as the negative cosine of the angle between that
+        local x axis and the global z axis over a rotation over the global x axis.
+
+        For supine position, this is instead the positive cosine as our target vector
+        is the negative global z axis.
 
         Returns:
-            np.array[float]: The average vertical component of the local x axis of the hip and chest.
+            np.array[float]: Average of dot product of local x axis of chest and hip
+                and the global z axis.
         """
         rot_hip = self.get_vertical_component_of_local_x_axis("hip")
         rot_chest = self.get_vertical_component_of_local_x_axis("chest")
@@ -383,10 +388,10 @@ class MIMoRollOverEnv(MIMoEnv):
     def get_achieved_goal(self):
         """ Returns the goal calculated from either of the tree goal functions.
         """
-        if self.reward_function=='winkel':
-            return self.get_achieved_goal_winkel()
-        elif self.reward_function=='linear':
-            return self.get_achieved_goal_linear()
+        if self.goal_function=='angle':
+            return self.get_achieved_goal_angle()
+        elif self.goal_function=='cos':
+            return self.get_achieved_goal_cos()
         else:  # 'quad'
             return self.get_achieved_goal_quad()
 

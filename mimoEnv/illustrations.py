@@ -155,11 +155,11 @@ def main():
                         default='prone',
                         help='Choose the starting position of MIMo in the roll_over environment. Put '
                              'either \'supine\', \'prone\' or \'alternating\'. Default: \'prone\'.')
-    parser.add_argument('--roll_over_reward_function', required=False,
-                        choices=['winkel', 'linear', 'quad'],
-                        default='winkel',
-                        help='Choose the reward function for the roll_over environment. Put '
-                             'either \'winkel\', \'linear\' or \'quad\'. Default: \'winkel\'.')
+    parser.add_argument('--roll_over_goal_function', required=False,
+                        choices=['angle', 'cos', 'quad'],
+                        default='angle',
+                        help='Choose the function of achieved goal for the roll_over environment. Put '
+                             'either \'angle\', \'cos\' or \'quad\'. Default: \'angle\'.')
     parser.add_argument('--roll_over_model_path_auto', action='store_true',
                         help="""If set, the path of the model for the roll_over environment
 is automatically set to the following:
@@ -189,7 +189,7 @@ An example is '251206_prone_linear_1e6_test'
     render = args.render_video
     use_muscle = args.use_muscle
     roll_over_starting_position = args.roll_over_starting_position
-    roll_over_reward_function = args.roll_over_reward_function
+    roll_over_goal_function = args.roll_over_goal_function
     roll_over_model_path_auto = args.roll_over_model_path_auto
     render_actuations = args.render_actuations
     log_actuations = args.log_actuations
@@ -243,7 +243,7 @@ An example is '251206_prone_linear_1e6_test'
     if env_name == 'roll_over':
         env = gym.make(env_names[env_name], actuation_model=actuation_model,
             starting_position=roll_over_starting_position,
-            reward_function=roll_over_reward_function,
+            goal_function=roll_over_goal_function,
             width=480, # always 480 regardless whether we render actuations or not.
             height=render_height,
             nopen=nopen,
