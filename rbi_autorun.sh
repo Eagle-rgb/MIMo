@@ -37,7 +37,7 @@ for i in $(seq 1 $NUMBER_OF_RUNS); do
 		"--save_every=1000000" \
 		"--test" \
 		"--roll_over_starting_position=prone" \
-		"--algorithm=SAC" \
+		"--algorithm=PPO" \
 		"--roll_over_model_path_auto" \
 		"--roll_over_goal_function=cos" \
 		"--save_model=${MODEL_NAME}_run_${i}" \

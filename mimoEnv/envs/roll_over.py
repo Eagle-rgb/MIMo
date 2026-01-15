@@ -77,6 +77,10 @@ class MIMoRollOverEnv(MIMoEnv):
                  nopen=False, # No Penalize: Do not penalize actions.
                  potsq=False, # Use squared euclidean potentials in PBRS instead of
                     # simple euclidean distance from achieved_goal to desired_goal.
+                 pbrs=False, # Use Potential Based Reward Shaping,
+                 pbrs_w=100, # Weighting of the potential difference in PBRS.
+# PBRS gives a very small reward signal without a high weight factor
+# causing the model to not succeed at all.
                  **kwargs):
 
         if starting_position not in ["prone", "supine", "alternating"]:
@@ -94,6 +98,8 @@ class MIMoRollOverEnv(MIMoEnv):
         self.isr=isr
         self.nopen=nopen
         self.potsq=potsq
+        self.pbrs=pbrs
+        self.pbrs_w=pbrs_w
 
         self.starting_position=starting_position
         self.alternating_starting_position=self.starting_position=='alternating'
@@ -471,6 +477,10 @@ class MIMoRollOverEnv(MIMoEnv):
           Additionally, we subtract the square of the control signal from the
         reward to discourage excessive muscle usage.
 
+        If 'pbrs=False' as an argument, we do not use Potential Based Reward
+        Shaping and instead simply return the potential of the current state
+        as a reward (which is the euclidean distance to the desired goal).
+
         Arguments:
             achieved_goal (float): The achieved hip and chest rotation.
             desired_goal (float): The desired hip and chest rotation so as to
@@ -493,9 +503,8 @@ class MIMoRollOverEnv(MIMoEnv):
         # Potential of current state.
         curr_potential = self.get_potential()
 
-        # Weight of potential. PBRS gives a very small reward signal without a high
-        # weight factor causing the model to not succeed at all.
-        w_potential = 100
-
-        return w_potential * (curr_potential - self.pbrs_last_state_potential) - quad_ctrl_cost
+        if not self.pbrs:
+            return curr_potential
+        
+        return self.pbrs_w * (curr_potential - self.pbrs_last_state_potential) - quad_ctrl_cost
     

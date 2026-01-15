@@ -66,6 +66,8 @@ def load_tensorboard_runs(base_dir, date, suffixes, tags):
         else:
             date_str, haltung, suffix, run_num = match.groups()
 
+        print(f"suffix: {suffix}")
+
         # Überprüfe, ob suffix erlaubt ist, also als Konsolenargument spezifiziert ist. Falls keine suffixe angegeben sind,
         # erlaube alle.
         if len(suffixes) != 0 and suffix not in suffixes:
@@ -193,6 +195,8 @@ def create_and_save_individual_plots(df, plot_dir, date, suffixes):
             if len(sub_df) == 0:
                 continue # Es gibt keinen Eintrag für diese Haltung/Tag. Überspringe.
 
+            num_runs = max(sub_df['Run'].unique())
+
             # 3. Iteriere über alle Suffixe.
             for suffix, groupby in sub_df.groupby(['Suffix']):
                 # Die einzelnen runs dieses suffixes für den tag und die Haltung.
@@ -210,7 +214,9 @@ def create_and_save_individual_plots(df, plot_dir, date, suffixes):
                 )
             
             # 4. Achsen- und Titelkonfiguration
-            plot_title = f'{title_map.get(tag)}: {haltung.capitalize()}'
+            haltung_opposite = haltungen[0] if haltung == haltungen[1] else haltungen[1]
+            roll_over_title = f'{haltung.capitalize()} to {haltung_opposite.capitalize()}'
+            plot_title = f'{title_map.get(tag)}: {roll_over_title}, {num_runs} runs.'
             ax.set_title(plot_title, fontsize=14)
             ax.set_xlabel("Step (Training)", fontsize=12)
             ax.set_ylabel(y_label_map.get(tag, "Wert"), fontsize=12)

@@ -36,6 +36,7 @@ from mimoEnv.envs.roll_over_wrapper import MIMoRollOverWrapper
 from stable_baselines3.common.vec_env import DummyVecEnv
 
 from datetime import datetime
+import yaml
 
 
 def test(wrapped_env, save_dir, model=None, render_video=False, render_actuations=False):
@@ -177,6 +178,14 @@ An example is '251206_prone_linear_1e6_test'
                         "as potential in PBRS in roll over.")
     parser.add_argument('--nopen', action='store_true',
                         help="Disable action penalty in reward function.")
+    parser.add_argument('--lr', required=False, default=3e-4, type=float,
+                        help="Learning rate. Default 1e-3 for PPO algorithm. Only used for PPO algorithm.")
+    parser.add_argument('--pbrs', action='store_true',
+                        help="Use PBRS in roll_over reward shaping.")
+    parser.add_argument('--pbrs_w', default=100,
+                        help="Potential difference weighting in PBRS.")
+    parser.add_argument('--isr', action='store_true',
+                        help="Use Initial State Randomization.")
     
     args = parser.parse_args()
     env_name = args.env
@@ -195,6 +204,10 @@ An example is '251206_prone_linear_1e6_test'
     log_actuations = args.log_actuations
     potsq = args.potsq
     nopen = args.nopen
+    learning_rate = args.lr
+    pbrs = args.pbrs
+    pbrs_w = args.pbrs_w
+    isr = args.isr
 
     actuation_model = MuscleModel if use_muscle else SpringDamperModel
 
@@ -247,7 +260,10 @@ An example is '251206_prone_linear_1e6_test'
             width=480, # always 480 regardless whether we render actuations or not.
             height=render_height,
             nopen=nopen,
-            potsq=potsq)
+            potsq=potsq,
+            isr=isr,
+            pbrs=pbrs,
+            pbrs_w=pbrs_w)
         if log_actuations:
             wrapped_env = MIMoRollOverWrapper(env, log_file=os.path.join(save_dir,"actuation_log.csv"))
         else:
@@ -260,12 +276,36 @@ An example is '251206_prone_linear_1e6_test'
     env.reset()
 
     # load pretrained model or create new one
-    if load_model:
-        model = RL.load(load_model, wrapped_env)
+    # Set learning rate for PPO algorithm.
+    if algorithm=='PPO':
+        if load_model:
+            model = RL.load(load_model, wrapped_env)
+        else:
+            model = RL("MultiInputPolicy", wrapped_env,
+                    tensorboard_log=save_dir,
+                    learning_rate=learning_rate,
+                    verbose=1)
     else:
-        model = RL("MultiInputPolicy", wrapped_env,
-                   tensorboard_log=save_dir,
-                   verbose=1)
+        if load_model:
+            model = RL.load(load_model, wrapped_env)
+        else:
+            model = RL("MultiInputPolicy", wrapped_env,
+                    tensorboard_log=save_dir,
+                    verbose=1)
+            
+    # Save model metadata in model.
+    yaml_data = {
+        'lr': learning_rate,
+        'nopen': nopen,
+        'pbrs': pbrs,
+        'pbrs_w': pbrs_w,
+        'goal_achievement_function': roll_over_goal_function,
+        'isr': isr,
+        'algorithm': algorithm,
+        'num_train': train_for
+    }
+    with open(f'{save_dir}/data.yml', 'w') as outfile:
+        yaml.dump(yaml_data, outfile, default_flow_style=False)
 
     if train_for > 0:
         if model is None:
