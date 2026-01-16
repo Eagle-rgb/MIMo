@@ -179,7 +179,7 @@ class MIMoRollOverEnv(MIMoEnv):
         if self.starting_position=='prone':
             euler[1] = np.pi / 2.0
         else:
-            euler[1] = np.pi / 2.0
+            euler[1] = -np.pi / 2.0
 
         quat = np.zeros(4)
         mujoco.mju_euler2Quat(quat, euler, 'xyz')

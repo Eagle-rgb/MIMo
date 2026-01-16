@@ -34,6 +34,7 @@ for i in $(seq 1 $NUMBER_OF_RUNS); do
 		"python mimoEnv/illustrations.py" \
 		"--train_for=4000000" \
 		"--nopen" \
+		"--isr" \
 		"--save_every=1000000" \
 		"--test" \
 		"--roll_over_starting_position=prone" \
@@ -51,7 +52,7 @@ wait
 # Create gemini plots.
 ssh -l ${USERNAME} "adrastos.rbi.cs.uni-frankfurt.de" "conda activate mimo" "&&"\
 	"cd MIMo" "&&" \
-	"python" "results/gemini_plot.py" "--date=${today}" "--suffix=${MODEL_NAME}"
+	"python" "results/tb_plot_2.py" "--date=${today}" "--suffix=${MODEL_NAME}"
 
 # Copy gemini plots to our local machine.
 # Gemini plot files always have the same prefix: yy-mm-dd_<model sufix>_****.png
