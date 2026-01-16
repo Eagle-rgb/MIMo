@@ -6,159 +6,16 @@ import matplotlib.pyplot as plt
 from tbparse import SummaryReader
 import argparse
 from datetime import datetime
+from tb_plot_utils import load_tensorboard_runs, load_model_hyperparams, interpolate_runs_to_dict
 
 # --- Konfiguration ---
 BASE_DIR = "."  # Das Hauptverzeichnis, in dem Ihre Ordner liegen
 TAGS_TO_LOAD = ["rollout/ep_rew_mean", "rollout/success_rate"]
 OUTPUT_CSV = "rl_comparison_data.csv"
 DATE_FORMAT = r'%y-%m-%d'
-ALGORITHM_FOLDERS = ['PPO_0', 'SAC_0', 'TD3_0', 'DDPG_0', 'A2C_0']
-
-# --- 1. Daten laden und zusammenführen ---
-def load_tensorboard_runs(base_dir, date, suffixes, tags):
-    """
-    Durchsucht rekursiv das Basisverzeichnis, lädt die angegebenen TensorBoard-Tags
-    aus den <ALG>_0-Ordnern und fasst die Daten in einer einzigen DataFrame zusammen.
-    <ALG> ist dabei einer von 'PPO', 'SAC', 'TD3', 'DDPG', 'A2C'.
-    """
-    all_data_list = []
-    
-    # Muster für die Ordnerstruktur:
-    # <date>_<haltung>_<modelsuffix>_run_<nummer>/<ALG>_0/...
-    # Dabei ist <date> als YY-mm-dd (also %Y-%m-%d) formatiert.
-
-    # If date is specified, then exactly this date string must be included
-    # in the model folder name.
-    if date:
-        date_str = date.strftime(DATE_FORMAT)
-        date_regex = date_str
-    else:
-        # Else we allow any valid date string.
-        date_regex = r'([0-9][0-9]-[0-9][0-9]-[0-9][0-9])' 
-
-    # Regex-Muster zum Extrahieren von Haltung, suffix und run_num aus dem **Elternordner**
-    # Der Ordnername muss exakt dem Muster entsprechen, bevor <ALG>_0 kommt.
-    re_str = date_regex + r'_([a-z]+)_([a-z0-9_]+)_run_(\d+)'
-    pattern = re.compile(re_str)
-
-    print(f"Suche nach TensorBoard Logs in {base_dir}...")
-    
-    # Rekursives Durchsuchen, um alle '<ALG>_0'-Ordner zu finden
-    for root, dirs, files in os.walk(base_dir):
-        # The name of the folder we are currently in. We want this to be in the format 'PPO_0'
-        # or any other algorithm prefix from the algorithm list above.
-        this_folder_name = os.path.basename(root)
-
-        if this_folder_name not in ALGORITHM_FOLDERS:
-            continue
-
-        # Der Elternordner von PPO_0 ist der eigentliche Run-Ordner
-        run_folder_name = os.path.basename(os.path.dirname(root))
-        
-        # Überprüfe, ob der Run-Pfad dem gewünschten Muster entspricht
-        match = pattern.search(run_folder_name)
-        
-        if not match:
-            continue
-
-        if date:
-            haltung, suffix, run_num = match.groups()
-        else:
-            date_str, haltung, suffix, run_num = match.groups()
-
-        print(f"suffix: {suffix}")
-
-        # Überprüfe, ob suffix erlaubt ist, also als Konsolenargument spezifiziert ist. Falls keine suffixe angegeben sind,
-        # erlaube alle.
-        if len(suffixes) != 0 and suffix not in suffixes:
-            continue  # Suffixe angegeben, aber dieser suffix passt leider nicht.
-        
-        print(f"Lade Run: Date={date_str}, Haltung={haltung}, Suffix={suffix}, Run={run_num} aus {root}")
-
-        try:
-            # SummaryReader erwartet den Pfad zum Ordner (hier: z.B. PPO_0),
-            # der die 'events.out.tfevents'-Datei enthält.
-            reader = SummaryReader(root)
-            
-            # Direktes Laden aller skalaren Daten in eine DataFrame
-            df_scalars = reader.scalars
-            
-            # Filtern auf die gewünschten Tags
-            tag_data = df_scalars[df_scalars['tag'].isin(tags)].copy()
-            
-            if not tag_data.empty:
-                # Hinzufügen der Experiment-Metadaten
-                tag_data['Haltung'] = haltung
-                tag_data['Run'] = int(run_num)
-                tag_data['Suffix'] = suffix
-                tag_data['Date'] = date_str
-                
-                # Umbenennen der Spalten für Konsistenz
-                tag_data.rename(columns={'step': 'Step', 'value': 'Value', 'tag': 'Tag'}, inplace=True)
-                
-                # Hinzufügen zur Gesamtliste
-                all_data_list.append(tag_data[['Date', 'Haltung', 'Run', 'Suffix', 'Tag', 'Step', 'Value']])
-                
-        except Exception as e:
-            print(f"Fehler beim Laden von {root}: {e}")
-
-    # Zusammenführen aller individuellen DataFrames am Ende
-    if all_data_list:
-        df = pd.concat(all_data_list, ignore_index=True)
-        return df
-    else:
-        return pd.DataFrame()
-
-def interpolate_runs(group_df, n_points):
-    """ 07.01.2026: DDPG and SAC have steps in their tensorboard logs that do not follow a "pattern", i.e.
-    we can not just do a group_by on the step and then get a list of the values for each run. We must
-    manipulate the pandas dataframe samples such that the steps match how we would have them in PPO or
-    A2C, i.e. each 500 steps in A2C or 2048 in PPO there is one entry in the tensorboard log.
-    
-    Args:
-      group_df (panda.DataFrame): DataFrame consisting of arbitrary number of runs.
-      n_points: Number of sample points on the x-axis.
-    
-    Returns:
-      resampled_values [List]: List of resampled values: One entry per point on the common x-axis.
-    """
-    if group_df.empty: return None
-
-    # Step 1: Build a common x axis to sample values from.
-    min_step = group_df['Step'].min()
-    max_step = group_df['Step'].max()
-    common_steps = np.linspace(min_step, max_step, n_points)
-
-    # Step 2: Resample values such that 'Step' lies on the 'common_steps' axis. After this, 'resampled_values'
-    # contains an entry for each run, with each run containing the list of resampled values for this run.
-    resampled_values = []
-
-    # Iterate over all runs.
-    for run in group_df['Run'].unique():
-        run_data = group_df[group_df['Run'] == run].sort_values('Step')
-        if len(run_data) < 2: continue
-
-        # Interpolate the values of this run.
-        interp_vals = np.interp(common_steps, run_data['Step'], run_data['Value'])
-        resampled_values.append(interp_vals)
-
-    if not resampled_values: return None
-
-    # Step 3: Average and std over resamples values.
-    resampled_values = np.array(resampled_values)
-    mean_vals = np.mean(resampled_values, axis=0)
-    std_vals = np.std(resampled_values, axis=0)
-
-    return pd.DataFrame({
-        'Step': common_steps,
-        'mean': mean_vals,
-        'std': std_vals
-    })
-
 
 # --- 2. Datenaggregieren und Plotten ---
-
-def create_and_save_individual_plots(df, plot_dir, date, suffixes):
+def create_and_save_individual_plots(df, plot_dir, date, suffixes, ind_runs):
     """
     Aggregiert die Daten und speichert vier individuelle Plots (Tag x Haltung).
 
@@ -167,6 +24,13 @@ def create_and_save_individual_plots(df, plot_dir, date, suffixes):
 
     Ich habe in dieser Version den <suffix> hinzugefügt. Dieser steht dort nur, wenn 'suffixes' als
     Liste genau einen Eintrag (genau einen Suffix) hat.
+
+    Arguments:
+        - df (pd.DataFrame): Pandas Dataframe holding run data.
+        - plot_dir: The directory to save the plot in.
+        - date: Date filter.
+        - suffixed: Suffixes filter.
+        - ind_runs: Plot individual runs instead of mean and std.
     """
     os.makedirs(plot_dir, exist_ok=True)
 
@@ -195,23 +59,31 @@ def create_and_save_individual_plots(df, plot_dir, date, suffixes):
             if len(sub_df) == 0:
                 continue # Es gibt keinen Eintrag für diese Haltung/Tag. Überspringe.
 
-            num_runs = max(sub_df['Run'].unique())
+            num_runs = len(sub_df['Run'].unique())
 
             # 3. Iteriere über alle Suffixe.
             for suffix, groupby in sub_df.groupby(['Suffix']):
                 # Die einzelnen runs dieses suffixes für den tag und die Haltung.
-                run_data = interpolate_runs(groupby, 100)
+                run_data = interpolate_runs_to_dict(groupby, 500)
 
-                # Plot des Mittelwerts
-                ax.plot(run_data['Step'], run_data['mean'], label=suffix, linewidth=2)
+                if not ind_runs:
+                    # Plot des Mittelwerts
+                    ax.plot(run_data['steps'], run_data['mean'], label=suffix, linewidth=2)
                 
-                # Plot der Standardabweichung als Fehlerband
-                ax.fill_between(
-                    run_data['Step'], 
-                    run_data['mean'] - run_data['std'], 
-                    run_data['mean'] + run_data['std'], 
-                    alpha=0.15 
-                )
+                if not ind_runs:
+                    # Plot der Standardabweichung als Fehlerband
+                    ax.fill_between(
+                        run_data['steps'], 
+                        run_data['mean'] - run_data['std'], 
+                        run_data['mean'] + run_data['std'], 
+                        alpha=0.15 
+                    )
+
+                if ind_runs:
+                    # 16.01.26 Also plot each individual run lightly in the background.
+                    for key in run_data['runs'].keys():
+                        values = run_data['runs'][key]
+                        ax.plot(run_data['steps'], values, label=str(key), linewidth=2, alpha=1)
             
             # 4. Achsen- und Titelkonfiguration
             haltung_opposite = haltungen[0] if haltung == haltungen[1] else haltungen[1]
@@ -271,14 +143,16 @@ if __name__ == "__main__":
     parser.add_argument('--date', required=False, type=valid_date, help="Date of the runs.")
     parser.add_argument('--save_df', required=False, action='store_true', help="If set, saved pandas Dataframe csv.")
     parser.add_argument('--suffix', '--names-list', nargs='+', required=False, default=[], help="Model name suffixes to use. Leave empty if allow all.")
+    parser.add_argument('--ind_runs', action='store_true', help="Plot individual runs. This leaves out std and mean.")
     args = parser.parse_args()
     date = args.date
     suffixes = args.suffix
     save_df = args.save_df
+    ind_runs = args.ind_runs
 
     # 1. Daten laden
     base_dir = os.path.abspath(BASE_DIR)
-    full_df = load_tensorboard_runs(base_dir, date, suffixes, TAGS_TO_LOAD)
+    full_df = load_tensorboard_runs(base_dir, TAGS_TO_LOAD, date.strftime(DATE_FORMAT), suffixes)
 
     if full_df.empty:
         print("Es wurden keine TensorBoard-Daten gefunden. Bitte überprüfen Sie den BASE_DIR und die Ordnerstruktur.")
@@ -292,4 +166,4 @@ if __name__ == "__main__":
         print("\nErstelle Plots...")
         
         # Plot für die durchschnittliche Episodenbelohnung und Erfolgsrate
-        create_and_save_individual_plots(full_df, '.', date, suffixes)
+        create_and_save_individual_plots(full_df, '.', date, suffixes, ind_runs)
