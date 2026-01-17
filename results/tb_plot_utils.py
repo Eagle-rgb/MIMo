@@ -43,7 +43,7 @@ def load_tensorboard_runs(base_dir, tags, date_filter, suffix_filter):
     all_data_list = []
 
     # yy-mm-dd_<prone/supine>_<suffix>_run_xx
-    pattern = re.compile(r'(\d{2}-\d{2}-\d{2})_([a-z]+)_([a-z0-9_]+)_run_(\d+)')
+    pattern = re.compile(r'(\d{2}-\d{2}-\d{2})_([a-z]+)_([a-z0-9_-]+)_run_(\d+)')
 
     print(f"Suche nach TensorBoard Logs in {base_dir} ...")
     
