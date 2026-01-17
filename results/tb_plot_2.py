@@ -53,11 +53,11 @@ def create_dual_comparison_plots_single_model(df, plot_dir, date, suffix):
             # This gets 'success rate' out of 'rollout/success_rate'.
             tag_name = tag.split('/')[-1].replace('_', ' ').title()
 
-            haltung_opposite = 'prone' if haltung == 'supine' else 'prone'
+            haltung_opposite = 'prone' if haltung == 'supine' else 'supine'
             direction_roll_over = f'{haltung.capitalize()} to {haltung_opposite.capitalize()}'
             
             # Gemeinsamer Haupttitel
-            fig.suptitle(f"{tag_name} Comparison - {direction_roll_over}, {num_runs} runs", fontsize=18, fontweight='bold', y=0.98)
+            fig.suptitle(f"{tag_name} - {direction_roll_over}, {num_runs} runs", fontsize=18, fontweight='bold', y=0.98)
             
             # Metadaten / Hyperparameter Text unter dem Titel
             folder = sub_df['Folder'].unique()[0]
@@ -74,8 +74,8 @@ def create_dual_comparison_plots_single_model(df, plot_dir, date, suffix):
             for ax in [ax1, ax2]:
                 ax.set_xlabel("Steps", fontsize=12)
                 ax.grid(True, linestyle='--', alpha=0.5)
-                if tag == 'rollout/success_rate':
-                    ax.set_ylim(0.0, 1.0)
+                #if tag == 'rollout/success_rate':
+                #    ax.set_ylim(0.0, 1.0)
             
             ax1.set_ylabel(tag_name, fontsize=12)
 

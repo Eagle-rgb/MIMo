@@ -92,8 +92,8 @@ def create_and_save_individual_plots(df, plot_dir, date, suffixes, ind_runs):
             ax.set_title(plot_title, fontsize=14)
             ax.set_xlabel("Step (Training)", fontsize=12)
             ax.set_ylabel(y_label_map.get(tag, "Wert"), fontsize=12)
-            if tag == 'rollout/success_rate':
-                ax.set_ylim(0.0, 1.0)
+            #if tag == 'rollout/success_rate':
+            #    ax.set_ylim(0.0, 1.0)
             ax.grid(True, linestyle='--', alpha=0.6)
             plt.legend()
             plt.tight_layout()
