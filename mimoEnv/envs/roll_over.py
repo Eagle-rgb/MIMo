@@ -174,7 +174,7 @@ class MIMoRollOverEnv(MIMoEnv):
         euler = np.zeros(3)
         if self.isr:
             # euler[0] = np.random.uniform(low=-1, high=1) * np.pi / 2.0
-            euler[0] = np.random.beta(a=1, b=3) * np.pi / 2.0 # 0° - 90°
+            euler[0] = np.random.beta(a=1, b=3) * np.pi  # 0° - 180°
 
         if self.starting_position=='prone':
             euler[1] = np.pi / 2.0

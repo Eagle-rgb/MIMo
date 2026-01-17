@@ -56,8 +56,9 @@ def test(wrapped_env, save_dir, model=None, render_video=False, render_actuation
     done=False
     trunc=False
     im_counter = 0
-    # 08.01.2026 Lazy way of disabling initial state randomization in roll over.
-    wrapped_env.unwrapped.isr=False
+    # Disable isr for testing.
+    for env in model.get_env().envs:
+        env.unwrapped.isr=False
 
     print("Testing model...")
 
@@ -70,9 +71,9 @@ def test(wrapped_env, save_dir, model=None, render_video=False, render_actuation
         obs, _, done, trunc, _ = wrapped_env.step(action)
         if render_video:
             if render_actuations:
-                img = evaluation_img(wrapped_env.unwrapped, up='actuations')
+                img = evaluation_img(wrapped_env, up='actuations')
             else:
-                img = wrapped_env.unwrapped.mujoco_renderer.render(render_mode="rgb_array")
+                img = wrapped_env.mujoco_renderer.render(render_mode="rgb_array")
             images.append(img)
         if done or trunc:
             time.sleep(1)
@@ -89,21 +90,61 @@ def test(wrapped_env, save_dir, model=None, render_video=False, render_actuation
 
     wrapped_env.reset()
 
-def train(model, train_for, save_every, save_dir):
+def train(model, train_for, save_every, save_dir, isr):
     """ Training function of a model.
+
+    If 'isr' is active, then trains the model for 75% with 'isr' enabled and the remaining last 25%
+    with it disabled to make a training that is comparable to method that have 'isr' disabled
+    throughout.
 
     Args:
         model: The stable baselines model object. Must not be ``None``.
         train_for (int): The number of timesteps to train. This will be broken into multiple episodes.
         save_every (int): Number of timesteps where we save a model.
         save_dir (str): The path to save the model.
+        isr (bool): Activate Initial State Randomization?
     """ 
     counter = 0
+    train_for_total = train_for
     while train_for > 0:
         counter += 1
-        train_for_iter = min(train_for, save_every)
+
+        # How much we need to train going into this training iteration.
+        train_for_cpy = train_for
+
+        # How many steps we should take in this training iteration
+        train_for_iter = min(train_for_cpy, save_every)
+
+        # How many training steps will remain after this training iteration.
         train_for = train_for - train_for_iter
-        model.learn(total_timesteps=train_for_iter, reset_num_timesteps=False)
+
+        # After this episode, we would exceed 75% training. Split up this
+        # training run into two: Train until reaching exactly 75% training,
+        # turn off isr in the environment and then train the remaining
+        # steps we specified with 'train_for_iter'.
+        train_for_75_thresh = train_for_total // 4
+        if isr and train_for_cpy > train_for_75_thresh and train_for <= train_for_75_thresh:
+            train_for_until_reaching_75 = train_for_cpy - train_for_75_thresh
+            print("I will reach 75% ISR training threshold after this training iteration. " \
+            f"Splitting up this iteration in first {train_for_until_reaching_75} steps and then " \
+            "disabling isr.")
+            model.learn(total_timesteps=train_for_until_reaching_75, reset_num_timesteps=False)
+
+            print("Disabling isr...")
+
+            # model.get_env().isr=False does not seem to work. Probably an issue with all the many
+            # wrappers in stable_baselines3. This way however seems to work.
+            for env in model.get_env().envs:
+                env.unwrapped.isr=False
+
+            # And now train the remaining timesteps.
+            if train_for_until_reaching_75 < train_for_iter:
+                print(f"Training remaining {train_for_iter-train_for_until_reaching_75} timesteps.")
+                model.learn(total_timesteps=train_for_iter-train_for_until_reaching_75, reset_num_timesteps=False)
+
+        else:
+            model.learn(total_timesteps=train_for_iter, reset_num_timesteps=False)
+
         model.save(os.path.join(save_dir, "model_" + str(counter)))
 
 def main():
@@ -245,7 +286,7 @@ An example is '251206_prone_linear_1e6_test'
         print("Creating folders for model save path '" + save_dir + "'")
         os.makedirs(save_dir)
 
-    wrapped_env = None
+    # wrapped_env = None
     render_height = 720 if render_actuations else 480
 
     # Set render size to 480, because babybench used this render size
@@ -264,32 +305,31 @@ An example is '251206_prone_linear_1e6_test'
             isr=isr,
             pbrs=pbrs,
             pbrs_w=pbrs_w)
-        if log_actuations:
-            wrapped_env = MIMoRollOverWrapper(env, log_file=os.path.join(save_dir,"actuation_log.csv"))
-        else:
-            wrapped_env = env
+        # if log_actuations:
+        #     wrapped_env = MIMoRollOverWrapper(env, log_file=os.path.join(save_dir,"actuation_log.csv"))
+        # else:
+        #     wrapped_env = env
     else:
         env = gym.make(env_names[env_name], actuation_model=actuation_model,
             width=480,
             height=render_height)
-        wrapped_env = env
     env.reset()
 
     # load pretrained model or create new one
     # Set learning rate for PPO algorithm.
     if algorithm=='PPO':
         if load_model:
-            model = RL.load(load_model, wrapped_env)
+            model = RL.load(load_model, env)
         else:
-            model = RL("MultiInputPolicy", wrapped_env,
+            model = RL("MultiInputPolicy", env,
                     tensorboard_log=save_dir,
                     learning_rate=learning_rate,
                     verbose=1)
     else:
         if load_model:
-            model = RL.load(load_model, wrapped_env)
+            model = RL.load(load_model, env)
         else:
-            model = RL("MultiInputPolicy", wrapped_env,
+            model = RL("MultiInputPolicy", env,
                     tensorboard_log=save_dir,
                     verbose=1)
             
@@ -310,14 +350,14 @@ An example is '251206_prone_linear_1e6_test'
     if train_for > 0:
         if model is None:
             raise RuntimeError("Model not defined. Please provide an algorithm name.")
-        train(model=model, save_dir=save_dir, train_for=train_for, save_every=save_every)
+        train(model=model, save_dir=save_dir, train_for=train_for, save_every=save_every, isr=isr)
 
     if should_test:
         # Note here we do not check for 'model is None', because we allow it. If in testing the model is
         # 'None', we just take random actions.
-        test(wrapped_env, save_dir, model=model, render_video=render, render_actuations=render_actuations)
+        test(env, save_dir, model=model, render_video=render, render_actuations=render_actuations)
 
-    wrapped_env.close()
+    env.close()
 
 if __name__ == '__main__':
     main()
