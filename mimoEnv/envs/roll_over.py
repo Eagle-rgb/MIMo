@@ -29,17 +29,32 @@ import numpy as np
 import os
 from utils import get_minimal_z_coordinate
 
-STARTING_POSITION = "supine"
-""" Initial position of MIMo. Can be 'prone' or 'supine'.
-
-:meta hide-value:
-"""
-
 ROLL_OVER_XML = os.path.join(SCENE_DIRECTORY, "roll_over_prone_scene.xml")
 """ Path to the roll over scene.
 
 :meta hide-value:
 """
+
+# 18.01.2026 Copied touch parameters from selfbody
+TOUCH_PARAMS = {
+    "scales": {
+        "left_foot": 0.05,
+        "right_foot": 0.05,
+        "left_lower_leg": 0.1,
+        "right_lower_leg": 0.1,
+        "left_upper_leg": 0.1,
+        "right_upper_leg": 0.1,
+        "hip": 0.1,
+        "lower_body": 0.1,
+        "upper_body": 0.1,
+        "head": 0.1,
+        "left_upper_arm": 0.01,
+        "left_lower_arm": 0.01,
+        "right_fingers": 0.01
+    },
+    "touch_function": "force_vector",
+    "response_function": "spread_linear",
+}
 
 
 class MIMoRollOverEnv(MIMoEnv):
@@ -66,7 +81,7 @@ class MIMoRollOverEnv(MIMoEnv):
                  frame_skip=2,
                  age=None,
                  proprio_params=DEFAULT_PROPRIOCEPTION_PARAMS,
-                 touch_params=None,
+                 touch_params=TOUCH_PARAMS,
                  vision_params=None,
                  vestibular_params=DEFAULT_VESTIBULAR_PARAMS,
                  actuation_model=SpringDamperModel,
