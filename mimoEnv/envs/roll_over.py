@@ -27,7 +27,7 @@ from mimoActuation.actuation import SpringDamperModel
 import mujoco
 import numpy as np
 import os
-from utils import get_minimal_z_coordinate
+from mimoEnv.utils import get_minimal_z_coordinate
 
 ROLL_OVER_XML = os.path.join(SCENE_DIRECTORY, "roll_over_prone_scene.xml")
 """ Path to the roll over scene.
@@ -35,22 +35,22 @@ ROLL_OVER_XML = os.path.join(SCENE_DIRECTORY, "roll_over_prone_scene.xml")
 :meta hide-value:
 """
 
-# 18.01.2026 Copied touch parameters from selfbody
+# 18.01.2026 Copied touch parameters from selfbody and multiplied all scaled by 10
 TOUCH_PARAMS = {
     "scales": {
-        "left_foot": 0.05,
-        "right_foot": 0.05,
-        "left_lower_leg": 0.1,
-        "right_lower_leg": 0.1,
-        "left_upper_leg": 0.1,
-        "right_upper_leg": 0.1,
-        "hip": 0.1,
-        "lower_body": 0.1,
-        "upper_body": 0.1,
-        "head": 0.1,
-        "left_upper_arm": 0.01,
-        "left_lower_arm": 0.01,
-        "right_fingers": 0.01
+        "left_foot": 0.5,
+        "right_foot": 0.5,
+        "left_lower_leg": 1,
+        "right_lower_leg": 1,
+        "left_upper_leg": 1,
+        "right_upper_leg": 1,
+        "hip": 1,
+        "lower_body": 1,
+        "upper_body": 1,
+        "head": 1,
+        "left_upper_arm": 0.1,
+        "left_lower_arm": 0.1,
+        "right_fingers": 0.1
     },
     "touch_function": "force_vector",
     "response_function": "spread_linear",
