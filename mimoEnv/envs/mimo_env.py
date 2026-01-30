@@ -370,9 +370,9 @@ class MIMoEnv(MujocoEnv, utils.EzPickle):
 
         self._env_setup()
 
-        self.goal = self.sample_goal()
         self._set_observation_space()
-
+        self.goal = self.sample_goal()
+        
     def _initialize_simulation(self,):
         super()._initialize_simulation()
 
@@ -440,21 +440,22 @@ class MIMoEnv(MujocoEnv, utils.EzPickle):
     def _set_observation_space(self):
         """ Sets the observation space attribute.
 
-        Calls :meth:`._get_obs()` and determines the space using the returned observations.
+        Calls the getter functions for each obs, i.e. 'get_proprio_obs()' and sets
+        the gymnasium spaces shape using that observation shape. Avoids calling '_get_obs()',
+        because there we already want to get a 'desired_goal', but this may only be available after
+        we know the observation space shape. For example, in GCRL, the 'desired_goal' might
+        be of shape the same as the observation and thus needs to know the space of the
+        observation. This is a classical 'Henne und Ei' problem.
         """
-        obs = self._get_obs()
-
         obs = self.get_proprio_obs()
-        
-        
-        
-
+        print(f"Proprioception shape: {obs.shape}.")
         # Observation spaces
         spaces_dict = {
             "observation": spaces.Box(-np.inf, np.inf, shape=obs.shape, dtype=np.float64)
         }
         if self.touch:
-            obs = self.get_touch_obs()
+            obs = self.get_touch_obs().ravel()
+            print(f"Using touch. Touch shape: {obs.shape}.")
             spaces_dict["touch"] = spaces.Box(-np.inf, np.inf, shape=obs.shape, dtype=np.float32)
         if self.vision:
             obs = self.get_vision_obs()
@@ -462,11 +463,12 @@ class MIMoEnv(MujocoEnv, utils.EzPickle):
                 spaces_dict[sensor] = spaces.Box(0, 255, shape=obs.shape, dtype=np.uint8)
         if self.vestibular:
             obs = self.get_vestibular_obs()
+            print(f"Using vestibular. Vestibular shape: {obs.shape}.")
             spaces_dict["vestibular"] = spaces.Box(-np.inf, np.inf, shape=obs.shape, dtype=np.float64)
         if self.goals_in_observation:
             goal_space = self.get_goal_space(spaces_dict)
             spaces_dict["desired_goal"] = goal_space
-            spaces_dict["achieved_goal"] = goal_space
+            # spaces_dict["achieved_goal"] = goal_space
 
         # If sensory delays, creates empty observation history
         if self.sensory_delay > 0:
@@ -660,8 +662,9 @@ class MIMoEnv(MujocoEnv, utils.EzPickle):
         }
 
         if not self.goals_in_observation:
-            info["achieved_goal"] = copy.deepcopy(achieved_goal)
+            # info["achieved_goal"] = copy.deepcopy(achieved_goal)
             info["desired_goal"] = copy.deepcopy(self.goal)
+        info['achieved_goal'] = copy.deepcopy(achieved_goal)
 
         terminated, truncated = self._is_done(achieved_goal, self.goal, info)
         reward = self.compute_reward(achieved_goal, self.goal, info)
@@ -746,13 +749,17 @@ class MIMoEnv(MujocoEnv, utils.EzPickle):
         vestibular_obs = self.vestibular.get_vestibular_obs()
         return vestibular_obs
 
-    def _get_obs(self):
+    def _get_obs(self, without_goals=False):
         """Returns the observation.
 
         This function should return all simulation outputs relevant to whatever learning algorithm you wish to use. We
         always return proprioceptive information in the 'observation' entry, and this information always includes
         relative joint positions. Other sensory modalities get their own entries, if they are enabled. If
         :attr:`.goals_in_observation` is set to ``True``, the achieved and desired goal are also included.
+
+        Parameters:
+            without_goal (bool): Specify to 'True' if you want to leave out goals in observation even if
+                'self.goals_in_observation' is set.
 
         Returns:
             Dict: A dictionary containing simulation outputs with separate entries for each sensor modality.
@@ -776,7 +783,7 @@ class MIMoEnv(MujocoEnv, utils.EzPickle):
             vestibular_obs = self.get_vestibular_obs()
             observation_dict["vestibular"] = vestibular_obs
 
-        if self.goals_in_observation:
+        if not without_goals and self.goals_in_observation:
             #achieved_goal = self.get_achieved_goal()
             #observation_dict["achieved_goal"] = achieved_goal
             observation_dict["desired_goal"] = self.goal

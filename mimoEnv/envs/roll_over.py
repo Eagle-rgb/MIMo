@@ -28,6 +28,7 @@ import mujoco
 import numpy as np
 import os
 from mimoEnv.utils import get_minimal_z_coordinate
+from gymnasium import spaces
 
 ROLL_OVER_XML = os.path.join(SCENE_DIRECTORY, "roll_over_prone_scene.xml")
 """ Path to the roll over scene.
@@ -152,8 +153,17 @@ class MIMoRollOverEnv(MIMoEnv):
         # position.
         for _ in range(2):
             self.reset_model()
-            for _ in range(20):
-                obs, _, _, _, _ = self.step(action)
+
+            # Perform 20 steps with no actions to stabilize vestibular observation.
+            # In my experiments, I noticed that vestibular observation is very 'random'
+            # and only stabilizes after some steps. 20 seems enough so it always
+            # stabilizes.
+            action = np.zeros(self.action_space.shape)
+            self._set_action(action)
+            mujoco.mj_step(self.model, self.data, nstep=20)
+
+            # Get a goalless observation to use as 'desired_goal'.
+            obs = self._get_obs(without_goals=True)
             
             if self.starting_position == 'prone':
                 self.prone_intrinsic_goal = obs.copy()
@@ -285,7 +295,17 @@ class MIMoRollOverEnv(MIMoEnv):
     
     def get_goal_space(self, obs_space):
         if self.goal_function == 'intrinsic':
-            return obs_space
+            # stableBaselines is incompatible with nested dict spaces, which is quite
+            # unfortunate, but this simply means that instead of directly using the
+            # observation space as a goal space, we instead calculate a box space by
+            # flattening the dict obs space.
+            # Since all our observations are scalars, we just add up the shapes
+            # of each space.
+            space_flattened = 0
+
+            for space in obs_space.values():
+                space_flattened += space.shape[0]
+            return spaces.Box(-np.inf, np.inf, shape=(space_flattened,), dtype=np.float64)
         else:
             return spaces.Box(-np.inf, np.inf, shape=(1,), dtype=np.float64)
 
@@ -311,8 +331,8 @@ class MIMoRollOverEnv(MIMoEnv):
                 else:
                     return self.prone_intrinsic_goal.copy()
             else:
-                obs = self._get_obs()
-                return np.conca
+                obs = self._get_obs(without_goals=True)
+                return obs
         
         return np.array([0.95])
 
@@ -436,7 +456,7 @@ class MIMoRollOverEnv(MIMoEnv):
         else:
             return self.get_achieved_goal_intrinsic()
 
-    def get_potential(self, obs):
+    def get_potential(self):
         """ Returns the potential of the current state.
 
         The potential of the current state is the euclidean distance between the desired
