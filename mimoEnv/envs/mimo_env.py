@@ -748,6 +748,10 @@ class MIMoEnv(MujocoEnv, utils.EzPickle):
         """
         vestibular_obs = self.vestibular.get_vestibular_obs()
         return vestibular_obs
+    
+    def get_desired_goal_obs(self):
+        """ Returns the desired goal observation. """
+        raise NotImplementedError
 
     def _get_obs(self, without_goals=False):
         """Returns the observation.
@@ -786,7 +790,7 @@ class MIMoEnv(MujocoEnv, utils.EzPickle):
         if not without_goals and self.goals_in_observation:
             #achieved_goal = self.get_achieved_goal()
             #observation_dict["achieved_goal"] = achieved_goal
-            observation_dict["desired_goal"] = self.goal
+            observation_dict["desired_goal"] = self.get_desired_goal_obs()
 
         if self.sensory_delay == 0:
             return observation_dict
@@ -884,7 +888,7 @@ class MIMoEnv(MujocoEnv, utils.EzPickle):
             Dict: The observations after reset.
         """
         raise NotImplementedError
-    
+        
     def get_goal_space(self, spaces_dict):
         """ Should return the goal space. """
         raise NotImplementedError

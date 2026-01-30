@@ -308,6 +308,15 @@ class MIMoRollOverEnv(MIMoEnv):
             return spaces.Box(-np.inf, np.inf, shape=(space_flattened,), dtype=np.float64)
         else:
             return spaces.Box(-np.inf, np.inf, shape=(1,), dtype=np.float64)
+        
+    def get_desired_goal_obs(self):
+        if self.goal_function != 'intrinsic':
+            return self.goal
+        
+        # For intrinsic goal function, we cannot simply return the goal, since it has
+        # the same shape as the observation, i.e. a dictionary. Instead, we must
+        # also flatten the goal like we did in 'get_goal_space'.
+        return np.concatenate([self.goal[key] for key in sorted(self.goal.keys())])
 
     def sample_goal(self, obs=None):
         """ Returns the goal rotation.
@@ -444,7 +453,7 @@ class MIMoRollOverEnv(MIMoEnv):
         return np.array([(rot_hip + rot_chest) / 2.0])
     
     def get_achieved_goal_intrinsic(self):
-        return self._get_obs()
+        return self._get_obs(without_goals=True)
 
     def get_achieved_goal(self):
         """ Returns the goal calculated from either of the tree goal functions.
@@ -469,9 +478,21 @@ class MIMoRollOverEnv(MIMoEnv):
         a goal state is 0.
         """
         achieved_goal = self.get_achieved_goal()
-        desired_goal = self.sample_goal()
 
-        return -np.linalg.norm(desired_goal - achieved_goal)
+        if self.goal_function != 'intrinsic':
+            desired_goal = self.goal
+            return -np.linalg.norm(desired_goal - achieved_goal)
+        
+        # For intrinsic goal function, we have factor for each goal observation.
+        goal_scaling_dict = {
+            'observation': 0.1,
+            'vestibular': 1.0,
+            'touch': 0.4
+        }
+        concat_scaled_achieved_goal = np.concatenate([achieved_goal[key] * goal_scaling_dict[key] for key in sorted(achieved_goal.keys())])
+        concat_desired_goal = np.concatenate([self.goal[key] * goal_scaling_dict[key] for key in sorted(self.goal.keys())])
+
+        return -np.linalg.norm(concat_desired_goal - concat_scaled_achieved_goal)
 
     def step(self, action):
         """ Run one timestep of the environment's dynamics.
@@ -547,7 +568,7 @@ class MIMoRollOverEnv(MIMoEnv):
             quad_ctrl_cost = 0
 
         # If the goal is reached, give a very high positive reward.
-        if np.greater_equal(achieved_goal, desired_goal):
+        if self.is_success(achieved_goal, desired_goal):
             return self.reward_success - quad_ctrl_cost
 
         # Potential of current state.
