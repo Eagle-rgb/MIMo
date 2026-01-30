@@ -17,6 +17,6 @@ results/tensorboard_log_plot.py
 results/tensorboard_to_csv.py
 results/.ipynb_checkpoints/Untitled-checkpoint.ipynb
 *.png
-mimoAgent
+mimoAgent/rig_*
 algorithms
 *.ipynb

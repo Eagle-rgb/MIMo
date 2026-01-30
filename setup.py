@@ -14,7 +14,7 @@ setup(
     url='',
     license='',
     author='Francisco M. López, Dominik Mattern, Miles Lenz, Pierre Schumacher',
-    packages=['mimoEnv', 'mimoVision', 'mimoVestibular', 'mimoProprioception', 'mimoTouch', 'mimoActuation', 'mimoGrowth', 'render'],
+    packages=['mimoEnv', 'mimoVision', 'mimoVestibular', 'mimoProprioception', 'mimoTouch', 'mimoActuation', 'mimoGrowth', 'render', 'algorithms', 'mimoAgent'],
     install_requires=install_requires,
     author_email='lopez@fias.uni-frankfurt.de',
     description='MIMo-v2 library'

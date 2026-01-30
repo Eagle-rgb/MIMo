@@ -241,6 +241,8 @@ def set_joint_qpos(mujoco_model, mujoco_data, joint_name, qpos):
     n_qpos = MUJOCO_JOINT_SIZES[joint_type]
     mujoco_data.qpos[joint_qpos_addr:joint_qpos_addr + n_qpos] = qpos
 
+def get_joint_qpos_addr_in_proprio_obs(mujoco_model, joint_id, obs):
+    """ """
 
 def get_joint_qpos_addr(mujoco_model, joint_id):
     """ Get the indices in the qpos array corresponding to the given joint.

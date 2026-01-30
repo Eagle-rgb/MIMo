@@ -198,10 +198,10 @@ def main():
                         help='Choose the starting position of MIMo in the roll_over environment. Put '
                              'either \'supine\', \'prone\' or \'alternating\'. Default: \'prone\'.')
     parser.add_argument('--roll_over_goal_function', required=False,
-                        choices=['angle', 'cos', 'quad'],
-                        default='angle',
+                        choices=['angle', 'cos', 'intrinsic'],
+                        default='cos',
                         help='Choose the function of achieved goal for the roll_over environment. Put '
-                             'either \'angle\', \'cos\' or \'quad\'. Default: \'angle\'.')
+                             'either \'angle\', \'cos\' or \'intrinsic\'. Default: \'cos\'.')
     parser.add_argument('--roll_over_model_path_auto', action='store_true',
                         help="""If set, the path of the model for the roll_over environment
 is automatically set to the following:
@@ -214,9 +214,6 @@ An example is '251206_prone_linear_1e6_test'
                         help="Render plot of muscle actuations additionally to scene video.")
     parser.add_argument('--log_actuations', action='store_true',
                         help="Create a .csv log file of actuations of all actuators per step of the environment.")
-    parser.add_argument('--potsq', action='store_true',
-                        help="Use squared euclidean distance instead of simple euclidean distance to desired goal " \
-                        "as potential in PBRS in roll over.")
     parser.add_argument('--nopen', action='store_true',
                         help="Disable action penalty in reward function.")
     parser.add_argument('--lr', required=False, default=3e-4, type=float,
@@ -243,7 +240,6 @@ An example is '251206_prone_linear_1e6_test'
     roll_over_model_path_auto = args.roll_over_model_path_auto
     render_actuations = args.render_actuations
     log_actuations = args.log_actuations
-    potsq = args.potsq
     nopen = args.nopen
     learning_rate = args.lr
     pbrs = args.pbrs
@@ -301,7 +297,6 @@ An example is '251206_prone_linear_1e6_test'
             width=480, # always 480 regardless whether we render actuations or not.
             height=render_height,
             nopen=nopen,
-            potsq=potsq,
             isr=isr,
             pbrs=pbrs,
             pbrs_w=pbrs_w)

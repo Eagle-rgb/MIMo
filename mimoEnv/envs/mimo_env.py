@@ -443,22 +443,30 @@ class MIMoEnv(MujocoEnv, utils.EzPickle):
         Calls :meth:`._get_obs()` and determines the space using the returned observations.
         """
         obs = self._get_obs()
+
+        obs = self.get_proprio_obs()
+        
+        
+        
+
         # Observation spaces
         spaces_dict = {
-            "observation": spaces.Box(-np.inf, np.inf, shape=obs["observation"].shape, dtype=np.float64)
+            "observation": spaces.Box(-np.inf, np.inf, shape=obs.shape, dtype=np.float64)
         }
         if self.touch:
-            spaces_dict["touch"] = spaces.Box(-np.inf, np.inf, shape=obs["touch"].shape, dtype=np.float32)
+            obs = self.get_touch_obs()
+            spaces_dict["touch"] = spaces.Box(-np.inf, np.inf, shape=obs.shape, dtype=np.float32)
         if self.vision:
+            obs = self.get_vision_obs()
             for sensor in self.vision_params:
-                spaces_dict[sensor] = spaces.Box(0, 255, shape=obs[sensor].shape, dtype=np.uint8)
+                spaces_dict[sensor] = spaces.Box(0, 255, shape=obs.shape, dtype=np.uint8)
         if self.vestibular:
-            spaces_dict["vestibular"] = spaces.Box(-np.inf, np.inf, shape=obs["vestibular"].shape, dtype=np.float64)
+            obs = self.get_vestibular_obs()
+            spaces_dict["vestibular"] = spaces.Box(-np.inf, np.inf, shape=obs.shape, dtype=np.float64)
         if self.goals_in_observation:
-            spaces_dict["desired_goal"] = spaces.Box(
-                -np.inf, np.inf, shape=obs["achieved_goal"].shape, dtype=np.float64)
-            spaces_dict["achieved_goal"] = spaces.Box(
-                -np.inf, np.inf, shape=obs["achieved_goal"].shape, dtype=np.float64)
+            goal_space = self.get_goal_space(spaces_dict)
+            spaces_dict["desired_goal"] = goal_space
+            spaces_dict["achieved_goal"] = goal_space
 
         # If sensory delays, creates empty observation history
         if self.sensory_delay > 0:
@@ -769,8 +777,8 @@ class MIMoEnv(MujocoEnv, utils.EzPickle):
             observation_dict["vestibular"] = vestibular_obs
 
         if self.goals_in_observation:
-            achieved_goal = self.get_achieved_goal()
-            observation_dict["achieved_goal"] = achieved_goal
+            #achieved_goal = self.get_achieved_goal()
+            #observation_dict["achieved_goal"] = achieved_goal
             observation_dict["desired_goal"] = self.goal
 
         if self.sensory_delay == 0:
@@ -778,8 +786,6 @@ class MIMoEnv(MujocoEnv, utils.EzPickle):
         else:
             # If sensory delays, return delayed observations
             return self._delayed_observation(observation_dict)
-
-        return observation_dict
 
     def _delayed_observation(self, observation):
         """ Stores current observation and returns a past one.
@@ -870,6 +876,10 @@ class MIMoEnv(MujocoEnv, utils.EzPickle):
         Returns:
             Dict: The observations after reset.
         """
+        raise NotImplementedError
+    
+    def get_goal_space(self, spaces_dict):
+        """ Should return the goal space. """
         raise NotImplementedError
 
     def sample_goal(self):

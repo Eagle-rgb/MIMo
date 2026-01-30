@@ -7,7 +7,7 @@ A simple implementation directly reading values is in :class:`~mimoProprioceptio
 
 import numpy as np
 from typing import Dict, List
-from mimoEnv.utils import get_joint_qpos_addr, get_joint_qvel_addr, get_sensor_addr
+from mimoEnv.utils import get_joint_qpos_addr, get_joint_qvel_addr, get_sensor_addr, MUJOCO_JOINT_SIZES
 
 
 class Proprioception:
@@ -143,6 +143,7 @@ class SimpleProprioception(Proprioception):
         """
         self.sensor_outputs = {}
         robot_qpos = self.env.data.qpos[self.joint_qpos].flatten()
+
         self.sensor_outputs["qpos"] = robot_qpos
         if "velocity" in self.output_components:
             robot_qvel = self.env.data.qvel[self.joint_qvel].flatten()
@@ -164,3 +165,51 @@ class SimpleProprioception(Proprioception):
             self.sensor_outputs["actuation"] = self.env.actuation_model.observations().flatten()
 
         return np.concatenate([self.sensor_outputs[key] for key in sorted(self.sensor_outputs.keys())])
+    
+    def get_qpos_addr_in_obs_for_each_joint(self, model):
+        """ Returns a list that matches the size of 'self.joint_ids' or 'self.joint_names' (both are of
+        equal size). Each entry in the list corresponds to the joint 'joint_id' in the list 'self.joint_ids'
+        and the entry is a range of indexes in the proprioception observation. This range specifies where
+        we find the qpos observation of this joint in the proprioception observation.
+
+        Note that I first had the thought of making a function that gets a 'joint_id' as a parameter and then
+        returns a range for that joint. However, the implementation of this function iterates over all joints
+        and simply counts up the index - for each joint finding out its joint_type to get its size in the qpos
+        array. We then can simply add up the first k sizes to get the starting index for joint 'k+1', get its
+        size again by getting its joint_type and then spanning from the last index to plus the size of the
+        joint_type.
+        So to get back to the point, a function that gets a specific 'joint_id' would be inefficient, because
+        in the worst case, we might need to iterate over all joints anyways.
+        This function obviously heavily depends on the structure of the proprioception observation and that
+        the joint qpos come first in the observation and that the individual qpos observations are ordered in
+        the exact same way as 'self.joint_ids'.
+
+        Args:
+            model (mujoco.MjModel): The MuJoCo model object.
+            obs (np.ndarray[float]): Proprioception observation. This is a flat array built by concatenating
+                all different proprioception observations. The qpos observation for each joint comes first
+                in this array.
+
+        Returns:
+            List[range(int)]: List of ranges specifiying indexes in proprioception observation 'obs' for each
+                joint - in the same order as 'self.joint_ids'.
+        """
+        joint_qpos_addr_ranges = []
+
+        # Start index of the range the current joint observation lies in in the proprioception observation.
+        # Is accumulated over iterated joints.
+        idx_rangestart = 0
+
+        # Iterate over all joints - in the order they appear in the observation.
+        for id in self.joint_ids:
+            joint_type = model.jnt_type[id]
+
+            # size of the joint
+            n_qpos = MUJOCO_JOINT_SIZES[joint_type]
+
+            rg = range(idx_rangestart, idx_rangestart + n_qpos)
+            joint_qpos_addr_ranges.append(rg)
+            idx_rangestart += n_qpos
+
+        joint_qpos_addr_ranges = np.asarray(joint_qpos_addr_ranges)
+        return joint_qpos_addr_ranges

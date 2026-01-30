@@ -90,8 +90,6 @@ class MIMoRollOverEnv(MIMoEnv):
                  reward_success=500,  # the big reward granted on success.
                  isr=True, # Initial State Randomization. Turned off for testing.
                  nopen=False, # No Penalize: Do not penalize actions.
-                 potsq=False, # Use squared euclidean potentials in PBRS instead of
-                    # simple euclidean distance from achieved_goal to desired_goal.
                  pbrs=False, # Use Potential Based Reward Shaping,
                  pbrs_w=100, # Weighting of the potential difference in PBRS.
 # PBRS gives a very small reward signal without a high weight factor
@@ -103,16 +101,16 @@ class MIMoRollOverEnv(MIMoEnv):
             msg += "Needs to be 'prone', 'supine' or 'alternating'."
             raise ValueError(msg)
 
-        if goal_function not in ['angle', 'cos', 'quad']:
+        if goal_function not in ['angle', 'cos', 'intrinsic']:
             msg = f"Unknown reward function '{goal_function}'. "
-            msg += "Needs to be 'angle', 'cos' or 'quad'."
+            msg += "Needs to be 'angle', 'cos' or 'intrinsic'."
             raise ValueError(msg)
 
+        self.intrinsic_goals_created = False
         self.goal_function=goal_function
         self.reward_success=reward_success
         self.isr=isr
         self.nopen=nopen
-        self.potsq=potsq
         self.pbrs=pbrs
         self.pbrs_w=pbrs_w
 
@@ -142,6 +140,29 @@ class MIMoRollOverEnv(MIMoEnv):
         # performing the environment dynamics to receive the next state. Reset to 0 on environment reset.
         self.pbrs_last_state_potential=0
 
+        if self.goal_function == 'intrinsic':
+            print("Creating prone and supine intrinsic goals.")
+            self.create_prone_and_supine_intrinsic_goal()
+        self.intrinsic_goals_created = True
+
+    def create_prone_and_supine_intrinsic_goal(self):
+        action = np.zeros(self.action_space.shape)
+
+        # Once for the current starting position and once for the opposite starting
+        # position.
+        for _ in range(2):
+            self.reset_model()
+            for _ in range(20):
+                obs, _, _, _, _ = self.step(action)
+            
+            if self.starting_position == 'prone':
+                self.prone_intrinsic_goal = obs.copy()
+                self.starting_position = 'supine'
+
+            else: # supine
+                self.supine_intrinsic_goal = obs.copy()
+                self.starting_position = 'prone'
+
     def is_success(self, achieved_goal, desired_goal):
         """ Did we reach our goal rotation.
 
@@ -152,10 +173,10 @@ class MIMoRollOverEnv(MIMoEnv):
         Returns:
             bool: If the achieved hip rotation exceeds the desired rotation.
         """
+        achieved_rotation = self.get_achieved_goal_cos()
+        desired_rotation = 0.95
 
-        success = (achieved_goal >= desired_goal)
-
-        return success
+        return achieved_rotation >= desired_rotation
 
     def is_failure(self, achieved_goal, desired_goal):
         """ Dummy function. Always returns ``False``.
@@ -259,16 +280,40 @@ class MIMoRollOverEnv(MIMoEnv):
         # self.set_state(self.init_qpos, self.init_qvel)
         self.put_in_starting_position()
         self.pbrs_last_state_potential=0
-        return self._get_obs()
 
-    def sample_goal(self):
+        return self._get_obs()
+    
+    def get_goal_space(self, obs_space):
+        if self.goal_function == 'intrinsic':
+            return obs_space
+        else:
+            return spaces.Box(-np.inf, np.inf, shape=(1,), dtype=np.float64)
+
+    def sample_goal(self, obs=None):
         """ Returns the goal rotation.
 
         We use a fixed goal rotation of 0.95 [previously: 0.8]
 
+        For intrinsic goals, we sample a goal in the reset() function.
+
         Returns:
             np.array[float]: [0.95]
         """
+        if self.goal_function == "intrinsic":
+            # We initialize intrinsic goals at the very end of the constructor of this environment.
+            # In between, we do get observation calls that call this function 'sample_goal'. Since
+            # the goals 'prone_intrinsic_goal' and 'supine_intrinsic_goal' are not yet created,
+            # this function would return an error. Instead, we just return a constant 0-vector
+            # that matches the observation space shape.
+            if self.intrinsic_goals_created:
+                if self.starting_position == 'prone':
+                    return self.supine_intrinsic_goal.copy()
+                else:
+                    return self.prone_intrinsic_goal.copy()
+            else:
+                obs = self._get_obs()
+                return np.conca
+        
         return np.array([0.95])
 
     def _get_standardized_rotation(self, body_name):
@@ -377,34 +422,9 @@ class MIMoRollOverEnv(MIMoEnv):
         rot_hip = (rot_hip + 1) / 2.0
         rot_chest = (rot_chest + 1) / 2.0
         return np.array([(rot_hip + rot_chest) / 2.0])
-
-    def get_achieved_goal_quad(self):
-        """ The third goal function - it is quadratic in xmat[2,0], i.e. the vertical
-        component of the local x axis of the hip and the chest. Here also, the values
-        are averaged.
-
-        The idea is the following: We want to accelerate learning and penalize values
-        that are very far from the desired rotation. For exmple, the value (R[2,0]+1) / 2)
-        is squared to accelerate learning, because it punishes MIMo much more severely if 
-        he is far away from the  desired rotation. For example - lying on the side
-        would already grant 0.5 reward, which now only results 0.25.
-
-        Returns:
-            np.array[float]: The average vertical component of the local x axis of the hip and chest.
-        """
-        rot_hip = self.get_vertical_component_of_local_x_axis("hip")
-        rot_chest = self.get_vertical_component_of_local_x_axis("chest")
-
-        # Goal rotation is exactly the opposite for supine starting position.
-        if self.starting_position=="supine":
-            rot_hip *= -1
-            rot_chest *= -1
-
-        rot_hip = (rot_hip + 1) / 2.0
-        rot_chest = (rot_chest + 1) / 2.0
-        rot_hip **= 2.0
-        rot_chest **= 2.0
-        return np.array([(rot_hip + rot_chest) / 2.0])
+    
+    def get_achieved_goal_intrinsic(self):
+        return self._get_obs()
 
     def get_achieved_goal(self):
         """ Returns the goal calculated from either of the tree goal functions.
@@ -413,10 +433,10 @@ class MIMoRollOverEnv(MIMoEnv):
             return self.get_achieved_goal_angle()
         elif self.goal_function=='cos':
             return self.get_achieved_goal_cos()
-        else:  # 'quad'
-            return self.get_achieved_goal_quad()
+        else:
+            return self.get_achieved_goal_intrinsic()
 
-    def get_potential(self):
+    def get_potential(self, obs):
         """ Returns the potential of the current state.
 
         The potential of the current state is the euclidean distance between the desired
@@ -430,13 +450,8 @@ class MIMoRollOverEnv(MIMoEnv):
         """
         achieved_goal = self.get_achieved_goal()
         desired_goal = self.sample_goal()
-        if np.greater_equal(achieved_goal, desired_goal):
-            return 0
 
-        if self.potsq:
-            return -np.linalg.norm(desired_goal - achieved_goal)**2.0
-        else:
-            return -np.linalg.norm(desired_goal - achieved_goal)
+        return -np.linalg.norm(desired_goal - achieved_goal)
 
     def step(self, action):
         """ Run one timestep of the environment's dynamics.
