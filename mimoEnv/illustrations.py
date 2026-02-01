@@ -38,6 +38,8 @@ from stable_baselines3.common.vec_env import DummyVecEnv
 from datetime import datetime
 import yaml
 
+import numpy as np
+
 
 def test(wrapped_env, save_dir, model=None, render_video=False, render_actuations=False):
     """ Tests the model for one episode.
@@ -62,13 +64,21 @@ def test(wrapped_env, save_dir, model=None, render_video=False, render_actuation
 
     print("Testing model...")
 
+    #proprio_observations = []
+    #vesti_observations = []
+    #touch_observations = []
+
     while not done and not trunc:
         if model is None:
             print("No model, taking random actions")
             action = wrapped_env.action_space.sample()
         else:
             action, _ = model.predict(obs)
+
         obs, _, done, trunc, _ = wrapped_env.step(action)
+        #proprio_observations.append(obs['observation'])
+        #vesti_observations.append(obs['vestibular'])
+        #touch_observations.append(obs['touch'])
         if render_video:
             if render_actuations:
                 img = evaluation_img(wrapped_env, up='actuations')
@@ -87,6 +97,22 @@ def test(wrapped_env, save_dir, model=None, render_video=False, render_actuation
 
                 images = []
                 im_counter += 1
+
+    # Calculate mean and variance of observations.
+    #proprio_observations = np.array(proprio_observations)
+    #vesti_observations = np.array(vesti_observations)
+    #touch_observations = np.array(touch_observations)
+
+    #proprio_mean = np.mean(proprio_observations, axis=0)
+    #vesti_mean = np.mean(vesti_observations, axis=0)
+    #proprio_std = np.std(proprio_observations, axis=0)
+    #vesti_std = np.std(vesti_observations, axis=0)
+    #touch_mean = np.mean(touch_observations, axis=0)
+    #touch_std = np.std(touch_observations, axis=0)
+
+    #np.savez("obs_stats_proprio.npz", mean=proprio_mean, std=proprio_std)
+    #np.savez("obs_stats_vesti.npz", mean=vesti_mean, std=vesti_std)
+    #np.savez("obs_stats_touch.npz", mean=touch_mean, std=touch_std)
 
     wrapped_env.reset()
 
@@ -146,6 +172,58 @@ def train(model, train_for, save_every, save_dir, isr):
             model.learn(total_timesteps=train_for_iter, reset_num_timesteps=False)
 
         model.save(os.path.join(save_dir, "model_" + str(counter)))
+
+def load_observation_normalization_dict(obs):
+    """ Loads the dictionary containing values for obseration normalization.
+    Returns 'None' on error. Requires 'obs' as parameter to check for matching
+    dimensions. If dimensions missmatch, returns 'None' aswell.
+    Else returns tuple mean_dict and std_dict.
+    """
+    # The location of the normalization data. The files are created on
+    # 01.02.2026.
+    path = os.path.join('.', 'mimoEnv', 'envs', 'normalization')
+    mean_dict = {}
+    std_dict = {}
+
+    for key in ["observation", "touch", "vestibular"]:
+        if key not in obs:
+            continue
+
+        try:
+            data = np.load(os.path.join(path, f"obs_stats_{key}.npz"))
+        except:
+            print(f"Could not load normalization files. Could not find "\
+                  f"normalization file for key {key}.")
+            return None, None
+        
+        try:
+            mean_dict[key] = data['mean']
+            std_dict[key] = data['std']
+
+            # Fix very small values for std to prevent divide by zeros.
+            std_dict[key][abs(std_dict[key]) < 1e-6] = 1.0
+
+            # Check dimensions.
+            dim_mean = mean_dict[key].shape[0]
+            dim_std = std_dict[key].shape[0]
+
+            obs_shape = obs[key].shape[0]
+
+            if obs_shape != dim_mean:
+                print(f"Dimension mismatch of mean statistic for observation {key}. "\
+                      f"Expected shape: {obs_shape}, Actual shape: {dim_mean}.")
+                return None, None
+            
+            if obs_shape != dim_std:
+                print(f"Dimension mismatch of std statistic for observation {key}. "\
+                      f"Expected shape: {obs_shape}, Actual shape: {dim_std}.")
+                return None, None
+        except:
+            print(f"Observation normalization: Something went wrong...")
+            return None, None
+
+    print("Successfully loaded observation normalization.")
+    return mean_dict, std_dict
 
 def main():
     """ CLI for the demonstration environments.
@@ -224,6 +302,8 @@ An example is '251206_prone_linear_1e6_test'
                         help="Potential difference weighting in PBRS.")
     parser.add_argument('--isr', action='store_true',
                         help="Use Initial State Randomization.")
+    parser.add_argument('--obs_norm', action='store_true', default=False,
+                        help="Use observation normalization.")
     
     args = parser.parse_args()
     env_name = args.env
@@ -245,6 +325,7 @@ An example is '251206_prone_linear_1e6_test'
     pbrs = args.pbrs
     pbrs_w = args.pbrs_w
     isr = args.isr
+    observation_normalization = args.obs_norm
 
     actuation_model = MuscleModel if use_muscle else SpringDamperModel
 
@@ -308,7 +389,15 @@ An example is '251206_prone_linear_1e6_test'
         env = gym.make(env_names[env_name], actuation_model=actuation_model,
             width=480,
             height=render_height)
-    env.reset()
+    obs, _ = env.reset()
+
+    if observation_normalization:
+        mean_dict, std_dict = load_observation_normalization_dict(obs)
+        if mean_dict:
+            env.observation_normalization_mean = mean_dict
+            env.observation_normalization_std = std_dict
+
+
 
     # load pretrained model or create new one
     # Set learning rate for PPO algorithm.

@@ -88,13 +88,27 @@ class MIMoRollOverEnv(MIMoEnv):
                  actuation_model=SpringDamperModel,
                  starting_position='prone',
                  goal_function='angle',
-                 reward_success=500,  # the big reward granted on success.
-                 isr=True, # Initial State Randomization. Turned off for testing.
-                 nopen=False, # No Penalize: Do not penalize actions.
-                 pbrs=False, # Use Potential Based Reward Shaping,
-                 pbrs_w=100, # Weighting of the potential difference in PBRS.
-# PBRS gives a very small reward signal without a high weight factor
-# causing the model to not succeed at all.
+                 # Here for compatibility with older models
+                 # which always had 'achieved_goal' in observation alongside 'desired_goal'
+                 achieved_goal_in_observation=False,  
+                 # the big reward granted on success.
+                 reward_success=500,  
+                 # Initial State Randomization. Turned off for testing.
+                 isr=True, 
+                 # No Penalize: Do not penalize actions.
+                 nopen=False, 
+                 # Use Potential Based Reward Shaping
+                 pbrs=False, 
+                 # Weighting of the potential difference in PBRS.
+                 # PBRS gives a very small reward signal without a high weight factor
+                 # causing the model to not succeed at all.
+                 pbrs_w=100, 
+                 # Number of steps where MIMo does no action to stabilize mujoco.  
+                 steps_after_reset=20,
+                 # Enable observation normalization. Use 'None' if no should be used,
+                 # else specify a dictionary with the keys available in the observation
+                 # dict with shape matching the respective observation.
+                 observation_normalization=None,
                  **kwargs):
 
         if starting_position not in ["prone", "supine", "alternating"]:
@@ -114,6 +128,7 @@ class MIMoRollOverEnv(MIMoEnv):
         self.nopen=nopen
         self.pbrs=pbrs
         self.pbrs_w=pbrs_w
+        self.steps_after_reset=steps_after_reset
 
         self.starting_position=starting_position
         self.alternating_starting_position=self.starting_position=='alternating'
@@ -130,6 +145,7 @@ class MIMoRollOverEnv(MIMoEnv):
                          vestibular_params=vestibular_params,
                          actuation_model=actuation_model,
                          goals_in_observation=True,
+                         achieved_goal_in_observation=achieved_goal_in_observation,
                          done_active=True,
                          **kwargs)
 
@@ -264,10 +280,13 @@ class MIMoRollOverEnv(MIMoEnv):
 
         self.set_state(self.data.qpos, qvel)
 
-        # Perform 1 step with no actions to stabilize initial position.
-        actions = np.zeros(self.action_space.shape)
-        self._set_action(actions)
-        mujoco.mj_step(self.model, self.data, nstep=1)
+        # 26-02-01 Increased from 1 step to 20 steps, because we have issues with
+        # vestibular observation not stabilizing in the first ~20 steps.
+        # Perform 20 steps with no actions to stabilize initial position.
+        if self.steps_after_reset > 0:
+            actions = np.zeros(self.action_space.shape)
+            self._set_action(actions)
+            mujoco.mj_step(self.model, self.data, nstep=self.steps_after_reset)
 
     def reset_model(self):
         """ Resets the simulation.

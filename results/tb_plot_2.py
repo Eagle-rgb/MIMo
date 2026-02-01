@@ -87,7 +87,7 @@ def create_dual_comparison_plots_single_model(df, plot_dir, date, suffix):
             # the output file name.
             date_str = date.strftime(DATE_FORMAT)
             filename = f"{date_str}_{suffix}_{haltung}_{tag.replace('/', '_')}.png"
-            save_path = os.path.join(plot_dir, filename)
+            save_path = os.path.join(plot_dir, "png", filename)
             plt.savefig(save_path, dpi=200)
             plt.close()
             print(f"Erfolg: {filename} gespeichert.")

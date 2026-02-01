@@ -55,6 +55,6 @@ ssh -l ${USERNAME} "adrastos.rbi.cs.uni-frankfurt.de" "conda activate mimo" "&&"
 
 # Copy gemini plots to our local machine.
 # Gemini plot files always have the same prefix: yy-mm-dd_<model sufix>_****.png
-scp "${USERNAME}@adrastos.rbi.cs.uni-frankfurt.de:~/MIMo/${today}_${MODEL_NAME}_*" "."
+scp "${USERNAME}@adrastos.rbi.cs.uni-frankfurt.de:~/MIMo/png/${today}_${MODEL_NAME}_*" "."
 
 

@@ -113,7 +113,7 @@ def create_and_save_individual_plots(df, plot_dir, date, suffixes, ind_runs):
             else:
                 filename = f"{haltung}_{tag.replace('/', '_')}.png"
 
-            save_path = os.path.join(plot_dir, filename)
+            save_path = os.path.join(plot_dir, "png", filename)
 
             plt.savefig(save_path)
             plt.close() # Schließt die Figur, um Speicher freizugeben

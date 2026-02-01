@@ -286,8 +286,11 @@ class MIMoEnv(MujocoEnv, utils.EzPickle):
         vestibular (Vestibular): A reference to the vestibular instance.
         facial_expressions (Dict[str, int]): A dictionary linking emotions with their associated facial textures. The
             keys of this dictionary are valid inputs for :meth:`.swap_facial_expression`.
-        goals_in_observation (bool): If ``True`` the desired and achieved goals are included in the observation
-            dictionary. Default ``True``.
+        goals_in_observation (bool): If ``True`` the desired goal are included in the observation
+            dictionary. Default ``True``. This was changed: Previously, we had 'achieved_goal' in the observation as
+            well, but we removed it and instead introduced parameter 'achieved_goal_in_observation'.
+        achieved_goal_in_observation (bool): If ``True`` and 'goals_in_observation' is ``True``, augments observation
+            with 'achieved_goal' instead of only 'desired_goal'.
         done_active (bool): If ``True``, :meth:`._is_done` returns ``True`` if the simulation reaches a success or
             failure state. If ``False``, :meth:`._is_done` always returns ``False` and the function calling
             :meth:`.step` has to figure out when to stop or reset the simulation on its own.
@@ -316,6 +319,7 @@ class MIMoEnv(MujocoEnv, utils.EzPickle):
                  vestibular_params=None,
                  actuation_model=SpringDamperModel,
                  goals_in_observation=True,
+                 achieved_goal_in_observation=False,
                  done_active=False):
         utils.EzPickle.__init__(**locals())
 
@@ -334,6 +338,7 @@ class MIMoEnv(MujocoEnv, utils.EzPickle):
         self.vestibular = None
 
         self.goals_in_observation = goals_in_observation
+        self.achieved_goal_in_observation = achieved_goal_in_observation
         self.done_active = done_active
         self.sensory_delay = sensory_delay
         self.motor_delay = motor_delay
@@ -346,6 +351,8 @@ class MIMoEnv(MujocoEnv, utils.EzPickle):
         # Face emotions:
         self.facial_expressions = None
         self._head_material_id = None
+        self.observation_normalization_mean = None
+        self.observation_normalization_std = None
 
         # Currently a type, will be replaced with an instance during _initialize_simulation
         self.actuation_model = actuation_model
@@ -372,6 +379,8 @@ class MIMoEnv(MujocoEnv, utils.EzPickle):
 
         self._set_observation_space()
         self.goal = self.sample_goal()
+
+        self.observations = []
         
     def _initialize_simulation(self,):
         super()._initialize_simulation()
@@ -468,7 +477,8 @@ class MIMoEnv(MujocoEnv, utils.EzPickle):
         if self.goals_in_observation:
             goal_space = self.get_goal_space(spaces_dict)
             spaces_dict["desired_goal"] = goal_space
-            # spaces_dict["achieved_goal"] = goal_space
+            if self.achieved_goal_in_observation:
+                spaces_dict["achieved_goal"] = goal_space
 
         # If sensory delays, creates empty observation history
         if self.sensory_delay > 0:
@@ -664,10 +674,13 @@ class MIMoEnv(MujocoEnv, utils.EzPickle):
         if not self.goals_in_observation:
             # info["achieved_goal"] = copy.deepcopy(achieved_goal)
             info["desired_goal"] = copy.deepcopy(self.goal)
-        info['achieved_goal'] = copy.deepcopy(achieved_goal)
+
+        if not self.goals_in_observation or not self.achieved_goal_in_observation:
+            info['achieved_goal'] = copy.deepcopy(achieved_goal)
 
         terminated, truncated = self._is_done(achieved_goal, self.goal, info)
         reward = self.compute_reward(achieved_goal, self.goal, info)
+
         return obs, reward, terminated, truncated, info
 
     def _step_callback(self):
@@ -787,9 +800,20 @@ class MIMoEnv(MujocoEnv, utils.EzPickle):
             vestibular_obs = self.get_vestibular_obs()
             observation_dict["vestibular"] = vestibular_obs
 
+        # Apply observation normalization.
+        if self.observation_normalization_mean is not None:
+            keys = observation_dict.keys()
+
+            for key in keys:
+                if key not in self.observation_normalization_mean:
+                    continue
+
+                observation_dict[key] = (observation_dict[key] - self.observation_normalization_mean[key]) / self.observation_normalization_std[key]
+
         if not without_goals and self.goals_in_observation:
-            #achieved_goal = self.get_achieved_goal()
-            #observation_dict["achieved_goal"] = achieved_goal
+            if self.achieved_goal_in_observation:
+                achieved_goal = self.get_achieved_goal()
+                observation_dict["achieved_goal"] = achieved_goal
             observation_dict["desired_goal"] = self.get_desired_goal_obs()
 
         if self.sensory_delay == 0:

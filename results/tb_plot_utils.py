@@ -38,9 +38,14 @@ def load_tensorboard_runs(base_dir, tags, date_filter, suffix_filter):
         - base_dir (str): The directory to start looking for tensorboard data recursively.
         - tags (list[str]): List of tags to load.
         - date_filter (str): Filter for model dates to look for. 'None' if should be ignored.
+            Can be list[str] or a single [str]. Internally, it is then converted to a single-element list.
         - suffix_filter (list[str]): Filter for model suffixed to look for. 'None' if should be ignored.
     """
     all_data_list = []
+    
+    # Convert string date_filter to list
+    if type(date_filter) == str:
+        date_filter = [date_filter]
 
     # yy-mm-dd_<prone/supine>_<suffix>_run_xx
     pattern = re.compile(r'(\d{2}-\d{2}-\d{2})_([a-z]+)_([a-z0-9_-]+)_run_(\d+)')
@@ -57,8 +62,8 @@ def load_tensorboard_runs(base_dir, tags, date_filter, suffix_filter):
         if not match: continue
         date, haltung, suffix, run_num = match.groups()
 
-        if date_filter and date != date_filter: continue
-        if suffix_filter and not suffix in suffix_filter: continue
+        if date_filter and date not in date_filter: continue
+        if suffix_filter and suffix not in suffix_filter: continue
 
         print(f"Lade Run: Date={date}, Haltung={haltung}, Suffix={suffix}, Run={run_num} aus {root}.")
 
