@@ -29,6 +29,7 @@ import numpy as np
 import os
 from mimoEnv.utils import get_minimal_z_coordinate
 from gymnasium import spaces
+from PIL import Image
 
 ROLL_OVER_XML = os.path.join(SCENE_DIRECTORY, "roll_over_prone_scene.xml")
 """ Path to the roll over scene.
@@ -56,6 +57,10 @@ TOUCH_PARAMS = {
     "touch_function": "force_vector",
     "response_function": "spread_linear",
 }
+
+# If set to 'True' and goals are set to 'intrinsic', renders an image of MIMo where the goal
+# observation was observed in and writes the observation to disk.
+TEST_INTRINSIC_GOALS_CREATION=False
 
 
 class MIMoRollOverEnv(MIMoEnv):
@@ -88,9 +93,6 @@ class MIMoRollOverEnv(MIMoEnv):
                  actuation_model=SpringDamperModel,
                  starting_position='prone',
                  goal_function='angle',
-                 # Here for compatibility with older models
-                 # which always had 'achieved_goal' in observation alongside 'desired_goal'
-                 achieved_goal_in_observation=False,  
                  # the big reward granted on success.
                  reward_success=500,  
                  # Initial State Randomization. Turned off for testing.
@@ -104,11 +106,7 @@ class MIMoRollOverEnv(MIMoEnv):
                  # causing the model to not succeed at all.
                  pbrs_w=100, 
                  # Number of steps where MIMo does no action to stabilize mujoco.  
-                 steps_after_reset=20,
-                 # Enable observation normalization. Use 'None' if no should be used,
-                 # else specify a dictionary with the keys available in the observation
-                 # dict with shape matching the respective observation.
-                 observation_normalization=None,
+                 steps_after_reset=30,
                  **kwargs):
 
         if starting_position not in ["prone", "supine", "alternating"]:
@@ -145,7 +143,6 @@ class MIMoRollOverEnv(MIMoEnv):
                          vestibular_params=vestibular_params,
                          actuation_model=actuation_model,
                          goals_in_observation=True,
-                         achieved_goal_in_observation=achieved_goal_in_observation,
                          done_active=True,
                          **kwargs)
 
@@ -163,29 +160,37 @@ class MIMoRollOverEnv(MIMoEnv):
         self.intrinsic_goals_created = True
 
     def create_prone_and_supine_intrinsic_goal(self):
-        action = np.zeros(self.action_space.shape)
-
         # Once for the current starting position and once for the opposite starting
         # position.
         for _ in range(2):
             self.reset_model()
 
-            # Perform 20 steps with no actions to stabilize vestibular observation.
-            # In my experiments, I noticed that vestibular observation is very 'random'
-            # and only stabilizes after some steps. 20 seems enough so it always
-            # stabilizes.
-            action = np.zeros(self.action_space.shape)
-            self._set_action(action)
-            mujoco.mj_step(self.model, self.data, nstep=20)
-
             # Get a goalless observation to use as 'desired_goal'.
             obs = self._get_obs(without_goals=True)
             
             if self.starting_position == 'prone':
+                if TEST_INTRINSIC_GOALS_CREATION:
+                    frame = self.render()
+                    img = Image.fromarray(frame)
+                    img.save(os.path.join('.', 'prone_to_supine_goal.png'))
+                    proprio_obs = obs['observation']
+                    vesti_obs = obs['vestibular']
+                    np.savez("intrinsic_goal_prone_to_supine_proprio.npz", proprio_obs)
+                    np.savez("intrinsic_goal_prone_to_supine_vesti.npz", vesti_obs)
+
                 self.prone_intrinsic_goal = obs.copy()
                 self.starting_position = 'supine'
 
             else: # supine
+                if TEST_INTRINSIC_GOALS_CREATION:
+                    frame = self.render()
+                    img = Image.fromarray(frame)
+                    img.save(os.path.join('.', 'supine_to_prone_goal.png'))
+                    proprio_obs = obs['observation']
+                    vesti_obs = obs['vestibular']
+                    np.savez("intrinsic_goal_supine_to_prone_proprio.npz", proprio_obs)
+                    np.savez("intrinsic_goal_supine_to_prone_vesti.npz", vesti_obs)
+
                 self.supine_intrinsic_goal = obs.copy()
                 self.starting_position = 'prone'
 
@@ -337,7 +342,7 @@ class MIMoRollOverEnv(MIMoEnv):
         # also flatten the goal like we did in 'get_goal_space'.
         return np.concatenate([self.goal[key] for key in sorted(self.goal.keys())])
 
-    def sample_goal(self, obs=None):
+    def sample_goal(self):
         """ Returns the goal rotation.
 
         We use a fixed goal rotation of 0.95 [previously: 0.8]
@@ -351,8 +356,8 @@ class MIMoRollOverEnv(MIMoEnv):
             # We initialize intrinsic goals at the very end of the constructor of this environment.
             # In between, we do get observation calls that call this function 'sample_goal'. Since
             # the goals 'prone_intrinsic_goal' and 'supine_intrinsic_goal' are not yet created,
-            # this function would return an error. Instead, we just return a constant 0-vector
-            # that matches the observation space shape.
+            # this function would return an error. Instead, we just return the current observation
+            # as goal in that case.
             if self.intrinsic_goals_created:
                 if self.starting_position == 'prone':
                     return self.supine_intrinsic_goal.copy()
@@ -594,7 +599,7 @@ class MIMoRollOverEnv(MIMoEnv):
         curr_potential = self.get_potential()
 
         if not self.pbrs:
-            return curr_potential
+            return curr_potential - quad_ctrl_cost
         
         return self.pbrs_w * (curr_potential - self.pbrs_last_state_potential) - quad_ctrl_cost
     

@@ -40,6 +40,8 @@ import yaml
 
 import numpy as np
 
+from mimoEnv.envs.roll_over import TOUCH_PARAMS as ROLL_OVER_TOUCH_PARAMS
+
 
 def test(wrapped_env, save_dir, model=None, render_video=False, render_actuations=False):
     """ Tests the model for one episode.
@@ -304,6 +306,8 @@ An example is '251206_prone_linear_1e6_test'
                         help="Use Initial State Randomization.")
     parser.add_argument('--obs_norm', action='store_true', default=False,
                         help="Use observation normalization.")
+    parser.add_argument('--touch', action='store_true', default=False,
+                        help="Use touch observation")
     
     args = parser.parse_args()
     env_name = args.env
@@ -326,6 +330,7 @@ An example is '251206_prone_linear_1e6_test'
     pbrs_w = args.pbrs_w
     isr = args.isr
     observation_normalization = args.obs_norm
+    touch = args.touch
 
     actuation_model = MuscleModel if use_muscle else SpringDamperModel
 
@@ -380,8 +385,8 @@ An example is '251206_prone_linear_1e6_test'
             nopen=nopen,
             isr=isr,
             pbrs=pbrs,
-            touch_params=None,
-            achieved_goal_in_observation=True,
+            render_mode='rgb_array',
+            touch_params=ROLL_OVER_TOUCH_PARAMS if touch else None,
             pbrs_w=pbrs_w)
         # if log_actuations:
         #     wrapped_env = MIMoRollOverWrapper(env, log_file=os.path.join(save_dir,"actuation_log.csv"))
@@ -391,6 +396,7 @@ An example is '251206_prone_linear_1e6_test'
         env = gym.make(env_names[env_name], actuation_model=actuation_model,
             width=480,
             height=render_height)
+        
     obs, _ = env.reset()
 
     if observation_normalization:
