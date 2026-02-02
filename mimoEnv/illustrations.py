@@ -83,7 +83,7 @@ def test(wrapped_env, save_dir, model=None, render_video=False, render_actuation
             if render_actuations:
                 img = evaluation_img(wrapped_env, up='actuations')
             else:
-                img = wrapped_env.mujoco_renderer.render(render_mode="rgb_array")
+                img = wrapped_env.mujoco_renderer.render(render_mode="rgb_array", camera_name='top')
             images.append(img)
         if done or trunc:
             time.sleep(1)
@@ -380,6 +380,8 @@ An example is '251206_prone_linear_1e6_test'
             nopen=nopen,
             isr=isr,
             pbrs=pbrs,
+            touch_params=None,
+            achieved_goal_in_observation=True,
             pbrs_w=pbrs_w)
         # if log_actuations:
         #     wrapped_env = MIMoRollOverWrapper(env, log_file=os.path.join(save_dir,"actuation_log.csv"))

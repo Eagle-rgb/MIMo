@@ -35,14 +35,14 @@ for i in $(seq 1 $NUMBER_OF_RUNS); do
 		"--train_for=1000000" \
 		"--nopen" \
 		"--save_every=1000000" \
-		"--test" \
-		"--roll_over_starting_position=prone" \
+		"--roll_over_starting_position=supine" \
 		"--algorithm=PPO" \
 		"--roll_over_model_path_auto" \
-		"--roll_over_goal_function=intrinsic" \
+		"--roll_over_goal_function=cos" \
 		"--save_model=${MODEL_NAME}_run_${i}" \
-		"--lr=0.0003" \
-		"--render_video" &
+		"--pbrs" \
+		"--obs_norm" \
+		"--lr=0.0003" &
 done
 
 # Wait until all ssh commands finished, i.e. all MIMo simulations are finished. Then, plot the results.
