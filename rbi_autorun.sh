@@ -41,6 +41,7 @@ for i in $(seq 1 $NUMBER_OF_RUNS); do
 		"--roll_over_goal_function=intrinsic" \
 		"--save_model=${MODEL_NAME}_run_${i}" \
 		"--pbrs" \
+		"--pbrs_w=1" \
 		"--obs_norm" \
 		"--lr=0.0003" &
 done
