@@ -145,7 +145,7 @@ class MIMoRollOverEnv(MIMoEnv):
                          actuation_model=actuation_model,
                          goals_in_observation=True,
                          done_active=True,
-                         achieved_goal_in_observation=achieved_goal_in_observation
+                         achieved_goal_in_observation=achieved_goal_in_observation,
                          **kwargs)
 
         self.init_position=self.data.qpos.copy()
