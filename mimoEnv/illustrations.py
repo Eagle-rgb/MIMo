@@ -300,7 +300,7 @@ An example is '251206_prone_linear_1e6_test'
                         help="Learning rate. Default 1e-3 for PPO algorithm. Only used for PPO algorithm.")
     parser.add_argument('--pbrs', action='store_true',
                         help="Use PBRS in roll_over reward shaping.")
-    parser.add_argument('--pbrs_w', default=100, type=float
+    parser.add_argument('--pbrs_w', default=100, type=float,
                         help="Potential difference weighting in PBRS.")
     parser.add_argument('--isr', action='store_true',
                         help="Use Initial State Randomization.")
