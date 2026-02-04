@@ -178,6 +178,16 @@ DEFAULT_PROPRIOCEPTION_PARAMS = {
 :meta hide-value:
 """
 
+
+PROPRIOCEPTION_PARAMS_ONLY_QPOS = {
+    "components": [],
+    "threshold": .035,
+}
+""" Proprioception with only qpos parameters, i.e. only relative joint positions.
+
+:meta hide-value:
+"""
+
 DEFAULT_SIZE = 500
 """ Default window size for gym rendering functions.
 

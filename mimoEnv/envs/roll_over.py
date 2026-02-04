@@ -507,6 +507,10 @@ class MIMoRollOverEnv(MIMoEnv):
 
         if self.goal_function != 'intrinsic':
             desired_goal = self.goal
+
+            if self.is_success(achieved_goal, desired_goal):
+                return self.reward_success
+
             return -np.linalg.norm(desired_goal - achieved_goal)
         
         # For intrinsic goal function, we have factor for each goal observation.
