@@ -32,7 +32,7 @@ for i in $(seq 1 $NUMBER_OF_RUNS); do
 		"conda activate mimo && "\
 		"cd MIMo && "\
 		"python mimoEnv/illustrations.py" \
-		"--train_for=1000000" \
+		"--train_for=2000000" \
 		"--nopen" \
 		"--save_every=1000000" \
 		"--roll_over_starting_position=supine" \
@@ -41,8 +41,8 @@ for i in $(seq 1 $NUMBER_OF_RUNS); do
 		"--roll_over_goal_function=intrinsic" \
 		"--save_model=${MODEL_NAME}_run_${i}" \
 		"--pbrs" \
-		"--pbrs_w=1" \
-		"--obs_norm" \
+		"--pbrs_w=100" \
+		"--proprio_only_qpos" \
 		"--lr=0.0003" &
 done
 

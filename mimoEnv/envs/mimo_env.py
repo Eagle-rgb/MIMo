@@ -181,7 +181,6 @@ DEFAULT_PROPRIOCEPTION_PARAMS = {
 
 PROPRIOCEPTION_PARAMS_ONLY_QPOS = {
     "components": [],
-    "threshold": .035,
 }
 """ Proprioception with only qpos parameters, i.e. only relative joint positions.
 

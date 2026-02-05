@@ -115,9 +115,9 @@ class MIMoRollOverEnv(MIMoEnv):
             msg += "Needs to be 'prone', 'supine' or 'alternating'."
             raise ValueError(msg)
 
-        if goal_function not in ['angle', 'cos', 'intrinsic']:
+        if goal_function not in ['angle', 'cos', 'intrinsic', 'intrinsic_vesti']:
             msg = f"Unknown reward function '{goal_function}'. "
-            msg += "Needs to be 'angle', 'cos' or 'intrinsic'."
+            msg += "Needs to be 'angle', 'cos' or 'intrinsic' or 'intrinsic_vesti'."
             raise ValueError(msg)
 
         self.intrinsic_goals_created = False
@@ -168,7 +168,7 @@ class MIMoRollOverEnv(MIMoEnv):
             self.reset_model()
 
             # Get a goalless observation to use as 'desired_goal'.
-            obs = self._get_obs(without_goals=True)
+            obs = self.get_achieved_goal()
             
             if self.starting_position == 'prone':
                 if TEST_INTRINSIC_GOALS_CREATION:
@@ -320,6 +320,8 @@ class MIMoRollOverEnv(MIMoEnv):
         return self._get_obs()
     
     def get_goal_space(self, obs_space):
+        if self.goal_function == 'intrinsic_vesti':
+            return spaces.Box(-np.inf, np.inf, shape=self.get_vestibular_obs().shape, dtype=np.float64)
         if self.goal_function == 'intrinsic':
             # stableBaselines is incompatible with nested dict spaces, which is quite
             # unfortunate, but this simply means that instead of directly using the
@@ -354,7 +356,7 @@ class MIMoRollOverEnv(MIMoEnv):
         Returns:
             np.array[float]: [0.95]
         """
-        if self.goal_function == "intrinsic":
+        if self.goal_function == "intrinsic" or self.goal_function == 'intrinsic_vesti':
             # We initialize intrinsic goals at the very end of the constructor of this environment.
             # In between, we do get observation calls that call this function 'sample_goal'. Since
             # the goals 'prone_intrinsic_goal' and 'supine_intrinsic_goal' are not yet created,
@@ -366,8 +368,7 @@ class MIMoRollOverEnv(MIMoEnv):
                 else:
                     return self.prone_intrinsic_goal.copy()
             else:
-                obs = self._get_obs(without_goals=True)
-                return obs
+                return self.get_achieved_goal_intrinsic()
         
         return np.array([0.95])
 
@@ -480,6 +481,9 @@ class MIMoRollOverEnv(MIMoEnv):
     
     def get_achieved_goal_intrinsic(self):
         return self._get_obs(without_goals=True)
+    
+    def get_achieved_goal_intrinsic_vesti(self):
+        return self.get_vestibular_obs()
 
     def get_achieved_goal(self):
         """ Returns the goal calculated from either of the tree goal functions.
@@ -488,8 +492,10 @@ class MIMoRollOverEnv(MIMoEnv):
             return self.get_achieved_goal_angle()
         elif self.goal_function=='cos':
             return self.get_achieved_goal_cos()
-        else:
+        elif self.goal_function=='intrinsic':
             return self.get_achieved_goal_intrinsic()
+        else:
+            return self.get_achieved_goal_intrinsic_vesti()
 
     def get_potential(self):
         """ Returns the potential of the current state.
