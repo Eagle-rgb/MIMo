@@ -38,7 +38,7 @@ for i in $(seq 1 $NUMBER_OF_RUNS); do
 		"--roll_over_starting_position=supine" \
 		"--algorithm=PPO" \
 		"--roll_over_model_path_auto" \
-		"--roll_over_goal_function=intrinsic" \
+		"--roll_over_goal_function=intrinsic_vesti" \
 		"--save_model=${MODEL_NAME}_run_${i}" \
 		"--pbrs" \
 		"--pbrs_w=100" \

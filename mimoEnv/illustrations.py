@@ -282,7 +282,7 @@ def main():
                         choices=['angle', 'cos', 'intrinsic', 'intrinsic_vesti'],
                         default='cos',
                         help='Choose the function of achieved goal for the roll_over environment. Put '
-                             'either \'angle\', \'cos\' or \'intrinsic\ or \'intrinsic_vesti\'. Default: \'cos\'.')
+                             'either \'angle\', \'cos\' or \'intrinsic\' or \'intrinsic_vesti\'. Default: \'cos\'.')
     parser.add_argument('--roll_over_model_path_auto', action='store_true',
                         help="""If set, the path of the model for the roll_over environment
 is automatically set to the following:

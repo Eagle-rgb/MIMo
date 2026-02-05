@@ -368,7 +368,7 @@ class MIMoRollOverEnv(MIMoEnv):
                 else:
                     return self.prone_intrinsic_goal.copy()
             else:
-                return self.get_achieved_goal_intrinsic()
+                return self.get_achieved_goal()
         
         return np.array([0.95])
 
