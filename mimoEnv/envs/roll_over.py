@@ -156,7 +156,7 @@ class MIMoRollOverEnv(MIMoEnv):
         # performing the environment dynamics to receive the next state. Reset to 0 on environment reset.
         self.pbrs_last_state_potential=0
 
-        if self.goal_function == 'intrinsic':
+        if self.goal_function == 'intrinsic' or self.goal_function == 'intrinsic_vesti':
             print("Creating prone and supine intrinsic goals.")
             self.create_prone_and_supine_intrinsic_goal()
         self.intrinsic_goals_created = True
