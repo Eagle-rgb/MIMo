@@ -566,7 +566,7 @@ class MIMoRollOverEnv(MIMoEnv):
         reward = achieved_goal  # [0, 1]
 
         # Penalize excessive use of force.
-        quad_ctrl_cost = 0.01 * np.square(self.data.ctrl).sum()  # [0, 0.44]
+        quad_ctrl_cost = 0.1 * np.square(self.data.ctrl).sum()  # [0, 4.4]
         reward -= quad_ctrl_cost
 
         return reward
