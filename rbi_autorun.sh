@@ -32,17 +32,15 @@ for i in $(seq 1 $NUMBER_OF_RUNS); do
 		"conda activate mimo && "\
 		"cd MIMo && "\
 		"python mimoEnv/illustrations.py" \
-		"--train_for=2000000" \
-		"--nopen" \
+		"--train_for=1000000" \
 		"--save_every=1000000" \
 		"--roll_over_starting_position=supine" \
 		"--algorithm=PPO" \
 		"--roll_over_model_path_auto" \
-		"--roll_over_goal_function=intrinsic_vesti" \
+		"--roll_over_goal_function=cos" \
 		"--save_model=${MODEL_NAME}_run_${i}" \
 		"--pbrs" \
 		"--pbrs_w=100" \
-		"--proprio_only_qpos" \
 		"--lr=0.0003" &
 done
 

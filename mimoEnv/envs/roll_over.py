@@ -108,6 +108,8 @@ class MIMoRollOverEnv(MIMoEnv):
                  # Number of steps where MIMo does no action to stabilize mujoco.  
                  steps_after_reset=30,
                  achieved_goal_in_observation=False,
+                 # Penalization factor for action penalization.
+                 pen_factor=0.01,
                  **kwargs):
 
         if starting_position not in ["prone", "supine", "alternating"]:
@@ -128,6 +130,7 @@ class MIMoRollOverEnv(MIMoEnv):
         self.pbrs=pbrs
         self.pbrs_w=pbrs_w
         self.steps_after_reset=steps_after_reset
+        self.pen_factor=pen_factor
 
         self.starting_position=starting_position
         self.alternating_starting_position=self.starting_position=='alternating'
@@ -539,6 +542,9 @@ class MIMoRollOverEnv(MIMoEnv):
         # Cache potential of current state to be used in calculating next reward.
         self.pbrs_last_state_potential = self.get_potential()
         return super().step(action)
+    
+    def compute_penalization(self):
+        return 0 if self.nopen else self.pen_factor * np.square(self.data.ctrl).sum()
 
     def compute_reward_v1(self, achieved_goal, desired_goal, info):
         """
@@ -566,8 +572,7 @@ class MIMoRollOverEnv(MIMoEnv):
         reward = achieved_goal  # [0, 1]
 
         # Penalize excessive use of force.
-        quad_ctrl_cost = 0.1 * np.square(self.data.ctrl).sum()  # [0, 4.4]
-        reward -= quad_ctrl_cost
+        reward -= self.compute_penalization()
 
         return reward
 
@@ -598,10 +603,7 @@ class MIMoRollOverEnv(MIMoEnv):
             float: The reward as described above.
         """
         # Penalize excessive use of force unless disabled by '--nopen' argument.
-        if not self.nopen:
-            quad_ctrl_cost = 0.01 * np.square(self.data.ctrl).sum()  # [0, 0.44]
-        else:
-            quad_ctrl_cost = 0
+        quad_ctrl_cost = self.compute_penalization()
 
         # If the goal is reached, give a very high positive reward.
         if self.is_success(achieved_goal, desired_goal):

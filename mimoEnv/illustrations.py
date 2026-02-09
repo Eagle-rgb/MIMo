@@ -86,7 +86,7 @@ def test(wrapped_env, save_dir, model=None, render_video=False, render_actuation
             if render_actuations:
                 img = evaluation_img(wrapped_env, up='actuations')
             else:
-                img = wrapped_env.mujoco_renderer.render(render_mode="rgb_array", camera_name='top')
+                img = wrapped_env.mujoco_renderer.render(render_mode="rgb_array", camera_name='corner')
             images.append(img)
         if done or trunc:
             time.sleep(1)
@@ -312,6 +312,8 @@ An example is '251206_prone_linear_1e6_test'
     parser.add_argument('--achieved_goal_in_observation', action='store_true', default=False)
     parser.add_argument('--proprio_only_qpos', action='store_true', default=False,
                         help="Only uses 'qpos' of each joint in proprio observation.")
+    parser.add_argument('--pen_fac', default=0.01, type=float, required=False,
+                        help="Penalization factor when action penalization is active.")
     
     args = parser.parse_args()
     env_name = args.env
@@ -337,6 +339,7 @@ An example is '251206_prone_linear_1e6_test'
     touch = args.touch
     achieved_goal_in_observation=args.achieved_goal_in_observation
     proprio_only_qpos = args.proprio_only_qpos
+    pen_factor = args.pen_fac
 
     if proprio_only_qpos:
         print("Warning! Only using qpos in proprioception obseration.")
@@ -398,7 +401,8 @@ An example is '251206_prone_linear_1e6_test'
             touch_params=ROLL_OVER_TOUCH_PARAMS if touch else None,
             achieved_goal_in_observation=achieved_goal_in_observation,
             proprio_params=DEFAULT_PROPRIOCEPTION_PARAMS if not proprio_only_qpos else PROPRIOCEPTION_PARAMS_ONLY_QPOS,
-            pbrs_w=pbrs_w)
+            pbrs_w=pbrs_w,
+            pen_factor=pen_factor)
         # if log_actuations:
         #     wrapped_env = MIMoRollOverWrapper(env, log_file=os.path.join(save_dir,"actuation_log.csv"))
         # else:
@@ -449,6 +453,7 @@ An example is '251206_prone_linear_1e6_test'
         'proprio_only_qpos': proprio_only_qpos,
         'obs_norm': observation_normalization,
         'touch': touch,
+        'pen_factor': pen_factor,
     }
     with open(f'{save_dir}/data.yml', 'w') as outfile:
         yaml.dump(yaml_data, outfile, default_flow_style=False)
