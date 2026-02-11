@@ -22,6 +22,7 @@ from mimoVestibular.vestibular import SimpleVestibular, Vestibular
 from mimoProprioception.proprio import SimpleProprioception, Proprioception
 from mimoActuation.actuation import ActuationModel, SpringDamperModel
 import mimoEnv.utils as mimo_utils
+from mimoActuation.actuation_pc1 import SpringDamperModel_PC1
 
 
 SCENE_DIRECTORY = os.path.abspath(os.path.join(__file__, "..", "..", "assets"))
@@ -329,6 +330,7 @@ class MIMoEnv(MujocoEnv, utils.EzPickle):
                  actuation_model=SpringDamperModel,
                  goals_in_observation=True,
                  achieved_goal_in_observation=False,
+                 pca=None,
                  done_active=False):
         utils.EzPickle.__init__(**locals())
 
@@ -365,6 +367,7 @@ class MIMoEnv(MujocoEnv, utils.EzPickle):
 
         # Currently a type, will be replaced with an instance during _initialize_simulation
         self.actuation_model = actuation_model
+        self.pca = pca
 
         self._initial_qpos = initial_qpos
 
@@ -412,7 +415,10 @@ class MIMoEnv(MujocoEnv, utils.EzPickle):
         # Set qpos:
         self._set_initial_position(self._initial_qpos)
 
-        self.actuation_model = self.actuation_model(self, self.mimo_actuators)
+        if self.actuation_model == SpringDamperModel_PC1:
+            self.actuation_model = SpringDamperModel_PC1(self, self.mimo_actuators, self.pca)
+        else:
+            self.actuation_model = self.actuation_model(self, self.mimo_actuators)
 
     @property
     def n_actuators(self):
@@ -454,6 +460,7 @@ class MIMoEnv(MujocoEnv, utils.EzPickle):
             self._action_history = []
 
         self.action_space = self.actuation_model.get_action_space()
+        print(f"Using action space: {self.action_space}")
 
     def _set_observation_space(self):
         """ Sets the observation space attribute.

@@ -63,7 +63,7 @@ def create_dual_comparison_plots_single_model(df, plot_dir, date, suffix):
             folder = sub_df['Folder'].unique()[0]
             hyperparams = load_model_hyperparams(folder)
             if hyperparams:
-                fig.text(0.5, 0.91, hyperparams, ha='center', fontsize=11, style='italic', color='dimgray')
+                fig.text(0.5, 0.91, hyperparams, ha='center', fontsize=11, style='italic', color='dimgray', wrap=True)
 
             # Achsenbeschriftungen
             ax1.set_title("Individual Training Runs", fontsize=14, pad=10)

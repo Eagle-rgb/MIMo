@@ -426,7 +426,10 @@ An example is '251206_prone_linear_1e6_test'
     # Set learning rate for PPO algorithm.
     if algorithm=='PPO':
         if load_model:
-            model = RL.load(load_model, env)
+            model = RL.load(load_model, env,
+                            tensorboard_log=save_dir,
+                            learning_rate=learning_rate,
+                            verbose=1)
         else:
             model = RL("MultiInputPolicy", env,
                     tensorboard_log=save_dir,

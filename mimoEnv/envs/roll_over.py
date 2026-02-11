@@ -110,6 +110,7 @@ class MIMoRollOverEnv(MIMoEnv):
                  achieved_goal_in_observation=False,
                  # Penalization factor for action penalization.
                  pen_factor=0.01,
+                 pca=None,
                  **kwargs):
 
         if starting_position not in ["prone", "supine", "alternating"]:
@@ -149,6 +150,7 @@ class MIMoRollOverEnv(MIMoEnv):
                          goals_in_observation=True,
                          done_active=True,
                          achieved_goal_in_observation=achieved_goal_in_observation,
+                         pca=pca,
                          **kwargs)
 
         self.init_position=self.data.qpos.copy()
