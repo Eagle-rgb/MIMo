@@ -734,14 +734,19 @@ class MIMoEnv(MujocoEnv, utils.EzPickle):
         if self.motor_delay > 0:
             self._action_history = []
 
-    def get_proprio_obs(self):
+    def get_proprio_obs(self, sparse=False):
         """ Collects and returns the outputs of the proprioceptive system.
 
         Override this function if you want to make some simple post-processing!
 
+        Parmeters:
+            sparse (bool): Return only relative joint qpos as proprioception observation.
+
         Returns:
             numpy.ndarray: A numpy array containing the proprioceptive output.
         """
+        if sparse:
+            return self.proprioception.get_sparse_proprioception_obs()
         return self.proprioception.get_proprioception_obs()
 
     def get_touch_obs(self):
@@ -782,7 +787,7 @@ class MIMoEnv(MujocoEnv, utils.EzPickle):
         """ Returns the desired goal observation. """
         raise NotImplementedError
 
-    def _get_obs(self, without_goals=False):
+    def _get_obs(self, without_goals=False, sparse_proprio=False):
         """Returns the observation.
 
         This function should return all simulation outputs relevant to whatever learning algorithm you wish to use. We
@@ -798,7 +803,7 @@ class MIMoEnv(MujocoEnv, utils.EzPickle):
             Dict: A dictionary containing simulation outputs with separate entries for each sensor modality.
         """
         # robot proprioception:
-        proprio_obs = self.get_proprio_obs()
+        proprio_obs = self.get_proprio_obs(sparse_proprio)
         observation_dict = {
             "observation": proprio_obs,
         }

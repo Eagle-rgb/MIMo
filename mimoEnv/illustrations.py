@@ -279,10 +279,14 @@ def main():
                         help='Choose the starting position of MIMo in the roll_over environment. Put '
                              'either \'supine\', \'prone\' or \'alternating\'. Default: \'prone\'.')
     parser.add_argument('--roll_over_goal_function', required=False,
-                        choices=['angle', 'cos', 'intrinsic', 'intrinsic_vesti'],
+                        choices=['angle', 'cos', 'intrinsic'],
                         default='cos',
                         help='Choose the function of achieved goal for the roll_over environment. Put '
-                             'either \'angle\', \'cos\' or \'intrinsic\' or \'intrinsic_vesti\'. Default: \'cos\'.')
+                             'either \'angle\', \'cos\' or \'intrinsic\'. Default: \'cos\'.')
+    parser.add_argument('--intrinsic_goal', required=False,
+                        choices=['all', 'vesti', 'vesti_acc', 'sparse_proprio'],
+                        default='all',
+                        help='Goal to use for intrinsic goal achievement function.')
     parser.add_argument('--roll_over_model_path_auto', action='store_true',
                         help="""If set, the path of the model for the roll_over environment
 is automatically set to the following:

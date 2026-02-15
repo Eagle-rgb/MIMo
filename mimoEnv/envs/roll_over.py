@@ -111,6 +111,7 @@ class MIMoRollOverEnv(MIMoEnv):
                  # Penalization factor for action penalization.
                  pen_factor=0.01,
                  pca=None,
+                 intrinsic_goal='all',
                  **kwargs):
 
         if starting_position not in ["prone", "supine", "alternating"]:
@@ -118,9 +119,14 @@ class MIMoRollOverEnv(MIMoEnv):
             msg += "Needs to be 'prone', 'supine' or 'alternating'."
             raise ValueError(msg)
 
-        if goal_function not in ['angle', 'cos', 'intrinsic', 'intrinsic_vesti']:
+        if goal_function not in ['angle', 'cos', 'intrinsic']:
             msg = f"Unknown reward function '{goal_function}'. "
-            msg += "Needs to be 'angle', 'cos' or 'intrinsic' or 'intrinsic_vesti'."
+            msg += "Needs to be 'angle', 'cos' or 'intrinsic'."
+            raise ValueError(msg)
+        
+        if intrinsic_goal not in ['all', 'vesti', 'vesti_acc', 'sparse_proprio']:
+            msg = f"Unknown intrinsic goal '{intrinsic_goal}'. "
+            msg += "Needs to be 'all', 'vesti', 'vesti_acc' or 'sparse_proprio'."
             raise ValueError(msg)
 
         self.intrinsic_goals_created = False
@@ -132,6 +138,7 @@ class MIMoRollOverEnv(MIMoEnv):
         self.pbrs_w=pbrs_w
         self.steps_after_reset=steps_after_reset
         self.pen_factor=pen_factor
+        self.intrinsic_goal=intrinsic_goal
 
         self.starting_position=starting_position
         self.alternating_starting_position=self.starting_position=='alternating'
@@ -161,7 +168,7 @@ class MIMoRollOverEnv(MIMoEnv):
         # performing the environment dynamics to receive the next state. Reset to 0 on environment reset.
         self.pbrs_last_state_potential=0
 
-        if self.goal_function == 'intrinsic' or self.goal_function == 'intrinsic_vesti':
+        if self.goal_function == 'intrinsic':
             print("Creating prone and supine intrinsic goals.")
             self.create_prone_and_supine_intrinsic_goal()
         self.intrinsic_goals_created = True
@@ -325,25 +332,52 @@ class MIMoRollOverEnv(MIMoEnv):
         return self._get_obs()
     
     def get_goal_space(self, obs_space):
-        if self.goal_function == 'intrinsic_vesti':
-            return spaces.Box(-np.inf, np.inf, shape=self.get_vestibular_obs().shape, dtype=np.float64)
-        if self.goal_function == 'intrinsic':
-            # stableBaselines is incompatible with nested dict spaces, which is quite
-            # unfortunate, but this simply means that instead of directly using the
-            # observation space as a goal space, we instead calculate a box space by
-            # flattening the dict obs space.
-            # Since all our observations are scalars, we just add up the shapes
-            # of each space.
+        if self.goal_function != 'intrinsic':
+            return spaces.Box(-np.inf, np.inf, shape=(1,), dtype=np.float64)
+
+        # stableBaselines is incompatible with nested dict spaces, which is quite
+        # unfortunate, but this simply means that instead of directly using the
+        # observation space as a goal space, we instead calculate a box space by
+        # flattening the dict obs space.
+        # Since all our observations are scalars, we just add up the shapes
+        # of each space.
+                    
+        # Intrinsic goal space. Here we need to check the chose intrinsic goal.
+        if self.intrinsic_goal == 'all':
+            # Take entire observation as goal.
             space_flattened = 0
 
             for space in obs_space.values():
                 space_flattened += space.shape[0]
             return spaces.Box(-np.inf, np.inf, shape=(space_flattened,), dtype=np.float64)
-        else:
-            return spaces.Box(-np.inf, np.inf, shape=(1,), dtype=np.float64)
+        
+        if self.intrinsic_goal == 'vesti':
+            # Take only vestibular observation as goal.
+            return spaces.Box(-np.inf, np.inf, shape=self.get_vestibular_obs().shape, dtype=np.float64)
+        
+        if self.intrinsic_goal == 'vesti_acc':
+            # Take only accelerometer of vestibular observation as goal.
+            return spaces.Box(-np.inf, np.inf, shape=(3,), dtype=np.float64)
+        
+        if self.intrinsic_goal == 'sparse_proprio':
+            # Take entire observation as goal, but only sparse proprio observation (i.e. only joint qpos)
+            # as proprio observation.
+            space_flattened = self.proprioception.get_sparse_proprioception_obs()
+
+            keys_without_proprio = list(obs_space.keys())
+            keys_without_proprio.remove('observation')
+
+            for key in keys_without_proprio:
+                space_flattened += obs_space[key].shape[0]
+            return spaces.Box(-np.inf, np.inf, shape=(space_flattened,), dtype=np.float64)
+        
+        raise NotImplementedError
         
     def get_desired_goal_obs(self):
         if self.goal_function != 'intrinsic':
+            return self.goal
+        
+        if self.intrinsic_goal == 'vesti' or self.intrinsic_goal == 'vesti_acc':
             return self.goal
         
         # For intrinsic goal function, we cannot simply return the goal, since it has
@@ -361,7 +395,7 @@ class MIMoRollOverEnv(MIMoEnv):
         Returns:
             np.array[float]: [0.95]
         """
-        if self.goal_function == "intrinsic" or self.goal_function == 'intrinsic_vesti':
+        if self.goal_function == "intrinsic":
             # We initialize intrinsic goals at the very end of the constructor of this environment.
             # In between, we do get observation calls that call this function 'sample_goal'. Since
             # the goals 'prone_intrinsic_goal' and 'supine_intrinsic_goal' are not yet created,
@@ -376,21 +410,16 @@ class MIMoRollOverEnv(MIMoEnv):
                 return self.get_achieved_goal()
         
         return np.array([0.95])
-
-    def _get_standardized_rotation(self, body_name):
-        """ Get the standardized rotation of a body specified by name.
-
-        Arguments:
-            body_name (str): Name of the body to get the rotation for.
-                We usually only use 'hip' or 'chest' here.
-
-        Returns:
-            float: The standardized rotation of the body.
+    
+    def get_rotation_degrees_to_global_z_axis(self, body_name):
+        """ Returns the rotation in degrees of the body part 'body_name' local x axis
+        to the global z axis using rotation around y axis (i.e. rolling). Respects
+        the current 'starting_position', i.e. for prone, it returns the rotation to
+        the global positive z axis, while for supine, it returns the rotation to the
+        global negative z axis.
         """
-        # Get the rotation matrix of the body.
-        xmat = self.data.body(body_name).xmat.reshape(3, 3)
-        R_20 = xmat[2, 0]  # Entry row 2, col 0 in the rotation matrix. This entry describes how much the local
-            # x axis looks in the direction of the global z-axis. MIMo has its local axis as follows:
+        # Some comments copied from old function:
+                    # x axis looks in the direction of the global z-axis. MIMo has its local axis as follows:
             # local x axis: looking back-to-stomach where he is looking at.
             # local y axis: left arm to right arm
             # local z axis: feet to head
@@ -408,12 +437,29 @@ class MIMoRollOverEnv(MIMoEnv):
         # The angle is the angle between the unit-length vector (x,y) and the x-axis. The
         # point (x,y) is defined as x=-xmat[2,0] and y chosen as normalizing factor. You will
         # always find an angle between -180 and +180 degrees that works here.
-        angle_in_radiants = np.arctan2(
-            -xmat[2, 0],
-            np.sqrt(xmat[2, 1] ** 2 + xmat[2, 2] ** 2)
-        )
-        # 'angle_in_degrees' is around 90° for prone starting position and around -90° for supine starting position.
-        angle_in_degrees = angle_in_radiants * (180 / np.pi)
+        xmat = self.data.body(body_name).xmat.reshape(3, 3)
+        dot_product = xmat[2,0]  # dot product from local x axis to global z axis.
+        if self.starting_position == 'supine':
+            dot_product *= -1
+
+        # Calculating rotation in radiants by only rotating around y axis. (That is the
+        # normalization term as second argument to 'arctan2')
+        angle_rad = np.arctan2(-dot_product, np.sqrt(xmat[2, 1] ** 2 + xmat[2, 2] ** 2))
+        angle_deg = angle_rad * 180.0 / np.pi
+
+        return angle_deg
+
+    def _get_standardized_rotation(self, body_name):
+        """ Get the standardized rotation of a body specified by name.
+
+        Arguments:
+            body_name (str): Name of the body to get the rotation for.
+                We usually only use 'hip' or 'chest' here.
+
+        Returns:
+            float: The standardized rotation of the body.
+        """
+        angle_in_degrees = self.get_rotation_degrees_to_global_z_axis(body_name)
 
         # We use prone as default starting position. We want 0 reward
         # at 'angle_in_degrees' 90°, 0.5 reward at 180° or -180° and 
@@ -427,17 +473,15 @@ class MIMoRollOverEnv(MIMoEnv):
 
         return angle_norm
 
-    def get_vertical_component_of_local_x_axis(self, body_name):
-        """ Returns the component R[2,0] of the rotation matrix for the specified body.
-        This measurement is how much the local x-axis points in the direction of the global z-axis,
-        i.e. how much it points up. In the prone position, the local x axis of the hip and chest of MIMo
-        point towards (-z) global axis.
+    def get_dot_local_x_to_global_z(self, body_name):
+        """ Returns the dot product of the local x axis to the global z axis for the specified body.
+        This is just the R[2,0] entry in the rotation matrix.
 
         Parameters:
             body_name (str): Name of the body to get the rotation for.
 
         Returns:
-            float: The vertical component R[2,0] of the local x-axis.
+            float: The dot product between the body's local x axis and the global z axis.
         """
         return self.data.body(body_name).xmat.reshape(3, 3)[2, 0]
 
@@ -451,11 +495,6 @@ class MIMoRollOverEnv(MIMoEnv):
         """
         rot_hip = self._get_standardized_rotation("hip")
         rot_chest = self._get_standardized_rotation("chest")
-
-        # Goal rotation is exactly the opposite for supine starting position.
-        if self.starting_position=="supine":
-            rot_hip = 1 - rot_hip
-            rot_chest = 1 - rot_chest
 
         return np.array([(rot_hip + rot_chest) / 2.0])
 
@@ -472,8 +511,8 @@ class MIMoRollOverEnv(MIMoEnv):
             np.array[float]: Average of dot product of local x axis of chest and hip
                 and the global z axis.
         """
-        rot_hip = self.get_vertical_component_of_local_x_axis("hip")
-        rot_chest = self.get_vertical_component_of_local_x_axis("chest")
+        rot_hip = self.get_dot_local_x_to_global_z("hip")
+        rot_chest = self.get_dot_local_x_to_global_z("chest")
 
         # Goal rotation is exactly the opposite for supine starting position.
         if self.starting_position=="supine":
@@ -485,10 +524,19 @@ class MIMoRollOverEnv(MIMoEnv):
         return np.array([(rot_hip + rot_chest) / 2.0])
     
     def get_achieved_goal_intrinsic(self):
-        return self._get_obs(without_goals=True)
-    
-    def get_achieved_goal_intrinsic_vesti(self):
-        return self.get_vestibular_obs()
+        if self.intrinsic_goal == 'vesti':
+            return self.get_vestibular_obs()
+        
+        if self.intrinsic_goal == 'vesti_acc':
+            return self.get_vestibular_obs()[:3]
+        
+        if self.intrinsic_goal == 'sparse_proprio':
+            return self._get_obs(without_goals=True, sparse_proprio=True)
+        
+        if self.intrinsic_goal == 'all':
+            return self._get_obs(without_goals=True, sparse_proprio=False)
+        
+        raise NotImplementedError
 
     def get_achieved_goal(self):
         """ Returns the goal calculated from either of the tree goal functions.
@@ -499,8 +547,8 @@ class MIMoRollOverEnv(MIMoEnv):
             return self.get_achieved_goal_cos()
         elif self.goal_function=='intrinsic':
             return self.get_achieved_goal_intrinsic()
-        else:
-            return self.get_achieved_goal_intrinsic_vesti()
+        
+        raise NotImplementedError
 
     def get_potential(self):
         """ Returns the potential of the current state.
@@ -516,7 +564,7 @@ class MIMoRollOverEnv(MIMoEnv):
         """
         achieved_goal = self.get_achieved_goal()
 
-        if self.goal_function != 'intrinsic':
+        if self.goal_function != 'intrinsic' or self.intrinsic_goal == 'vesti' or self.intrinsic_goal == 'vesti_acc':
             desired_goal = self.goal
 
             if self.is_success(achieved_goal, desired_goal):
@@ -543,6 +591,17 @@ class MIMoRollOverEnv(MIMoEnv):
         """
         # Cache potential of current state to be used in calculating next reward.
         self.pbrs_last_state_potential = self.get_potential()
+        obs, reward, terminated, truncated, info = super().step(action)
+
+        # 15.02.2026 Add hip and chest rotation in degrees to info dict.
+        deg_hip = self.get_rotation_degrees_to_global_z_axis('hip')
+        deg_chest = self.get_rotation_degrees_to_global_z_axis('chest')
+
+        info['episode'] = {
+            'hip_deg': deg_hip,
+            'chest_deg': deg_chest
+        }
+
         return super().step(action)
     
     def compute_penalization(self):

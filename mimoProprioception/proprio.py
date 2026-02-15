@@ -130,6 +130,10 @@ class SimpleProprioception(Proprioception):
         else:
             self.limit_thresh = .035  # ~2 degrees in radians
 
+    def get_sparse_proprioception_obs(self):
+        """ Returns only the relative joint positions list. """
+        return self.env.data.qpos[self.joint_qpos].flatten()
+
     def get_proprioception_obs(self):
         """ Produce the proprioceptive sensor outputs.
 
@@ -194,6 +198,9 @@ class SimpleProprioception(Proprioception):
             List[range(int)]: List of ranges specifiying indexes in proprioception observation 'obs' for each
                 joint - in the same order as 'self.joint_ids'.
         """
+        ### Note!!! This function is wrong at the moment. Proprioception obs list does NOT start with qpos
+        ### It starts with whatever key comes first in the sorted keys!!!
+
         joint_qpos_addr_ranges = []
 
         # Start index of the range the current joint observation lies in in the proprioception observation.

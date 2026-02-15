@@ -36,13 +36,14 @@ for i in $(seq 1 $NUMBER_OF_RUNS); do
 		"--save_every=1000000" \
 		"--roll_over_starting_position=supine" \
 		"--algorithm=PPO" \
-		"--nopen" \
+		"--pen_fac=0.02" \
 		"--roll_over_model_path_auto" \
-		"--roll_over_goal_function=intrinsic" \
+		"--roll_over_goal_function=cos" \
 		"--save_model=${MODEL_NAME}_run_${i}" \
-		"--proprio_only_qpos" \
+		"--test" \
+		"--render_video" \
 		"--pbrs" \
-		"--pbrs_w=10" \
+		"--pbrs_w=100" \
 		"--lr=0.0003" &
 done
 
