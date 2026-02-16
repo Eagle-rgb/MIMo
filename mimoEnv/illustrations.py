@@ -42,6 +42,7 @@ import yaml
 import numpy as np
 
 from mimoEnv.envs.roll_over import TOUCH_PARAMS as ROLL_OVER_TOUCH_PARAMS
+from mimoEnv.envs.roll_over_logger import HipChestAngleLogger
 
 
 def test(wrapped_env, save_dir, model=None, render_video=False, render_actuations=False):
@@ -157,7 +158,9 @@ def train(model, train_for, save_every, save_dir, isr):
             print("I will reach 75% ISR training threshold after this training iteration. " \
             f"Splitting up this iteration in first {train_for_until_reaching_75} steps and then " \
             "disabling isr.")
-            model.learn(total_timesteps=train_for_until_reaching_75, reset_num_timesteps=False)
+            model.learn(total_timesteps=train_for_until_reaching_75,
+                        reset_num_timesteps=False,
+                        callback=HipChestAngleLogger())
 
             print("Disabling isr...")
 
@@ -169,10 +172,14 @@ def train(model, train_for, save_every, save_dir, isr):
             # And now train the remaining timesteps.
             if train_for_until_reaching_75 < train_for_iter:
                 print(f"Training remaining {train_for_iter-train_for_until_reaching_75} timesteps.")
-                model.learn(total_timesteps=train_for_iter-train_for_until_reaching_75, reset_num_timesteps=False)
+                model.learn(total_timesteps=train_for_iter-train_for_until_reaching_75,
+                            reset_num_timesteps=False,
+                            callback=HipChestAngleLogger())
 
         else:
-            model.learn(total_timesteps=train_for_iter, reset_num_timesteps=False)
+            model.learn(total_timesteps=train_for_iter,
+                        reset_num_timesteps=False,
+                        callback=HipChestAngleLogger())
 
         model.save(os.path.join(save_dir, "model_" + str(counter)))
 

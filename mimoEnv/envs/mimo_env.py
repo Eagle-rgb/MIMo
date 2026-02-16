@@ -460,7 +460,6 @@ class MIMoEnv(MujocoEnv, utils.EzPickle):
             self._action_history = []
 
         self.action_space = self.actuation_model.get_action_space()
-        print(f"Using action space: {self.action_space}")
 
     def _set_observation_space(self):
         """ Sets the observation space attribute.

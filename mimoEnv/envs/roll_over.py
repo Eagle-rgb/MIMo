@@ -411,7 +411,7 @@ class MIMoRollOverEnv(MIMoEnv):
         
         return np.array([0.95])
     
-    def get_rotation_degrees_to_global_z_axis(self, body_name):
+    def get_rotation_degrees_to_goal_z_axis(self, body_name):
         """ Returns the rotation in degrees of the body part 'body_name' local x axis
         to the global z axis using rotation around y axis (i.e. rolling). Respects
         the current 'starting_position', i.e. for prone, it returns the rotation to
@@ -444,10 +444,17 @@ class MIMoRollOverEnv(MIMoEnv):
 
         # Calculating rotation in radiants by only rotating around y axis. (That is the
         # normalization term as second argument to 'arctan2')
-        angle_rad = np.arctan2(-dot_product, np.sqrt(xmat[2, 1] ** 2 + xmat[2, 2] ** 2))
+        angle_rad = np.arctan2(np.sqrt(xmat[2, 2] ** 2 + xmat[2, 1] ** 2), dot_product)
         angle_deg = angle_rad * 180.0 / np.pi
 
         return angle_deg
+    
+    def get_achieved_rotation_degrees(self, body_name):
+        """ Returns the achieved rotation of body 'body_name's local x axis to global z axis.
+        This is simply 180° minus whatever 'get_rotation_degrees_to_global_z_axis'."""
+        abs_degrees = abs(self.get_rotation_degrees_to_goal_z_axis(body_name))
+        abs_degrees = 180 - abs_degrees
+        return abs_degrees
 
     def _get_standardized_rotation(self, body_name):
         """ Get the standardized rotation of a body specified by name.
@@ -459,20 +466,14 @@ class MIMoRollOverEnv(MIMoEnv):
         Returns:
             float: The standardized rotation of the body.
         """
-        angle_in_degrees = self.get_rotation_degrees_to_global_z_axis(body_name)
+        # 180°: We are at starting position.
+        # 90° or -90°: We are halfway there
+        # 0°: We are done.
+        angle_in_degrees = self.get_rotation_degrees_to_goal_z_axis(body_name)
 
-        # We use prone as default starting position. We want 0 reward
-        # at 'angle_in_degrees' 90°, 0.5 reward at 180° or -180° and 
-        # 1 reward at -90°.
-        if angle_in_degrees >= -90 and angle_in_degrees <= 90:
-            angle_norm = 1 - (angle_in_degrees + 90) / 180
-        elif angle_in_degrees < -90: # -180° to -90°
-            angle_norm = 1 - (angle_in_degrees + 90) / -180
-        else: # 90° to 180°
-            angle_norm = (angle_in_degrees - 90) / 180
-
-        return angle_norm
-
+        # We want a value in [0,1]. So we scale linear from 180°=0 to 0°=1 with abs(..)
+        return abs(angle_in_degrees) / 180.0
+    
     def get_dot_local_x_to_global_z(self, body_name):
         """ Returns the dot product of the local x axis to the global z axis for the specified body.
         This is just the R[2,0] entry in the rotation matrix.
@@ -593,16 +594,7 @@ class MIMoRollOverEnv(MIMoEnv):
         self.pbrs_last_state_potential = self.get_potential()
         obs, reward, terminated, truncated, info = super().step(action)
 
-        # 15.02.2026 Add hip and chest rotation in degrees to info dict.
-        deg_hip = self.get_rotation_degrees_to_global_z_axis('hip')
-        deg_chest = self.get_rotation_degrees_to_global_z_axis('chest')
-
-        info['episode'] = {
-            'hip_deg': deg_hip,
-            'chest_deg': deg_chest
-        }
-
-        return super().step(action)
+        return obs, reward, terminated, truncated, info
     
     def compute_penalization(self):
         return 0 if self.nopen else self.pen_factor * np.square(self.data.ctrl).sum()

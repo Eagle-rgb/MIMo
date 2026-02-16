@@ -7,7 +7,7 @@ from tb_plot_utils import load_tensorboard_runs, load_model_hyperparams, interpo
 
 # --- Konfiguration ---
 BASE_DIR = "."
-TAGS_TO_LOAD = ["rollout/ep_rew_mean", "rollout/success_rate"]
+TAGS_TO_LOAD = ["rollout/ep_rew_mean", "rollout/success_rate", "rollout/ep_end_hip_deg_mean", "rollout/ep_end_chest_deg_mean"]
 N_POINTS = 500  # Auflösung der X-Achse
 DATE_FORMAT = r'%y-%m-%d'
 
