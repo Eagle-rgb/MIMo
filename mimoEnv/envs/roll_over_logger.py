@@ -7,8 +7,8 @@ class HipChestAngleLogger(BaseCallback):
             # Is the episode finished?
             if "episode" in info:
                 # Call environment function to get hip and chest angle.
-                hip = self.training_env.env_method("get_achieved_rotation_degrees", "hip")[i]
-                chest = self.training_env.env_method("get_achieved_rotation_degrees", "chest")[i]
+                hip = info['hip_deg']
+                chest = info['chest_deg']
 
                 self.logger.record("rollout/ep_end_hip_deg_mean", hip)
                 self.logger.record("rollout/ep_end_chest_deg_mean", chest)

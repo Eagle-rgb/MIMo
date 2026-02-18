@@ -109,7 +109,7 @@ class MIMoRollOverEnv(MIMoEnv):
                  steps_after_reset=30,
                  achieved_goal_in_observation=False,
                  # Penalization factor for action penalization.
-                 pen_factor=0.01,
+                 pen_factor=0.02,
                  pca=None,
                  intrinsic_goal='all',
                  **kwargs):
@@ -318,7 +318,7 @@ class MIMoRollOverEnv(MIMoEnv):
         Returns:
             Dict: Observations after reset.
         """
-                # Alternate starting position if that setting is enabled.
+        # Alternate starting position if that setting is enabled.
         if self.alternating_starting_position:
             if self.starting_position=='prone':
                 self.starting_position='supine'
@@ -593,6 +593,10 @@ class MIMoRollOverEnv(MIMoEnv):
         # Cache potential of current state to be used in calculating next reward.
         self.pbrs_last_state_potential = self.get_potential()
         obs, reward, terminated, truncated, info = super().step(action)
+
+        # Write achieved hip and chest rotation in info dict.
+        info['chest_deg'] = self.get_achieved_rotation_degrees('chest')
+        info['hip_deg'] = self.get_achieved_rotation_degrees('hip')
 
         return obs, reward, terminated, truncated, info
     

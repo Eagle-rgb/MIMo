@@ -323,7 +323,7 @@ An example is '251206_prone_linear_1e6_test'
     parser.add_argument('--achieved_goal_in_observation', action='store_true', default=False)
     parser.add_argument('--proprio_only_qpos', action='store_true', default=False,
                         help="Only uses 'qpos' of each joint in proprio observation.")
-    parser.add_argument('--pen_fac', default=0.01, type=float, required=False,
+    parser.add_argument('--pen_fac', default=0.02, type=float, required=False,
                         help="Penalization factor when action penalization is active.")
     
     args = parser.parse_args()
