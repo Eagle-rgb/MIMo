@@ -112,6 +112,9 @@ class MIMoRollOverEnv(MIMoEnv):
                  pen_factor=0.02,
                  pca=None,
                  intrinsic_goal='all',
+                 # Intrinsic goal weightings. Not-specified keys are automatically
+                 # defaulted to 1.0.
+                 intrinsic_goal_w={},
                  **kwargs):
 
         if starting_position not in ["prone", "supine", "alternating"]:
@@ -139,6 +142,13 @@ class MIMoRollOverEnv(MIMoEnv):
         self.steps_after_reset=steps_after_reset
         self.pen_factor=pen_factor
         self.intrinsic_goal=intrinsic_goal
+
+        # Initialize intrinsic goal weighting dict, i.e. add missing sensor keys.
+        for key in ['observation', 'touch', 'vestibular']:
+            if key not in intrinsic_goal_w:
+                intrinsic_goal_w[key] = 1.0
+
+        self.intrinsic_goal_w = intrinsic_goal_w
 
         self.starting_position=starting_position
         self.alternating_starting_position=self.starting_position=='alternating'
@@ -573,14 +583,8 @@ class MIMoRollOverEnv(MIMoEnv):
 
             return -np.linalg.norm(desired_goal - achieved_goal)
         
-        # For intrinsic goal function, we have factor for each goal observation.
-        goal_scaling_dict = {
-            'observation': 0.1,
-            'vestibular': 1.0,
-            'touch': 0.4
-        }
-        concat_scaled_achieved_goal = np.concatenate([achieved_goal[key] * goal_scaling_dict[key] for key in sorted(achieved_goal.keys())])
-        concat_desired_goal = np.concatenate([self.goal[key] * goal_scaling_dict[key] for key in sorted(self.goal.keys())])
+        concat_scaled_achieved_goal = np.concatenate([achieved_goal[key] * self.intrinsic_goal_w[key] for key in sorted(achieved_goal.keys())])
+        concat_desired_goal = np.concatenate([self.goal[key] * self.intrinsic_goal_w[key] for key in sorted(self.goal.keys())])
 
         return -np.linalg.norm(concat_desired_goal - concat_scaled_achieved_goal)
 

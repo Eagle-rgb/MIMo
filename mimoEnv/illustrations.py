@@ -325,6 +325,10 @@ An example is '251206_prone_linear_1e6_test'
                         help="Only uses 'qpos' of each joint in proprio observation.")
     parser.add_argument('--pen_fac', default=0.02, type=float, required=False,
                         help="Penalization factor when action penalization is active.")
+    parser.add_argument('--intrinsic_goal_proprio_w', default=0.01, type=float, required=False,
+                        help="Weighting of proprio goal in intrinsic goal for state potential. Default: 0.01.")
+    parser.add_argument('--intrinsic_goal_vesti_w', default=1.0, type=float, required=False,
+                        help="Weighting of vesti goal in intrinsic goal for state potential. Default: 1.0.")
     
     args = parser.parse_args()
     env_name = args.env
@@ -351,6 +355,18 @@ An example is '251206_prone_linear_1e6_test'
     achieved_goal_in_observation=args.achieved_goal_in_observation
     proprio_only_qpos = args.proprio_only_qpos
     pen_factor = args.pen_fac
+
+    # Weightings of different sensors in intrinsic goals. We usually weight vestibular much
+    # higher (1.0 compared to 0.01) than proprioception observation.
+    intrinsic_goal_proprio_w = args.intrinsic_goal_proprio_w
+    intrinsic_goal_vesti_w = args.intrinsic_goal_vesti_w
+
+    # Create a dict of the weights to pass to the roll_over environment. Missing weights like
+    # touch are automatically created and defaulted to 1.0.
+    intrinsic_goal_w = {
+        'observation': intrinsic_goal_proprio_w,
+        'vestibular': intrinsic_goal_vesti_w
+    }
 
     if proprio_only_qpos:
         print("Warning! Only using qpos in proprioception obseration.")
@@ -413,7 +429,8 @@ An example is '251206_prone_linear_1e6_test'
             achieved_goal_in_observation=achieved_goal_in_observation,
             proprio_params=DEFAULT_PROPRIOCEPTION_PARAMS if not proprio_only_qpos else PROPRIOCEPTION_PARAMS_ONLY_QPOS,
             pbrs_w=pbrs_w,
-            pen_factor=pen_factor)
+            pen_factor=pen_factor,
+            intrinsic_goal_w=intrinsic_goal_w)
         # if log_actuations:
         #     wrapped_env = MIMoRollOverWrapper(env, log_file=os.path.join(save_dir,"actuation_log.csv"))
         # else:
@@ -468,6 +485,8 @@ An example is '251206_prone_linear_1e6_test'
         'obs_norm': observation_normalization,
         'touch': touch,
         'pen_factor': pen_factor,
+        'vesti_w': intrinsic_goal_vesti_w,
+        'proprio_w': intrinsic_goal_proprio_w
     }
     with open(f'{save_dir}/data.yml', 'w') as outfile:
         yaml.dump(yaml_data, outfile, default_flow_style=False)
