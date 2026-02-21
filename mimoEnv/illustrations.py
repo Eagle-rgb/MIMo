@@ -355,6 +355,7 @@ An example is '251206_prone_linear_1e6_test'
     achieved_goal_in_observation=args.achieved_goal_in_observation
     proprio_only_qpos = args.proprio_only_qpos
     pen_factor = args.pen_fac
+    intrinsic_goal = args.intrinsic_goal
 
     # Weightings of different sensors in intrinsic goals. We usually weight vestibular much
     # higher (1.0 compared to 0.01) than proprioception observation.
@@ -430,6 +431,7 @@ An example is '251206_prone_linear_1e6_test'
             proprio_params=DEFAULT_PROPRIOCEPTION_PARAMS if not proprio_only_qpos else PROPRIOCEPTION_PARAMS_ONLY_QPOS,
             pbrs_w=pbrs_w,
             pen_factor=pen_factor,
+            intrinsic_goal=intrinsic_goal,
             intrinsic_goal_w=intrinsic_goal_w)
         # if log_actuations:
         #     wrapped_env = MIMoRollOverWrapper(env, log_file=os.path.join(save_dir,"actuation_log.csv"))
@@ -486,7 +488,8 @@ An example is '251206_prone_linear_1e6_test'
         'touch': touch,
         'pen_factor': pen_factor,
         'vesti_w': intrinsic_goal_vesti_w,
-        'proprio_w': intrinsic_goal_proprio_w
+        'proprio_w': intrinsic_goal_proprio_w,
+        'intrinsic_goal': intrinsic_goal
     }
     with open(f'{save_dir}/data.yml', 'w') as outfile:
         yaml.dump(yaml_data, outfile, default_flow_style=False)

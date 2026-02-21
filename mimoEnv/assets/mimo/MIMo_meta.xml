@@ -117,9 +117,15 @@
 		<torque name="proprio:left_knee" site="torque_left_knee"/>
 		<torque name="proprio:left_ankle" site="torque_left_ankle"/>
 		<torque name="proprio:left_toes" site="torque_left_toes"/>
+
+		<framelinvel name="kobayashi:left_wrist" objtype="site" objname="BODY_25:LWrist"/>
+		<framelinvel name="kobayashi:right_wrist" objtype="site" objname="BODY_25:RWrist"/>
+		<framelinvel name="kobayashi:left_ankle" objtype="site" objname="BODY_25:LAnkle"/>
+		<framelinvel name="kobayashi:right_ankle" objtype="site" objname="BODY_25:RAnkle"/>
+		<framelinvel name="kobayashi:neck" objtype="site" objname="BODY_25:Neck"/>
 	</sensor>
 
-    <actuator>
+  <actuator>
 		<motor class="mimo"	name="act:hip_bend" 						joint="robot:hip_bend1" 				gear="10.58" 		forcerange="-1 .765"	user=".8574 32.93 22.97"/>
 		<motor class="mimo"	name="act:hip_twist" 						joint="robot:hip_rot1" 					gear="3.63" 		forcerange="-1 1"		user="1.699 8.136 8.136"/>
 		<motor class="mimo"	name="act:hip_lean" 						joint="robot:hip_lean1" 				gear="7.25" 		forcerange="-1 1"		user="1.278 1.264 1.264"/>
