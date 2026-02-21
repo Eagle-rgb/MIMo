@@ -372,7 +372,7 @@ class MIMoRollOverEnv(MIMoEnv):
         if self.intrinsic_goal == 'sparse_proprio':
             # Take entire observation as goal, but only sparse proprio observation (i.e. only joint qpos)
             # as proprio observation.
-            space_flattened = self.proprioception.get_sparse_proprioception_obs()
+            space_flattened = self.proprioception.get_sparse_proprioception_obs().shape[0]
 
             keys_without_proprio = list(obs_space.keys())
             keys_without_proprio.remove('observation')
