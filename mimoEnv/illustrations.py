@@ -500,7 +500,9 @@ An example is '251206_prone_linear_1e6_test'
         'pen_factor': pen_factor,
         'vesti_w': intrinsic_goal_vesti_w,
         'proprio_w': intrinsic_goal_proprio_w,
-        'intrinsic_goal': intrinsic_goal
+        'intrinsic_goal': intrinsic_goal,
+        'freeze_leg': freeze_leg,
+        'freeze_arm': freeze_arm,
     }
     with open(f'{save_dir}/data.yml', 'w') as outfile:
         yaml.dump(yaml_data, outfile, default_flow_style=False)
