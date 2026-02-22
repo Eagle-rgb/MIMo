@@ -32,6 +32,7 @@ if __name__ == '__main__':
     model = RL.load(args.load_model, env)
     obs_df = collect_kobayashi_framelinvel_sensor_data(env, model, n_episodes=1)
     obs_df.plot()
+    plt.hlines(100.0, 0, 60, linestyles=['dashed'], colors=['yellow'])
     plt.xlabel("Step")
     plt.ylabel("Velocity (mm/sec)")
     plt.show()

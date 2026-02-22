@@ -115,6 +115,8 @@ class MIMoRollOverEnv(MIMoEnv):
                  # Intrinsic goal weightings. Not-specified keys are automatically
                  # defaulted to 1.0.
                  intrinsic_goal_w={},
+                 freeze_arm=False,
+                 freeze_leg=False,
                  **kwargs):
 
         if starting_position not in ["prone", "supine", "alternating"]:
@@ -168,6 +170,8 @@ class MIMoRollOverEnv(MIMoEnv):
                          done_active=True,
                          achieved_goal_in_observation=achieved_goal_in_observation,
                          pca=pca,
+                         freeze_arm=freeze_arm,
+                         freeze_leg=freeze_leg,
                          **kwargs)
 
         self.init_position=self.data.qpos.copy()

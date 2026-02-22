@@ -152,7 +152,7 @@ class SpringDamperModel(ActuationModel):
         """
         self.control_input = np.clip(action, self.action_space.low, self.action_space.high)
         self.env.data.ctrl[self.actuators] = self.control_input
-
+        
     def observations(self):
         """ Control input and output torque for each motor at this time step.
 

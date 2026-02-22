@@ -23,6 +23,7 @@ from mimoProprioception.proprio import SimpleProprioception, Proprioception
 from mimoActuation.actuation import ActuationModel, SpringDamperModel
 import mimoEnv.utils as mimo_utils
 from mimoActuation.actuation_pc1 import SpringDamperModel_PC1
+from mimoActuation.actuation_stationary_limbs import SpringDamperModel_Stationary_Limbs
 
 
 SCENE_DIRECTORY = os.path.abspath(os.path.join(__file__, "..", "..", "assets"))
@@ -331,7 +332,9 @@ class MIMoEnv(MujocoEnv, utils.EzPickle):
                  goals_in_observation=True,
                  achieved_goal_in_observation=False,
                  pca=None,
-                 done_active=False):
+                 done_active=False,
+                 freeze_leg=False,
+                 freeze_arm=False):
         utils.EzPickle.__init__(**locals())
 
         # self.fullpath = os.path.abspath(model_path)
@@ -367,6 +370,8 @@ class MIMoEnv(MujocoEnv, utils.EzPickle):
 
         # Currently a type, will be replaced with an instance during _initialize_simulation
         self.actuation_model = actuation_model
+        self.freeze_leg = freeze_leg
+        self.freeze_arm = freeze_arm
         self.pca = pca
 
         self._initial_qpos = initial_qpos
@@ -415,7 +420,9 @@ class MIMoEnv(MujocoEnv, utils.EzPickle):
         # Set qpos:
         self._set_initial_position(self._initial_qpos)
 
-        if self.actuation_model == SpringDamperModel_PC1:
+        if self.freeze_leg or self.freeze_arm and self.actuation_model == SpringDamperModel:
+            self.actuation_model = SpringDamperModel_Stationary_Limbs(self, self.mimo_actuators, self.freeze_arm, self.freeze_leg)
+        elif self.actuation_model == SpringDamperModel_PC1:
             self.actuation_model = SpringDamperModel_PC1(self, self.mimo_actuators, self.pca)
         else:
             self.actuation_model = self.actuation_model(self, self.mimo_actuators)

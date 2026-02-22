@@ -329,6 +329,10 @@ An example is '251206_prone_linear_1e6_test'
                         help="Weighting of proprio goal in intrinsic goal for state potential. Default: 0.01.")
     parser.add_argument('--intrinsic_goal_vesti_w', default=1.0, type=float, required=False,
                         help="Weighting of vesti goal in intrinsic goal for state potential. Default: 1.0.")
+    parser.add_argument('--freeze_leg', default=False, action='store_true', required=False,
+                        help="Freezes leg.")
+    parser.add_argument('--freeze_arm', default=False, action='store_true', required=False,
+                        help="Freezes arm.")
     
     args = parser.parse_args()
     env_name = args.env
@@ -356,6 +360,11 @@ An example is '251206_prone_linear_1e6_test'
     proprio_only_qpos = args.proprio_only_qpos
     pen_factor = args.pen_fac
     intrinsic_goal = args.intrinsic_goal
+    freeze_arm = args.freeze_arm
+    freeze_leg = args.freeze_leg
+
+    if freeze_arm or freeze_leg:
+        print("Warning! Some limbs are frozen.")
 
     # Weightings of different sensors in intrinsic goals. We usually weight vestibular much
     # higher (1.0 compared to 0.01) than proprioception observation.
@@ -432,7 +441,9 @@ An example is '251206_prone_linear_1e6_test'
             pbrs_w=pbrs_w,
             pen_factor=pen_factor,
             intrinsic_goal=intrinsic_goal,
-            intrinsic_goal_w=intrinsic_goal_w)
+            intrinsic_goal_w=intrinsic_goal_w,
+            freeze_leg=freeze_leg,
+            freeze_arm=freeze_arm)
         # if log_actuations:
         #     wrapped_env = MIMoRollOverWrapper(env, log_file=os.path.join(save_dir,"actuation_log.csv"))
         # else:

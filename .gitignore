@@ -22,3 +22,4 @@ algorithms
 png
 *.PNG
 intrinsic_goal_test
+MUJOCO_LOG.TXT
