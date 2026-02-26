@@ -87,7 +87,7 @@ def test(wrapped_env, save_dir, model=None, render_video=False, render_actuation
             if render_actuations:
                 img = evaluation_img(wrapped_env, up='actuations')
             else:
-                img = wrapped_env.mujoco_renderer.render(render_mode="rgb_array", camera_name='corner')
+                img = wrapped_env.mujoco_renderer.render(render_mode="rgb_array")
             images.append(img)
         if done or trunc:
             time.sleep(1)
@@ -333,6 +333,9 @@ An example is '251206_prone_linear_1e6_test'
                         help="Freezes leg.")
     parser.add_argument('--freeze_arm', default=False, action='store_true', required=False,
                         help="Freezes arm.")
+    parser.add_argument('--side_lying', default=False, action='store_true', required=False,
+                        help="Yields success already at side lying instead of making MIMo " \
+                        "do the full rollover.")
     
     args = parser.parse_args()
     env_name = args.env
@@ -362,6 +365,7 @@ An example is '251206_prone_linear_1e6_test'
     intrinsic_goal = args.intrinsic_goal
     freeze_arm = args.freeze_arm
     freeze_leg = args.freeze_leg
+    side_lying = args.side_lying
 
     if freeze_arm or freeze_leg:
         print("Warning! Some limbs are frozen.")
@@ -443,7 +447,8 @@ An example is '251206_prone_linear_1e6_test'
             intrinsic_goal=intrinsic_goal,
             intrinsic_goal_w=intrinsic_goal_w,
             freeze_leg=freeze_leg,
-            freeze_arm=freeze_arm)
+            freeze_arm=freeze_arm,
+            success_at_side_lying=side_lying)
         # if log_actuations:
         #     wrapped_env = MIMoRollOverWrapper(env, log_file=os.path.join(save_dir,"actuation_log.csv"))
         # else:
@@ -503,6 +508,7 @@ An example is '251206_prone_linear_1e6_test'
         'intrinsic_goal': intrinsic_goal,
         'freeze_leg': freeze_leg,
         'freeze_arm': freeze_arm,
+        'side_lying': side_lying
     }
     with open(f'{save_dir}/data.yml', 'w') as outfile:
         yaml.dump(yaml_data, outfile, default_flow_style=False)

@@ -38,12 +38,12 @@ for i in $(seq 1 $NUMBER_OF_RUNS); do
 		"--algorithm=PPO" \
 		"--nopen" \
 		"--roll_over_model_path_auto" \
-		"--roll_over_goal_function=intrinsic" \
+		"--roll_over_goal_function=cos" \
 		"--save_model=${MODEL_NAME}_run_${i}" \
-		"--intrinsic_goal=sparse_proprio" \
-		"--load_model=models/roll_over/26-02-21/supine/26-02-21_supine_${MODEL_NAME}_run_${i}/model_1.zip" \
 		"--pbrs" \
-		"--pbrs_w=10" \
+		"--pbrs_w=100" \
+		"--freeze_leg" \
+		"--freeze_arm" \
 		"--lr=0.0003" &
 done
 

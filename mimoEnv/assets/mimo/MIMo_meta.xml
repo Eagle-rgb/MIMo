@@ -118,11 +118,11 @@
 		<torque name="proprio:left_ankle" site="torque_left_ankle"/>
 		<torque name="proprio:left_toes" site="torque_left_toes"/>
 
-		<framelinvel name="kobayashi:left_wrist" objtype="site" objname="BODY_25:LWrist"/>
-		<framelinvel name="kobayashi:right_wrist" objtype="site" objname="BODY_25:RWrist"/>
-		<framelinvel name="kobayashi:left_ankle" objtype="site" objname="BODY_25:LAnkle"/>
-		<framelinvel name="kobayashi:right_ankle" objtype="site" objname="BODY_25:RAnkle"/>
-		<framelinvel name="kobayashi:neck" objtype="site" objname="BODY_25:Neck"/>
+		<framelinvel name="kobayashi:left_wrist" objtype="site" objname="KOBAYASHI_LWrist"/>
+		<framelinvel name="kobayashi:right_wrist" objtype="site" objname="KOBAYASHI_RWrist"/>
+		<framelinvel name="kobayashi:left_ankle" objtype="site" objname="KOBAYASHI_LAnkle"/>
+		<framelinvel name="kobayashi:right_ankle" objtype="site" objname="KOBAYASHI_RAnkle"/>
+		<framelinvel name="kobayashi:torso" objtype="site" objname="KOBAYASHI_Torso"/>
 	</sensor>
 
   <actuator>

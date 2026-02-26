@@ -117,6 +117,7 @@ class MIMoRollOverEnv(MIMoEnv):
                  intrinsic_goal_w={},
                  freeze_arm=False,
                  freeze_leg=False,
+                 success_at_side_lying=False,
                  **kwargs):
 
         if starting_position not in ["prone", "supine", "alternating"]:
@@ -144,7 +145,7 @@ class MIMoRollOverEnv(MIMoEnv):
         self.steps_after_reset=steps_after_reset
         self.pen_factor=pen_factor
         self.intrinsic_goal=intrinsic_goal
-
+        self.success_at_side_lying=success_at_side_lying
         # Initialize intrinsic goal weighting dict, i.e. add missing sensor keys.
         for key in ['observation', 'touch', 'vestibular']:
             if key not in intrinsic_goal_w:
@@ -187,6 +188,14 @@ class MIMoRollOverEnv(MIMoEnv):
             self.create_prone_and_supine_intrinsic_goal()
         self.intrinsic_goals_created = True
 
+        # For 'supine' starting position, rotate 'top' camera 180°, because else MIMo's head is at the bottom of the screen.
+        # 1. Kamera-ID finden
+        if self.starting_position == 'supine':
+            cam_top_id = self.model.camera('top').id
+            quat = np.zeros(4)
+            mujoco.mju_euler2Quat(quat, [0.0, 0.0, 0.0], 'xyz')
+            self.model.cam_quat[cam_top_id] = quat
+
     def create_prone_and_supine_intrinsic_goal(self):
         # Once for the current starting position and once for the opposite starting
         # position.
@@ -225,6 +234,9 @@ class MIMoRollOverEnv(MIMoEnv):
     def is_success(self, achieved_goal, desired_goal):
         """ Did we reach our goal rotation.
 
+        Desired rotation is 0.95 if we want to complete the full rollover. If
+        we only want to roll to the side, we put 0.5.
+
         Arguments:
             achieved_goal (float): The achieved hip rotation.
             desired_goal (float): This target hip rotation.
@@ -233,7 +245,11 @@ class MIMoRollOverEnv(MIMoEnv):
             bool: If the achieved hip rotation exceeds the desired rotation.
         """
         achieved_rotation = self.get_achieved_goal_cos()
-        desired_rotation = 0.95
+
+        if self.success_at_side_lying:
+            desired_rotation = 0.5
+        else:
+            desired_rotation = 0.95
 
         return achieved_rotation >= desired_rotation
 

@@ -27,7 +27,8 @@ class SpringDamperModel_Stationary_Limbs(SpringDamperModel):
                     "act:left_wrist_ulnar",
                     "act:left_fingers"]
     
-    ACT_LEFT_LEG = ['act:left_hip_abduction',
+    ACT_LEFT_LEG = ['act:left_hip_flex',
+                    'act:left_hip_abduction',
                     'act:left_hip_rotation',
                     'act:left_knee',
                     'act:left_foot_flexion',
