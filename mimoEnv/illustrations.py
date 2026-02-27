@@ -336,6 +336,8 @@ An example is '251206_prone_linear_1e6_test'
     parser.add_argument('--side_lying', default=False, action='store_true', required=False,
                         help="Yields success already at side lying instead of making MIMo " \
                         "do the full rollover.")
+    parser.add_argument('--render_final_image', default=False, action='store_true', required=False,
+                        help="Renders the final image of the episode in testing and saves it as 'episode_0.png'.")
     
     args = parser.parse_args()
     env_name = args.env
@@ -366,6 +368,7 @@ An example is '251206_prone_linear_1e6_test'
     freeze_arm = args.freeze_arm
     freeze_leg = args.freeze_leg
     side_lying = args.side_lying
+    render_final_image = args.render_final_image
 
     if freeze_arm or freeze_leg:
         print("Warning! Some limbs are frozen.")
@@ -521,7 +524,7 @@ An example is '251206_prone_linear_1e6_test'
     if should_test:
         # Note here we do not check for 'model is None', because we allow it. If in testing the model is
         # 'None', we just take random actions.
-        test(env, save_dir, model=model, render_video=render, render_actuations=render_actuations)
+        test(env, save_dir, model=model, render_video=render, render_final_image=render_final_image, render_actuations=render_actuations)
 
     env.close()
 
