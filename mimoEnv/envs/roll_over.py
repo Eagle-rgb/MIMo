@@ -621,6 +621,7 @@ class MIMoRollOverEnv(MIMoEnv):
         # Write achieved hip and chest rotation in info dict.
         info['chest_deg'] = self.get_achieved_rotation_degrees('chest')
         info['hip_deg'] = self.get_achieved_rotation_degrees('hip')
+        info['side_lying'] = 1 if self.get_achieved_goal_cos() >= 0.5 else 0
 
         return obs, reward, terminated, truncated, info
     

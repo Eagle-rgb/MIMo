@@ -9,7 +9,9 @@ class HipChestAngleLogger(BaseCallback):
                 # Call environment function to get hip and chest angle.
                 hip = info['hip_deg']
                 chest = info['chest_deg']
+                side_lying_success = info['side_lying']
 
                 self.logger.record("rollout/ep_end_hip_deg_mean", hip)
                 self.logger.record("rollout/ep_end_chest_deg_mean", chest)
+                self.logger.record("rollout/side_lying_success_rate", side_lying_success)
         return True
