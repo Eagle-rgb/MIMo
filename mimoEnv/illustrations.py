@@ -44,8 +44,9 @@ import numpy as np
 from mimoEnv.envs.roll_over import TOUCH_PARAMS as ROLL_OVER_TOUCH_PARAMS
 from mimoEnv.envs.roll_over_logger import HipChestAngleLogger
 
+from PIL import Image
 
-def test(wrapped_env, save_dir, model=None, render_video=False, render_actuations=False):
+def test(wrapped_env, save_dir, model=None, render_video=False, render_final_image=False, render_actuations=False):
     """ Tests the model for one episode.
 
     Args:
@@ -55,6 +56,7 @@ def test(wrapped_env, save_dir, model=None, render_video=False, render_actuation
         model:  The stable baselines model object. If ``None`` we take random actions instead. Default ``None``.
         render_video (bool): If ``True``, all episodes during testing will be recorded and saved as videos in
             `save_dir`.
+        render_final_image (bool): If ``True``, records the final state of each episode and saves it as png.
         render_actuations (bool): If ``True``, renders on the top right corner a plot of the muscle actuations.
     """ 
     obs, _ = wrapped_env.reset()
@@ -91,6 +93,17 @@ def test(wrapped_env, save_dir, model=None, render_video=False, render_actuation
             images.append(img)
         if done or trunc:
             time.sleep(1)
+
+            if render_final_image:
+                if render_actuations:
+                    img = evaluation_img(wrapped_env, up='actuations')
+                else:
+                    img = wrapped_env.mujoco_renderer.render(render_mode="rgb_array")
+                save_name=os.path.join(save_dir, 'episode_{}.png'.format(im_counter))
+                print(f"Rendering final image of episode {im_counter+1} as '{save_name}'")
+                png_img = Image.fromarray(img)
+                png_img.save(save_name)
+
             obs, _ = wrapped_env.reset()
             if render_video:
                 save_name=os.path.join(save_dir, 'episode_{}.avi'.format(im_counter))
