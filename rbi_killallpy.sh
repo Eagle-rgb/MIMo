@@ -8,7 +8,7 @@ fi
 
 USERNAME=$1
 HOSTPREFIXES=("adrastos" "alkmene" "ajax" "anaxo" "achilles" "axylos" "aktor"
-	"admeta" "amata" "agylla" "ares" "adamas" "arabia" "adonis" "aither" "apate"
+	"admeta" "amata" "agylla" "adamas" "arabia" "adonis" "aither" "apate"
 	"atropos" "aletheia" "acheloos" "anemoi")
 NUMBER_OF_RUNS=$2
 

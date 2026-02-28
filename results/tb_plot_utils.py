@@ -85,7 +85,7 @@ def load_tensorboard_runs(base_dir, tags, date_filter, suffix_filter):
     return pd.concat(all_data_list, ignore_index=True) if all_data_list else pd.DataFrame()
 
 # --- 2. Interpolations-Logik ---
-def interpolate_runs_to_dict(group_df, n_points):
+def interpolate_runs_to_dict(group_df, n_points, min_step=None, max_step=None):
     """ 07.01.2026: DDPG and SAC have steps in their tensorboard logs that do not follow a "pattern", i.e.
     we can not just do a group_by on the step and then get a list of the values for each run. We must
     manipulate the pandas dataframe samples such that the steps match how we would have them in PPO or
@@ -94,6 +94,11 @@ def interpolate_runs_to_dict(group_df, n_points):
     Args:
       group_df (panda.DataFrame): DataFrame consisting of arbitrary number of runs.
       n_points: Number of sample points on the x-axis.
+      min_step: Minimum step.
+      max_step: Maximum step. If either 'min_step' or 'max_step' is not specified,
+        they are automatically derived from the supplied data by taking the maximum
+        and minimum step from the data. It is useful to explicitly specify them
+        to compare models with different number of training steps.
     
     Returns:
       run_dict (dict): Dictionary containing the following key-value pairs:
@@ -103,7 +108,11 @@ def interpolate_runs_to_dict(group_df, n_points):
       * runs: Individual run data
     """
     if group_df.empty: return None
-    min_step, max_step = group_df['Step'].min(), group_df['Step'].max()
+
+    # Automatically infer maximum and minimum step from supplied data if not
+    # explicitly specified.
+    if min_step is None or max_step is None:
+        min_step, max_step = group_df['Step'].min(), group_df['Step'].max()
     common_steps = np.linspace(min_step, max_step, n_points)
     
     run_dict = {}
