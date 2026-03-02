@@ -30,6 +30,7 @@ from mimoEnv.envs.mimo_env import MIMoEnv
 from mimoEnv.envs.mimo_env import DEFAULT_PROPRIOCEPTION_PARAMS, PROPRIOCEPTION_PARAMS_ONLY_QPOS
 from mimoActuation.actuation import SpringDamperModel
 from mimoActuation.muscle import MuscleModel
+from mimoEnv.envs.mimo_env import SCENE_DIRECTORY
 
 from render.utils import evaluation_img, evaluation_video
 
@@ -384,7 +385,13 @@ An example is '251206_prone_linear_1e6_test'
     freeze_leg = args.freeze_leg
     side_lying = args.side_lying
     render_final_image = args.render_final_image
-    age = args.arge
+    age = args.age
+
+    # Instead of supplying 'age' as a parameter to the environment directly, we beforehand created the
+    # appropriate age scene. Currently only for 6 months. So we manually specify the scene location.
+    # This is necessary because the parallel RBI runs have problems deleting and creating the temporary
+    # scenes at the same time.
+    model_path = os.path.join(SCENE_DIRECTORY, "roll_over_prone_scene.xml" if age == 18 else "roll_over_prone_scene_6_mo.xml")
 
     if freeze_arm or freeze_leg:
         print("Warning! Some limbs are frozen.")
@@ -468,7 +475,7 @@ An example is '251206_prone_linear_1e6_test'
             freeze_leg=freeze_leg,
             freeze_arm=freeze_arm,
             success_at_side_lying=side_lying,
-            age=achieved_goal_in_observation)
+            model_path=model_path)
         # if log_actuations:
         #     wrapped_env = MIMoRollOverWrapper(env, log_file=os.path.join(save_dir,"actuation_log.csv"))
         # else:

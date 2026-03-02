@@ -35,7 +35,7 @@ def create_dual_comparison_plots_single_model(df, plot_dir, date, suffix):
 
             for m_suffix, groupby in sub_df.groupby(['Suffix']):
                 # Die einzelnen runs dieses suffixes für den tag und die Haltung.
-                run_data = interpolate_runs_to_dict(groupby, N_POINTS, min_)
+                run_data = interpolate_runs_to_dict(groupby, N_POINTS)
 
                 # Plot des Mittelwerts
                 ax2.plot(run_data['steps'], run_data['mean'], label=m_suffix, linewidth=2)
