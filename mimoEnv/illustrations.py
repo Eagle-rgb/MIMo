@@ -352,7 +352,7 @@ An example is '251206_prone_linear_1e6_test'
                         "do the full rollover.")
     parser.add_argument('--render_final_image', default=False, action='store_true', required=False,
                         help="Renders the final image of the episode in testing and saves it as 'episode_0.png'.")
-    parser.add_argument('--age', default=18, required=False,
+    parser.add_argument('--age', default=18, required=False, type=int,
                         help="MIMo's age in months. Default: 18.")
     
     args = parser.parse_args()
@@ -391,7 +391,14 @@ An example is '251206_prone_linear_1e6_test'
     # appropriate age scene. Currently only for 6 months. So we manually specify the scene location.
     # This is necessary because the parallel RBI runs have problems deleting and creating the temporary
     # scenes at the same time.
-    model_path = os.path.join(SCENE_DIRECTORY, "roll_over_prone_scene.xml" if age == 18 else "roll_over_prone_scene_6_mo.xml")
+    if age == 18:  # default
+        model_path = os.path.join(SCENE_DIRECTORY, "roll_over_prone_scene.xml")
+    elif age == 9:
+        model_path = os.path.join(SCENE_DIRECTORY, "roll_over_prone_scene_9_mo.xml")
+    elif age == 6:
+        model_path = os.path.join(SCENE_DIRECTORY, "roll_over_prone_scene_6_mo.xml")
+    else:
+        raise ValueError()
 
     if freeze_arm or freeze_leg:
         print("Warning! Some limbs are frozen.")
