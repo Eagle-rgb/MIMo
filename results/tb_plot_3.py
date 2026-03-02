@@ -7,7 +7,7 @@ from tb_plot_utils import load_tensorboard_runs, load_model_hyperparams, interpo
 
 # --- Konfiguration ---
 BASE_DIR = "."
-TAGS_TO_LOAD = ["rollout/ep_rew_mean", "rollout/success_rate"]
+TAGS_TO_LOAD = ["rollout/ep_rew_mean", "rollout/success_rate", "rollout/side_lying_success_rate"]
 N_POINTS = 500  # Auflösung der X-Achse
 DATE_FORMAT = r'%y-%m-%d'
 
@@ -40,7 +40,7 @@ def plot_suffix_run_data(axIndi, axAggre, groupby, label):
         values = run_data['runs'][key]
         axIndi.plot(run_data['steps'], values, label=str(key), linewidth=2)
 
-def create_tri_comparison_plots_dual_model(df, plot_dir, suffix_1, suffix_2, display1, display2):
+def create_tri_comparison_plots_dual_model(df, plot_dir, suffix_1, suffix_2, display1, display2, tag1, tag2):
     """ Creates a dual comparison plot for a single model.
     
     Arguments:
@@ -51,70 +51,76 @@ def create_tri_comparison_plots_dual_model(df, plot_dir, suffix_1, suffix_2, dis
         - suffix2: Suffix of the model 2.
         - display1: Title and legend label for model 1.
         - display2: Title and legend label for model 2.
+        - tag1: Tag to load for model 1. Supplied without 'rollout/' prefix.
+        - tag2: Tag to load for model 2. Supplied without 'rollout/' prefix.
     """
-    for tag in TAGS_TO_LOAD:
-        for haltung in df['Haltung'].unique():
-            # ax1: Individual plots from model 1
-            # ax2: Individual plots from model 2
-            # ax3: Combined aggregated model 1 / model 2.
-            fig, (ax1, ax2, ax3) = plt.subplots(nrows=1, ncols=3, figsize=(16, 8), sharey=True)
+    rollout_tag1 = "rollout/" + tag1
+    rollout_tag2 = "rollout/" + tag2
+    df_1 = df[(df['Tag'] == rollout_tag1) & (df['Suffix'] == suffix_1)]
+    df_2 = df[(df['Tag'] == rollout_tag2) & (df['Suffix'] == suffix_2)]
 
-            sub_df = df[(df['Tag'] == tag) & (df['Haltung'] == haltung)]
-            if sub_df.empty: continue
+    assert not df_1.empty and not df_2.empty
+    haltung_1 = df_1['Haltung'].unique()[0]
+    haltung_2 = df_2['Haltung'].unique()[0]
 
-            num_runs = len(sub_df['Run'].unique())
+    assert haltung_1 == haltung_2
 
-            for m_suffix, groupby in sub_df.groupby(['Suffix']):
-                print(f"Found suffix: {m_suffix[0]}. My suffixes: {suffix_1} and {suffix_2}")
-                axIndi = ax1 if m_suffix[0] == suffix_1 else ax2
-                label = display1 if m_suffix[0] == suffix_1 else display2
-                plot_suffix_run_data(axIndi, ax3, groupby, label)
+    fig, (ax1, ax2, ax3) = plt.subplots(nrows=1, ncols=3, figsize=(16, 8), sharey=True)
 
-            # --- Layout & Titel ---
-            # This gets 'success rate' out of 'rollout/success_rate'.
-            tag_name = tag.split('/')[-1].replace('_', ' ').title()
+    num_runs_1 = len(df_1['Run'].unique())
+    num_runs_2 = len(df_2['Run'].unique())
 
-            haltung_opposite = 'prone' if haltung == 'supine' else 'supine'
-            direction_roll_over = f'{haltung.capitalize()} to {haltung_opposite.capitalize()}'
-            
-            # Gemeinsamer Haupttitel
-            fig.suptitle(f"{tag_name} - {direction_roll_over}, {num_runs} runs", fontsize=18, fontweight='bold', y=0.98)
-            
-            # Metadaten / Hyperparameter Text unter dem Titel
-            folder = sub_df['Folder'].unique()[0]
-            hyperparams = load_model_hyperparams(folder)
-            if hyperparams:
-                fig.text(0.5, 0.91, hyperparams, ha='center', fontsize=11, style='italic', color='dimgray')
+    assert num_runs_1 == num_runs_2  # todo allow different number of runs.
 
-            # Achsenbeschriftungen
-            ax1.set_title(f"Individual Runs {display1}", fontsize=14, pad=10)
-            ax2.set_title(f"Individual Runs {display2}", fontsize=14, pad=10)
-            ax3.set_title("Aggregated (Mean ± Std)", fontsize=14, pad=10)
+    plot_suffix_run_data(ax1, ax3, df_1, display1)
+    plot_suffix_run_data(ax2, ax3, df_2, display2)
 
-            # We do not need run 1, 2, 3, 4, ... legend.
-            #ax1.legend(loc='best', fontsize=10)
-            #ax2.legend(loc='best', fontsize=10)
-            ax3.legend(loc='best', fontsize=10)
-            
-            for ax in [ax1, ax2, ax3]:
-                ax.set_xlabel("Steps", fontsize=12)
-                ax.grid(True, linestyle='--', alpha=0.5)
-                #if tag == 'rollout/success_rate':
-                #    ax.set_ylim(0.0, 1.0)
-            
-            ax1.set_ylabel(tag_name, fontsize=12)
+    tag_name_1 = tag1.replace('_', ' ').title()
+    tag_name_2 = tag2.replace('_', ' ').title()
 
-            # Speichern
-            plt.tight_layout(rect=[0, 0.03, 1, 0.90]) # Platz oben für Titel lassen
+    haltung_opposite = 'prone' if haltung_1 == 'supine' else 'supine'
+    direction_roll_over = f'{haltung_1.capitalize()} to {haltung_opposite.capitalize()}'
+        
+    # Gemeinsamer Haupttitel
+    fig.suptitle(f"{tag_name_1} - {direction_roll_over}, {num_runs_1} runs", fontsize=18, fontweight='bold', y=0.98)
 
-            # 5. Speichern des Plots
-            # If there is exactly one suffix specified, we include that in
-            # the output file name.
-            filename = f"tricomp_{suffix1}_{haltung}_{tag.replace('/', '_')}.png"
-            save_path = os.path.join(plot_dir, "png", filename)
-            plt.savefig(save_path, dpi=200)
-            plt.close()
-            print(f"Erfolg: {filename} gespeichert.")
+    # Metadata ToDo. We have two models so we would really need to include both metadata. It would probably
+    # be best to have common metadata on the top and for ax1, ax2 the individual - differing metadata.
+        # Metadaten / Hyperparameter Text unter dem Titel
+        #folder = sub_df['Folder'].unique()[0]
+        #hyperparams = load_model_hyperparams(folder)
+        #if hyperparams:
+        #    fig.text(0.5, 0.91, hyperparams, ha='center', fontsize=11, style='italic', color='dimgray')
+
+    # Achsenbeschriftungen
+    ax1.set_title(f"Individual Runs {display1}", fontsize=14, pad=10)
+    ax2.set_title(f"Individual Runs {display2}", fontsize=14, pad=10)
+    ax3.set_title("Aggregated (Mean ± Std)", fontsize=14, pad=10)
+
+    # We do not need run 1, 2, 3, 4, ... legend.
+    #ax1.legend(loc='best', fontsize=10)
+    #ax2.legend(loc='best', fontsize=10)
+    ax3.legend(loc='best', fontsize=10)
+        
+    for ax in [ax1, ax2, ax3]:
+        ax.set_xlabel("Steps", fontsize=12)
+        ax.grid(True, linestyle='--', alpha=0.5)
+        #if tag == 'rollout/success_rate':
+        #    ax.set_ylim(0.0, 1.0)
+        
+    ax1.set_ylabel(tag_name_1, fontsize=12)
+
+    # Speichern
+    plt.tight_layout(rect=[0, 0.03, 1, 0.90]) # Platz oben für Titel lassen
+
+    # 5. Speichern des Plots
+    # If there is exactly one suffix specified, we include that in
+    # the output file name.
+    filename = f"tricomp_{suffix1}_{haltung_1}_{tag_name_1.replace('/', '_')}.png"
+    save_path = os.path.join(plot_dir, "png", filename)
+    plt.savefig(save_path, dpi=200)
+    plt.close()
+    print(f"Erfolg: {filename} gespeichert.")
 
 def valid_date(s: str) -> datetime:
     try:
@@ -139,6 +145,8 @@ if __name__ == "__main__":
     parser.add_argument('--suffix2', required=True, help="Model name suffix 2")
     parser.add_argument('--display1', required=False, help="Display for model 1")
     parser.add_argument('--display2', required=False, help="Display for model 2")
+    parser.add_argument('--tag1', required=False, help="Tag to load for model 1. Supply tags without the rollout/ prefix.")
+    parser.add_argument('--tag2', required=False, help="Tag to load for model 2. Supply tags without the rollout/ prefix.")
     args = parser.parse_args()
     date1 = args.date1
     date2 = args.date2
@@ -146,6 +154,8 @@ if __name__ == "__main__":
     suffix2 = args.suffix2
     display1 = args.display1
     display2 = args.display2
+    tag1 = args.tag1
+    tag2 = args.tag2
     # save_df = args.save_df
 
     base_dir = os.path.abspath(BASE_DIR)
@@ -158,4 +168,4 @@ if __name__ == "__main__":
         print("\nErstelle Plots...")
         
         # Plot für die durchschnittliche Episodenbelohnung und Erfolgsrate
-        create_tri_comparison_plots_dual_model(data, '.', suffix1, suffix2, display1, display2)
+        create_tri_comparison_plots_dual_model(data, '.', suffix1, suffix2, display1, display2, tag1, tag2)

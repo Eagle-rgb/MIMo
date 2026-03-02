@@ -15,6 +15,7 @@ from scipy.signal import butter, filtfilt
 from scipy.interpolate import interp1d
 import pandas as pd
 from sklearn.linear_model import LinearRegression
+from sklearn.metrics import r2_score
 
 def reorient_rollover(data):
     """ Reorients the rollover so that it is always a
@@ -127,58 +128,111 @@ def fit_normalized_to_sigmoid(data):
     data[:] = vals_fitted
     return data, (beta_0, beta_1)
 
-def calculate_velocities(displacement_series, timestep):
+def calculate_velocities(displacement_series):
     """ Calculates the velocity by differentiation of the
     given series. Returns a np.array of the same size
     as 'displacement_series'.
-    Be careful with chosing the correct 'timestep'. To check,
-    print out env.data.time before and after a step in the
-    environment. It will probably be 2 times the mujoco
-    timestep.
+    Unit of speed is mm/sec
     """
     velocities = np.zeros(len(displacement_series))
     velocities[0] = 0  # we always start with 0 velocity.
     for i in range(1, len(displacement_series)):
-        y_1 = displacement_series[i-1]
-        y_2 = displacement_series[i]
+        y_1 = displacement_series.values[i-1]
+        y_2 = displacement_series.values[i]
+        x_1 = displacement_series.index[i-1]
+        x_2 = displacement_series.index[i]
+        timestep = x_2 - x_1
+        # timestep is in [ms], but we want mm/sec, so divide by 1000
+        timestep /= 1000.0
         velocities[i] = (y_2 - y_1) / timestep
 
     return velocities
 
+def calculate_velocities_df(df):
+    for key in df.keys():
+        displacement_series = df[key]
+        velocities = calculate_velocities(displacement_series)
+        df[key] = velocities
+
+def calculate_average_velocity_before_and_after(velocities_df, T, R):
+    """ Calculates the average velocity for each limb (key) in 'velocities_df'
+    in the time range [T-R, T] ('before') and [T, T+R] ('after'). Velocities in
+    'velocities_df' are defined only pointwise. This function uses interpolation
+    to estimate velocities for points T-R, T and T+R. ... """
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--load_model', required=True, type=str)
+    parser.add_argument('--load_model', required=False, type=str)
+    parser.add_argument('--save_data', required=False, action='store_true', default=False,
+                        help="Saves collected dataframe of '--load_model' as 'data.csv'.")
+    parser.add_argument('--load_data', required=False, action='store_true', default=False,
+                        help="Loads data 'data.csv'.")
+    parser.add_argument('--plot_displacement', action='store_true')
     args = parser.parse_args()
-    env = gym.make("MIMoRollOver-v0", actuation_model=SpringDamperModel,
-        starting_position='supine',
-        width=480, # always 480 regardless whether we render actuations or not.
-        height=480,
-        render_mode='rgb_array',
-        touch_params=None,
-        nopen=False,
-		pen_factor=0.02,
-        goal_function='cos',
-        achieved_goal_in_observation=False,
-        pbrs=True,
-		#proprio_params=PROPRIOCEPTION_PARAMS_ONLY_QPOS,
-        isr=False)
-    
-    model = RL.load(args.load_model, env)
-    df = collect_kobayashi_site_y_displacement_series(env, model, n_episodes=1)
+
+    if args.load_model:
+        env = gym.make("MIMoRollOver-v0", actuation_model=SpringDamperModel,
+            starting_position='supine',
+            width=480, # always 480 regardless whether we render actuations or not.
+            height=480,
+            render_mode='rgb_array',
+            touch_params=None,
+            nopen=False,
+            pen_factor=0.02,
+            goal_function='cos',
+            achieved_goal_in_observation=False,
+            pbrs=True,
+            #proprio_params=PROPRIOCEPTION_PARAMS_ONLY_QPOS,
+            isr=False)
+        
+        model = RL.load(args.load_model, env)
+        df = collect_kobayashi_site_y_displacement_series(env, model, n_episodes=1)
+        if args.save_data:
+            df.to_csv('data.csv')
+
+    elif args.load_data:
+        df = pd.read_csv('data.csv', index_col='Time from Onset [ms]')
+
+    else:
+        raise ValueError
+
     reorient_rollover(df)
-    print(df)
-    
+
+    if args.plot_displacement:
+        ax = df['Torso'].plot(color='red', label='Raw 100Hz unsmoothed')
+
     df = resample_df_to_60hz(df)
     df = df.apply(smooth_x_butterworth)
 
     # Get the torso speeds, normalize them to [0, 1] and fit to a sigmoid using log. regression.
-    torso = df['Torso'].copy()
-    torso.plot()
-    torso, (beta_0, beta_1) = fit_normalized_to_sigmoid(torso)
-    torso.plot()
+    torso = df['Torso']
+    if args.plot_displacement:
+        torso.plot(ax=ax, color='blue', label="60Hz Smoothed")
 
-    # plt.hlines(100.0, df.index[0], df.index[-1], linestyles=['dashed'], colors=['yellow'])
-    plt.xlabel("Milliseconds from Onset")
-    plt.ylabel("Velocity (mm/sec)")
-    plt.show()
+    torso_sigmoid, (beta_0, beta_1) = fit_normalized_to_sigmoid(torso)
+
+    if args.plot_displacement:
+        torso_sigmoid.plot(ax=ax, color='green', label='Sigmoid Fitted')
+        plt.legend()
+        # plt.hlines(100.0, df.index[0], df.index[-1], linestyles=['dashed'], colors=['yellow'])
+        plt.xlabel("Milliseconds from Onset")
+        plt.ylabel("Relative Displacement (mm)")
+        plt.show()
+
+    # Verify that R-squared value is > 0.6
+    r2 = r2_score(torso, torso_sigmoid)
+    if r2 < 0.6:
+        print(f"Too low R-squared value!")
+        raise ValueError
+    
+    # Get time of maximum torso velocity T_TR. For log. sigmoid, we can very elegantly calculate
+    # time at which the curve hits 0.5 - it all boils down to this simple quotient of the beta
+    # parameters.
+    T_TR = -beta_0 / beta_1
+    print(f"T_TR: {T_TR} ms")
+
+    # Velocities.
+    print(df)
+    calculate_velocities_df(df)
+    print(df)
 

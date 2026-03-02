@@ -351,6 +351,8 @@ An example is '251206_prone_linear_1e6_test'
                         "do the full rollover.")
     parser.add_argument('--render_final_image', default=False, action='store_true', required=False,
                         help="Renders the final image of the episode in testing and saves it as 'episode_0.png'.")
+    parser.add_argument('--age', default=18, required=False,
+                        help="MIMo's age in months. Default: 18.")
     
     args = parser.parse_args()
     env_name = args.env
@@ -382,6 +384,7 @@ An example is '251206_prone_linear_1e6_test'
     freeze_leg = args.freeze_leg
     side_lying = args.side_lying
     render_final_image = args.render_final_image
+    age = args.arge
 
     if freeze_arm or freeze_leg:
         print("Warning! Some limbs are frozen.")
@@ -464,7 +467,8 @@ An example is '251206_prone_linear_1e6_test'
             intrinsic_goal_w=intrinsic_goal_w,
             freeze_leg=freeze_leg,
             freeze_arm=freeze_arm,
-            success_at_side_lying=side_lying)
+            success_at_side_lying=side_lying,
+            age=achieved_goal_in_observation)
         # if log_actuations:
         #     wrapped_env = MIMoRollOverWrapper(env, log_file=os.path.join(save_dir,"actuation_log.csv"))
         # else:
@@ -524,7 +528,8 @@ An example is '251206_prone_linear_1e6_test'
         'intrinsic_goal': intrinsic_goal,
         'freeze_leg': freeze_leg,
         'freeze_arm': freeze_arm,
-        'side_lying': side_lying
+        'side_lying': side_lying,
+        'age': age
     }
     with open(f'{save_dir}/data.yml', 'w') as outfile:
         yaml.dump(yaml_data, outfile, default_flow_style=False)
