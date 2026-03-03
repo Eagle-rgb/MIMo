@@ -41,6 +41,7 @@ for i in $(seq 1 $NUMBER_OF_RUNS); do
 		"--roll_over_goal_function=cos" \
 		"--save_model=${MODEL_NAME}_run_${i}" \
 		"--pbrs" \
+		"--age=9" \
 		"--pbrs_w=100" \
 		"--lr=0.0003" &
 done

@@ -249,6 +249,18 @@ def load_observation_normalization_dict(obs):
     print("Successfully loaded observation normalization.")
     return mean_dict, std_dict
 
+def load_model_yaml(load_model):
+    """ Loads parameters from the yaml in the model directory. """
+    folder = os.path.dirname(load_model)
+
+    try:
+        with open(os.path.join(folder, 'data.yml'), 'r') as file:
+            print(f"Loading yaml from model '{load_model}'.")
+            return yaml.safe_load(file)
+    except Exception:
+        print(f"Could not load yaml data to model '{load_model}'.")
+        return None
+
 def main():
     """ CLI for the demonstration environments.
 
@@ -299,7 +311,7 @@ def main():
                         default='prone',
                         help='Choose the starting position of MIMo in the roll_over environment. Put '
                              'either \'supine\', \'prone\' or \'alternating\'. Default: \'prone\'.')
-    parser.add_argument('--roll_over_goal_function', required=False,
+    parser.add_argument('--goal_achievement_function', required=False, # Previously: --roll_over_goal_function
                         choices=['angle', 'cos', 'intrinsic'],
                         default='cos',
                         help='Choose the function of achieved goal for the roll_over environment. Put '
@@ -337,11 +349,11 @@ An example is '251206_prone_linear_1e6_test'
     parser.add_argument('--achieved_goal_in_observation', action='store_true', default=False)
     parser.add_argument('--proprio_only_qpos', action='store_true', default=False,
                         help="Only uses 'qpos' of each joint in proprio observation.")
-    parser.add_argument('--pen_fac', default=0.02, type=float, required=False,
+    parser.add_argument('--pen_factor', default=0.02, type=float, required=False,  # Previously, '--pen_fac'
                         help="Penalization factor when action penalization is active.")
-    parser.add_argument('--intrinsic_goal_proprio_w', default=0.01, type=float, required=False,
+    parser.add_argument('--proprio_w', default=0.01, type=float, required=False,  # Previously, 'intrinsic_goal_proprio_w'
                         help="Weighting of proprio goal in intrinsic goal for state potential. Default: 0.01.")
-    parser.add_argument('--intrinsic_goal_vesti_w', default=1.0, type=float, required=False,
+    parser.add_argument('--vesti_w', default=1.0, type=float, required=False,  # Previously, 'intrinsic_goal_vesti_w'
                         help="Weighting of vesti goal in intrinsic goal for state potential. Default: 1.0.")
     parser.add_argument('--freeze_leg', default=False, action='store_true', required=False,
                         help="Freezes leg.")
@@ -355,19 +367,27 @@ An example is '251206_prone_linear_1e6_test'
     parser.add_argument('--age', default=18, required=False, type=int,
                         help="MIMo's age in months. Default: 18.")
     
+    # Parse yaml if we specified '--load_model'.
+    args, remaining_argv = parser.parse_known_args()
+
+    if args.load_model:
+        yaml_data = load_model_yaml(args.load_model)
+        if yaml_data:
+            parser.set_defaults(**yaml_data)
+    
     args = parser.parse_args()
+    load_model = args.load_model
     env_name = args.env
     algorithm = args.algorithm
-    load_model = args.load_model
-    save_model = args.save_model
-    save_every = args.save_every
-    train_for = args.train_for
-    should_test = args.test
-    render = args.render_video
-    use_muscle = args.use_muscle
-    roll_over_starting_position = args.roll_over_starting_position
-    roll_over_goal_function = args.roll_over_goal_function
-    roll_over_model_path_auto = args.roll_over_model_path_auto
+    save_model = args.save_model        # not in yaml
+    save_every = args.save_every        # not in yaml
+    train_for = args.train_for          # in yaml as 'num_train', but is not loaded when loading model.
+    should_test = args.test             # not in yaml
+    render = args.render_video          # not in yaml
+    use_muscle = args.use_muscle        # not in yaml
+    roll_over_starting_position = args.roll_over_starting_position  # not in yaml
+    roll_over_goal_function = args.goal_achievement_function
+    roll_over_model_path_auto = args.roll_over_model_path_auto      # not in yaml
     render_actuations = args.render_actuations
     log_actuations = args.log_actuations
     nopen = args.nopen
@@ -379,13 +399,27 @@ An example is '251206_prone_linear_1e6_test'
     touch = args.touch
     achieved_goal_in_observation=args.achieved_goal_in_observation
     proprio_only_qpos = args.proprio_only_qpos
-    pen_factor = args.pen_fac
+    pen_factor = args.pen_factor
     intrinsic_goal = args.intrinsic_goal
     freeze_arm = args.freeze_arm
     freeze_leg = args.freeze_leg
     side_lying = args.side_lying
     render_final_image = args.render_final_image
     age = args.age
+
+    print(f"pen_factor: {pen_factor}")
+
+    # Weightings of different sensors in intrinsic goals. We usually weight vestibular much
+    # higher (1.0 compared to 0.01) than proprioception observation.
+    intrinsic_goal_proprio_w = args.proprio_w
+    intrinsic_goal_vesti_w = args.vesti_w
+
+    # Create a dict of the weights to pass to the roll_over environment. Missing weights like
+    # touch are automatically created and defaulted to 1.0.
+    intrinsic_goal_w = {
+        'observation': intrinsic_goal_proprio_w,
+        'vestibular': intrinsic_goal_vesti_w
+    }
 
     # Instead of supplying 'age' as a parameter to the environment directly, we beforehand created the
     # appropriate age scene. Currently only for 6 months. So we manually specify the scene location.
@@ -402,18 +436,6 @@ An example is '251206_prone_linear_1e6_test'
 
     if freeze_arm or freeze_leg:
         print("Warning! Some limbs are frozen.")
-
-    # Weightings of different sensors in intrinsic goals. We usually weight vestibular much
-    # higher (1.0 compared to 0.01) than proprioception observation.
-    intrinsic_goal_proprio_w = args.intrinsic_goal_proprio_w
-    intrinsic_goal_vesti_w = args.intrinsic_goal_vesti_w
-
-    # Create a dict of the weights to pass to the roll_over environment. Missing weights like
-    # touch are automatically created and defaulted to 1.0.
-    intrinsic_goal_w = {
-        'observation': intrinsic_goal_proprio_w,
-        'vestibular': intrinsic_goal_vesti_w
-    }
 
     if proprio_only_qpos:
         print("Warning! Only using qpos in proprioception obseration.")
@@ -439,20 +461,26 @@ An example is '251206_prone_linear_1e6_test'
                  "catch": "MIMoCatch-v0",
                  "roll_over": "MIMoRollOver-v0"}
 
-    if env_name == 'roll_over' and roll_over_model_path_auto:
-        date_str_yymmdd = datetime.today().strftime('%y-%m-%d')
-        save_model_suffix = save_model
-        save_model = date_str_yymmdd +\
-            "_" + roll_over_starting_position +\
-            "_" + save_model_suffix
-        save_dir = os.path.join("models", env_name, date_str_yymmdd, roll_over_starting_position, save_model)
-        print("Saving model under '" + save_dir + "'")
-    else:
-        save_dir = os.path.join("models", env_name, save_model)
+    # We use the same model folder when loading a model. This is for example when we want to extend the
+    # training from 1e6 steps to 2e6 steps and so on. In case we do not want that, we specify
+    # 'roll_over_model_path_auto' parameter and then save it as a separate model.
+    if not roll_over_model_path_auto and not load_model:
+        if env_name == 'roll_over' and roll_over_model_path_auto:
+            date_str_yymmdd = datetime.today().strftime('%y-%m-%d')
+            save_model_suffix = save_model
+            save_model = date_str_yymmdd +\
+                "_" + roll_over_starting_position +\
+                "_" + save_model_suffix
+            save_dir = os.path.join("models", env_name, date_str_yymmdd, roll_over_starting_position, save_model)
+            print("Saving model under '" + save_dir + "'")
+        else:
+            save_dir = os.path.join("models", env_name, save_model)
 
-    if not os.path.exists(save_dir):
-        print("Creating folders for model save path '" + save_dir + "'")
-        os.makedirs(save_dir)
+        if not os.path.exists(save_dir):
+            print("Creating folders for model save path '" + save_dir + "'")
+            os.makedirs(save_dir)
+    else:
+        save_dir = os.path.dirname(load_model)
 
     # wrapped_env = None
     render_height = 720 if render_actuations else 480
