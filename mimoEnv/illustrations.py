@@ -75,6 +75,8 @@ def test(wrapped_env, save_dir, model=None, render_video=False, render_final_ima
     #vesti_observations = []
     #touch_observations = []
 
+    n_steps = 0
+
     while not done and not trunc:
         if model is None:
             print("No model, taking random actions")
@@ -83,6 +85,7 @@ def test(wrapped_env, save_dir, model=None, render_video=False, render_final_ima
             action, _ = model.predict(obs)
 
         obs, _, done, trunc, _ = wrapped_env.step(action)
+        n_steps += 1
         #proprio_observations.append(obs['observation'])
         #vesti_observations.append(obs['vestibular'])
         #touch_observations.append(obs['touch'])
@@ -94,6 +97,8 @@ def test(wrapped_env, save_dir, model=None, render_video=False, render_final_ima
             images.append(img)
         if done or trunc:
             time.sleep(1)
+
+            print(f"Roll Over took {n_steps} steps.")
 
             if render_final_image:
                 if render_actuations:
