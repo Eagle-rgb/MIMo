@@ -1,16 +1,13 @@
 #!/bin/bash
 
-if [ $# -ne 3 ] 
+if [ $# -ne 2 ] 
 	then
-		echo "Error. Provide rbi username, model name and number of runs."
+		echo "Error. Provide rbi username, model name"
 		return
 fi
 
 USERNAME=$1
-HOSTPREFIXES=("adrastos" "alkmene" "ajax" "anaxo" "achilles" "axylos" "aktor"
-	"admeta" "amata" "agylla" "adamas" "arabia" "adonis" "aither" "apate"
-	"atropos" "aletheia" "acheloos" "anemoi")
-NUMBER_OF_RUNS=$3
+HOSTPREFIXES=("adonis" "aither" "apate" "atropos" "aletheia" "acheloos")
 MODEL_NAME=$2
 
 # Date. Used to run gemini_plot script after all runs are finished. Do this before
@@ -18,13 +15,7 @@ MODEL_NAME=$2
 # date.
 today=$(date +%y-%m-%d)
 
-if [ $NUMBER_OF_RUNS -ge ${#HOSTPREFIXES[@]} ]
-	then
-		echo "Error. Too many runs. Maximum ${#HOSTPREFIXES[@]} runs allowed."
-		return
-fi
-
-for i in $(seq 1 $NUMBER_OF_RUNS); do
+for i in $(seq 0 5); do
 	HOSTNAME="${HOSTPREFIXES[i]}"".rbi.cs.uni-frankfurt.de"
 	echo "Playing MIMo on host $HOSTNAME"
 	# Putting '--save_every' as same value as '--train_for' saves only the very last model.
@@ -43,7 +34,7 @@ for i in $(seq 1 $NUMBER_OF_RUNS); do
 		"--pbrs" \
 		"--age=6" \
 		"--pbrs_w=100" \
-		"--lr=0.0002" &
+		"--lr=0.00005" &
 done
 
 # Wait until all ssh commands finished, i.e. all MIMo simulations are finished. Then, plot the results.

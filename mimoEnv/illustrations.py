@@ -469,7 +469,7 @@ An example is '251206_prone_linear_1e6_test'
     # We use the same model folder when loading a model. This is for example when we want to extend the
     # training from 1e6 steps to 2e6 steps and so on. In case we do not want that, we specify
     # 'roll_over_model_path_auto' parameter and then save it as a separate model.
-    if not roll_over_model_path_auto and not load_model:
+    if not roll_over_model_path_auto or not load_model:
         if env_name == 'roll_over' and roll_over_model_path_auto:
             date_str_yymmdd = datetime.today().strftime('%y-%m-%d')
             save_model_suffix = save_model
