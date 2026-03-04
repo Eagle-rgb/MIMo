@@ -47,7 +47,7 @@ from mimoEnv.envs.roll_over_logger import HipChestAngleLogger
 
 from PIL import Image
 
-def test(wrapped_env, save_dir, model=None, render_video=False, render_final_image=False, render_actuations=False):
+def test(wrapped_env, save_dir, model=None, render_video=False, render_frames=False, render_actuations=False):
     """ Tests the model for one episode.
 
     Args:
@@ -57,7 +57,7 @@ def test(wrapped_env, save_dir, model=None, render_video=False, render_final_ima
         model:  The stable baselines model object. If ``None`` we take random actions instead. Default ``None``.
         render_video (bool): If ``True``, all episodes during testing will be recorded and saved as videos in
             `save_dir`.
-        render_final_image (bool): If ``True``, records the final state of each episode and saves it as png.
+        render_frames (bool): If ``True``, records in total 4 frames during the rollover - including the final image.
         render_actuations (bool): If ``True``, renders on the top right corner a plot of the muscle actuations.
     """ 
     obs, _ = wrapped_env.reset()
@@ -76,6 +76,22 @@ def test(wrapped_env, save_dir, model=None, render_video=False, render_final_ima
     #touch_observations = []
 
     n_steps = 0
+    reached_45_deg=False
+    reached_side_lying=False
+
+    def get_frame():
+        if render_actuations:
+            return evaluation_img(wrapped_env, up='actuations')
+        else:
+            return wrapped_env.mujoco_renderer.render(render_mode="rgb_array")
+        
+    def save_image(name):
+        save_name=os.path.join(save_dir, f'{name}.png')
+        Image.fromarray(get_frame()).save(save_name)
+        
+    # Render initial frame.
+    if render_frames:
+        save_image('frame_1')
 
     while not done and not trunc:
         if model is None:
@@ -84,31 +100,35 @@ def test(wrapped_env, save_dir, model=None, render_video=False, render_final_ima
         else:
             action, _ = model.predict(obs)
 
-        obs, _, done, trunc, _ = wrapped_env.step(action)
+        obs, _, done, trunc, info = wrapped_env.step(action)
         n_steps += 1
+
         #proprio_observations.append(obs['observation'])
         #vesti_observations.append(obs['vestibular'])
         #touch_observations.append(obs['touch'])
         if render_video:
-            if render_actuations:
-                img = evaluation_img(wrapped_env, up='actuations')
-            else:
-                img = wrapped_env.mujoco_renderer.render(render_mode="rgb_array")
-            images.append(img)
+            images.append(get_frame())
+
+        curr_45_deg_reached = info['45_deg'] == 1.0
+        curr_side_lying_reached = info['side_lying'] == 1.0
+
+        if not reached_45_deg and curr_45_deg_reached:
+            reached_45_deg = True
+            print("Reached 45 deg! Saving image...")
+            save_image('frame_2')
+
+        if not reached_side_lying and curr_side_lying_reached:
+            reached_side_lying = True
+            print("Reached side lying! Saving image...")
+            save_image('frame_3')
+
         if done or trunc:
             time.sleep(1)
 
             print(f"Roll Over took {n_steps} steps.")
 
-            if render_final_image:
-                if render_actuations:
-                    img = evaluation_img(wrapped_env, up='actuations')
-                else:
-                    img = wrapped_env.mujoco_renderer.render(render_mode="rgb_array")
-                save_name=os.path.join(save_dir, 'episode_{}.png'.format(im_counter))
-                print(f"Rendering final image of episode {im_counter+1} as '{save_name}'")
-                png_img = Image.fromarray(img)
-                png_img.save(save_name)
+            if render_frames:
+                save_image('frame_4')
 
             obs, _ = wrapped_env.reset()
             if render_video:
@@ -367,8 +387,13 @@ An example is '251206_prone_linear_1e6_test'
     parser.add_argument('--side_lying', default=False, action='store_true', required=False,
                         help="Yields success already at side lying instead of making MIMo " \
                         "do the full rollover.")
-    parser.add_argument('--render_final_image', default=False, action='store_true', required=False,
-                        help="Renders the final image of the episode in testing and saves it as 'episode_0.png'.")
+    # Frame 1: Start
+    # Frame 2: 45° mean rollover
+    # Frame 3: Side Lying
+    # Frame 4: Roll Over - Final Image
+    parser.add_argument('--render_frames', default=False, action='store_true', required=False,
+                        help="Renders many frames - including the final image of the episode in testing - "
+                        " and saves them as 'frame_{1-5}.png'.")
     parser.add_argument('--age', default=18, required=False, type=int,
                         help="MIMo's age in months. Default: 18.")
     
@@ -409,7 +434,7 @@ An example is '251206_prone_linear_1e6_test'
     freeze_arm = args.freeze_arm
     freeze_leg = args.freeze_leg
     side_lying = args.side_lying
-    render_final_image = args.render_final_image
+    render_frames = args.render_frames
     age = args.age
 
     print(f"pen_factor: {pen_factor}")
@@ -432,12 +457,10 @@ An example is '251206_prone_linear_1e6_test'
     # scenes at the same time.
     if age == 18:  # default
         model_path = os.path.join(SCENE_DIRECTORY, "roll_over_prone_scene.xml")
-    elif age == 9:
-        model_path = os.path.join(SCENE_DIRECTORY, "roll_over_prone_scene_9_mo.xml")
-    elif age == 6:
-        model_path = os.path.join(SCENE_DIRECTORY, "roll_over_prone_scene_6_mo.xml")
+    elif age in [0, 3, 6, 7, 8, 9]:
+        model_path = os.path.join(SCENE_DIRECTORY, f"roll_over_prone_scene_{age}_mo.xml")
     else:
-        raise ValueError()
+        raise ValueError("Allowed ages: 18, 9, 8, 7, 6, 3, 0.")
 
     if freeze_arm or freeze_leg:
         print("Warning! Some limbs are frozen.")
@@ -469,7 +492,7 @@ An example is '251206_prone_linear_1e6_test'
     # We use the same model folder when loading a model. This is for example when we want to extend the
     # training from 1e6 steps to 2e6 steps and so on. In case we do not want that, we specify
     # 'roll_over_model_path_auto' parameter and then save it as a separate model.
-    if not roll_over_model_path_auto or not load_model:
+    if roll_over_model_path_auto or not load_model:
         if env_name == 'roll_over' and roll_over_model_path_auto:
             date_str_yymmdd = datetime.today().strftime('%y-%m-%d')
             save_model_suffix = save_model
@@ -589,7 +612,7 @@ An example is '251206_prone_linear_1e6_test'
     if should_test:
         # Note here we do not check for 'model is None', because we allow it. If in testing the model is
         # 'None', we just take random actions.
-        test(env, save_dir, model=model, render_video=render, render_final_image=render_final_image, render_actuations=render_actuations)
+        test(env, save_dir, model=model, render_video=render, render_frames=render_frames, render_actuations=render_actuations)
 
     env.close()
 

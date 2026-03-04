@@ -23,18 +23,18 @@ for i in $(seq 0 5); do
 		"conda activate mimo && "\
 		"cd MIMo && "\
 		"python mimoEnv/illustrations.py" \
-		"--train_for=600000" \
-		"--save_every=600000" \
+		"--train_for=1000000" \
+		"--save_every=1000000" \
 		"--roll_over_starting_position=supine" \
 		"--algorithm=PPO" \
-		"--pen_fac=0.02" \
+		"--pen_factor=0.08" \
 		"--roll_over_model_path_auto" \
 		"--goal_achievement_function=cos" \
 		"--save_model=${MODEL_NAME}_run_${i}" \
 		"--pbrs" \
-		"--age=6" \
+		"--age=9" \
 		"--pbrs_w=100" \
-		"--lr=0.00005" &
+		"--lr=0.0003" &
 done
 
 # Wait until all ssh commands finished, i.e. all MIMo simulations are finished. Then, plot the results.
