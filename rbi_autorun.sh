@@ -39,10 +39,9 @@ for i in $(seq 0 ${NUMBER_OF_RUNS-1}); do
 		"--pen_factor=0.02" \
 		"--roll_over_model_path_auto" \
 		"--goal_achievement_function=cos" \
-		"--save_model=${MODEL_NAME}_run_${i}" \
+		"--save_model=${MODEL_NAME}_run_$((i+36))" \
 		"--pbrs" \
-		"--age=6" \
-		"--nopen" \
+		"--age=9" \
 		"--pbrs_w=100" \
 		"--lr=0.0003" &
 done

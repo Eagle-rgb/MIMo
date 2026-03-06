@@ -25,7 +25,6 @@
     <include file="mimo/MIMo_meta.xml"></include>
 
     <equality>
-        <weld body1="head" body2="upper_body"/>
         <weld body1="left_eye" body2="head"/>
         <weld body1="right_eye" body2="head"/>
     </equality>

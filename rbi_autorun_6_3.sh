@@ -27,7 +27,7 @@ for i in $(seq 0 5); do
 		"--save_every=1000000" \
 		"--roll_over_starting_position=supine" \
 		"--algorithm=PPO" \
-		"--pen_factor=0.08" \
+		"--pen_factor=0.02" \
 		"--roll_over_model_path_auto" \
 		"--goal_achievement_function=cos" \
 		"--save_model=${MODEL_NAME}_run_${i}" \

@@ -16,6 +16,33 @@ from sklearn.linear_model import LinearRegression
 from sklearn.metrics import r2_score
 from signal_utils import resample_df_to_60hz, smooth_x_butterworth
 
+def is_roll_to_left(data):
+    """ Returns 'True' if the data shows a roll to the left side. Else,
+    it returns 'False'. This is determined on the last displacement value
+    of the torso. If it is negative, we have a roll over the right and else
+    it is a roll over the left. """
+    return data['TR'].values[-1] >= 0
+
+def relabel_right_left_limbs_in_rolling_direction(data):
+    """ Relabel wrists and ankles to 'ipsilateral' or 'contralateral' arm/leg, i.e.
+    IA, IL, CA and CL based on the direction of the rollover.
+    We expect 'data' to contain them labeled as 'Right Wrist', 'Left Wrist',
+    'Right Ankle' and 'Left Ankle'.
+    This operation does not happen in-place. A new dataframe is returned. """
+    if is_roll_to_left(data):
+        return data.rename(columns={
+            'Left Ankle': 'IL',
+            'Right Ankle': 'CL',
+            'Left Wrist': 'IA',
+            'Right Wrist': 'CA'})
+    
+    # Roll over the right.
+    return data.rename(columns={
+        'Left Ankle': 'CL',
+        'Right Ankle': 'IL',
+        'Left Wrist': 'CA',
+        'Right Wrist': 'LA'})
+
 def reorient_rollover(data):
     """ Reorients the rollover so that it is always a
     rollover over the left side so that y displacements are positive.
@@ -23,7 +50,7 @@ def reorient_rollover(data):
     Guesses the direction of rollover by checking final torso relative
     displacement. If it is negative, this was a right rollover (bad!!).
     """
-    if data['Torso'].values[-1] >= 0:
+    if is_roll_to_left(data):
         # good!
         return
     print(f"Reorienting rollover...")
@@ -106,6 +133,8 @@ def calculate_average_velocity_before_and_after(velocities_df, T, R):
     to estimate velocities for points T-R, T and T+R. ... """
 
 if __name__ == '__main__':
+
+
     parser = argparse.ArgumentParser()
     parser.add_argument('--load_model', required=False, type=str)
     parser.add_argument('--save_data', required=False, action='store_true', default=False,
@@ -127,6 +156,7 @@ if __name__ == '__main__':
             goal_function='cos',
             achieved_goal_in_observation=False,
             pbrs=True,
+            success_at_side_lying=True,
             #proprio_params=PROPRIOCEPTION_PARAMS_ONLY_QPOS,
             isr=False)
         
@@ -141,16 +171,18 @@ if __name__ == '__main__':
     else:
         raise ValueError
 
+    df = df.rename(columns={'Torso': 'TR'})
+    df = relabel_right_left_limbs_in_rolling_direction(df)
     reorient_rollover(df)
 
     if args.plot_displacement:
-        ax = df['Torso'].plot(color='red', label='Raw 100Hz unsmoothed')
+        ax = df['TR'].plot(color='red', label='Raw 100Hz unsmoothed')
 
     df = resample_df_to_60hz(df)
     df = df.apply(smooth_x_butterworth)
 
     # Get the torso speeds, normalize them to [0, 1] and fit to a sigmoid using log. regression.
-    torso = df['Torso']
+    torso = df['TR']
     if args.plot_displacement:
         torso.plot(ax=ax, color='blue', label="60Hz Smoothed")
 
@@ -176,10 +208,26 @@ if __name__ == '__main__':
     T_TR = -beta_0 / beta_1
     print(f"T_TR: {T_TR} ms")
 
+    # Calculate left and right interval bounds for the range to classify stationary limbs.
+    # Kobayashi used 0.25s left/right to 'T_TR', but our MIMo is too fast, so we must use
+    # smaller values. Based on Siegel 2024, infants on average roll in 3.6+-2.8 sec to
+    # lateral position from a supine. So we say that 0.25s is based on the 3.6 and vary
+    # that proportional to the speed our MIMo has.
+    duration_ms = df.index.max()
+    duration_siegel_mean_ms = 3600.0
+    time_range_left_right_kob_ms = 250.0
+    time_range_left_right_our_ms = int(time_range_left_right_kob_ms * duration_ms / duration_siegel_mean_ms)
+
+    T_TR_Left = T_TR - time_range_left_right_our_ms
+    T_TR_Right = T_TR + time_range_left_right_our_ms
+
     # Velocities.
     calculate_velocities_df(df)
     df.plot()
     plt.title("Velocities")
     plt.xlabel("Milliseconds from Onset")
     plt.ylabel("Velocity [mm/sec]")
+    plt.axvline(x=T_TR_Left, color='orange', linestyle='--', alpha=0.7)
+    plt.axvline(x=T_TR_Right, color='orange', linestyle='--', alpha=0.7)
+    plt.show()
 

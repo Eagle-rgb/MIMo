@@ -102,7 +102,7 @@ def collect_actuations(env, model, n_episodes=1):
     def get_actuation_of_group(group_key):
         vals = []
         for _, act_indx in act_idx[group_key].items():
-            vals.append(env.actuation_model.control_input[act_indx])
+            vals.append(abs(env.actuation_model.control_input[act_indx]))
         return np.mean(np.array(vals))
     
     def collect_actuations(zero=False):
