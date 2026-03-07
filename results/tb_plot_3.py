@@ -40,7 +40,7 @@ def plot_suffix_run_data(axIndi, axAggre, groupby, label):
         values = run_data['runs'][key]
         axIndi.plot(run_data['steps'], values, label=str(key), linewidth=2)
 
-def create_tri_comparison_plots_dual_model(df, plot_dir, suffix_1, suffix_2, display1, display2, tag1, tag2):
+def create_tri_comparison_plots_dual_model(df, plot_dir, suffix_1, suffix_2, display1, display2, tag):
     """ Creates a dual comparison plot for a single model.
     
     Arguments:
@@ -51,13 +51,11 @@ def create_tri_comparison_plots_dual_model(df, plot_dir, suffix_1, suffix_2, dis
         - suffix2: Suffix of the model 2.
         - display1: Title and legend label for model 1.
         - display2: Title and legend label for model 2.
-        - tag1: Tag to load for model 1. Supplied without 'rollout/' prefix.
-        - tag2: Tag to load for model 2. Supplied without 'rollout/' prefix.
+        - tag: Tag to load. Specify without 'rollout/' prefix.
     """
-    rollout_tag1 = "rollout/" + tag1
-    rollout_tag2 = "rollout/" + tag2
-    df_1 = df[(df['Tag'] == rollout_tag1) & (df['Suffix'] == suffix_1)]
-    df_2 = df[(df['Tag'] == rollout_tag2) & (df['Suffix'] == suffix_2)]
+    rollout_tag = "rollout/" + tag
+    df_1 = df[(df['Tag'] == rollout_tag) & (df['Suffix'] == suffix_1)]
+    df_2 = df[(df['Tag'] == rollout_tag) & (df['Suffix'] == suffix_2)]
 
     assert not df_1.empty and not df_2.empty
     haltung_1 = df_1['Haltung'].unique()[0]
@@ -70,19 +68,16 @@ def create_tri_comparison_plots_dual_model(df, plot_dir, suffix_1, suffix_2, dis
     num_runs_1 = len(df_1['Run'].unique())
     num_runs_2 = len(df_2['Run'].unique())
 
-    assert num_runs_1 == num_runs_2  # todo allow different number of runs.
-
     plot_suffix_run_data(ax1, ax3, df_1, display1)
     plot_suffix_run_data(ax2, ax3, df_2, display2)
 
-    tag_name_1 = tag1.replace('_', ' ').title()
-    tag_name_2 = tag2.replace('_', ' ').title()
+    tag_name = tag.replace('_', ' ').title()
 
     haltung_opposite = 'prone' if haltung_1 == 'supine' else 'supine'
     direction_roll_over = f'{haltung_1.capitalize()} to {haltung_opposite.capitalize()}'
         
     # Gemeinsamer Haupttitel
-    fig.suptitle(f"{tag_name_1} - {direction_roll_over}, {num_runs_1} runs", fontsize=18, fontweight='bold', y=0.98)
+    fig.suptitle(f"{tag_name} - {direction_roll_over}", fontsize=18, fontweight='bold', y=0.98)
 
     # Metadata ToDo. We have two models so we would really need to include both metadata. It would probably
     # be best to have common metadata on the top and for ax1, ax2 the individual - differing metadata.
@@ -93,8 +88,8 @@ def create_tri_comparison_plots_dual_model(df, plot_dir, suffix_1, suffix_2, dis
         #    fig.text(0.5, 0.91, hyperparams, ha='center', fontsize=11, style='italic', color='dimgray')
 
     # Achsenbeschriftungen
-    ax1.set_title(f"Individual Runs {display1}", fontsize=14, pad=10)
-    ax2.set_title(f"Individual Runs {display2}", fontsize=14, pad=10)
+    ax1.set_title(f"{num_runs_1} Individual Runs {display1}", fontsize=14, pad=10)
+    ax2.set_title(f"{num_runs_2} Individual Runs {display2}", fontsize=14, pad=10)
     ax3.set_title("Aggregated (Mean ± Std)", fontsize=14, pad=10)
 
     # We do not need run 1, 2, 3, 4, ... legend.
@@ -108,7 +103,7 @@ def create_tri_comparison_plots_dual_model(df, plot_dir, suffix_1, suffix_2, dis
         #if tag == 'rollout/success_rate':
         #    ax.set_ylim(0.0, 1.0)
         
-    ax1.set_ylabel(tag_name_1, fontsize=12)
+    ax1.set_ylabel(tag_name, fontsize=12)
 
     # Speichern
     plt.tight_layout(rect=[0, 0.03, 1, 0.90]) # Platz oben für Titel lassen
@@ -116,7 +111,7 @@ def create_tri_comparison_plots_dual_model(df, plot_dir, suffix_1, suffix_2, dis
     # 5. Speichern des Plots
     # If there is exactly one suffix specified, we include that in
     # the output file name.
-    filename = f"tricomp_{suffix1}_{haltung_1}_{tag_name_1.replace('/', '_')}.png"
+    filename = f"tricomp_{suffix1}_{haltung_1}_{tag_name.replace('/', '_')}.png"
     save_path = os.path.join(plot_dir, "png", filename)
     plt.savefig(save_path, dpi=200)
     plt.close()
@@ -145,8 +140,7 @@ if __name__ == "__main__":
     parser.add_argument('--suffix2', required=True, help="Model name suffix 2")
     parser.add_argument('--display1', required=False, help="Display for model 1")
     parser.add_argument('--display2', required=False, help="Display for model 2")
-    parser.add_argument('--tag1', required=False, help="Tag to load for model 1. Supply tags without the rollout/ prefix.")
-    parser.add_argument('--tag2', required=False, help="Tag to load for model 2. Supply tags without the rollout/ prefix.")
+    parser.add_argument('--tag', required=False, help="Tag to load. Supply tags without the rollout/ prefix.")
     args = parser.parse_args()
     date1 = args.date1
     date2 = args.date2
@@ -154,12 +148,11 @@ if __name__ == "__main__":
     suffix2 = args.suffix2
     display1 = args.display1
     display2 = args.display2
-    tag1 = args.tag1
-    tag2 = args.tag2
+    tag = args.tag
     # save_df = args.save_df
 
     base_dir = os.path.abspath(BASE_DIR)
-    data = load_tensorboard_runs(base_dir, TAGS_TO_LOAD, [date1.strftime(DATE_FORMAT), date2.strftime(DATE_FORMAT)], [suffix1, suffix2])
+    data = load_tensorboard_runs(base_dir, ["rollout/" + tag], [date1.strftime(DATE_FORMAT), date2.strftime(DATE_FORMAT)], [suffix1, suffix2])
 
     if data.empty:
         print("Es wurden keine TensorBoard-Daten gefunden. Bitte überprüfen Sie den BASE_DIR und die Ordnerstruktur.")
@@ -168,4 +161,4 @@ if __name__ == "__main__":
         print("\nErstelle Plots...")
         
         # Plot für die durchschnittliche Episodenbelohnung und Erfolgsrate
-        create_tri_comparison_plots_dual_model(data, '.', suffix1, suffix2, display1, display2, tag1, tag2)
+        create_tri_comparison_plots_dual_model(data, '.', suffix1, suffix2, display1, display2, tag)
