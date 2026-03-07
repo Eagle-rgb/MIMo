@@ -140,7 +140,8 @@ if __name__ == "__main__":
     parser.add_argument('--suffix2', required=True, help="Model name suffix 2")
     parser.add_argument('--display1', required=False, help="Display for model 1")
     parser.add_argument('--display2', required=False, help="Display for model 2")
-    parser.add_argument('--tag', required=False, help="Tag to load. Supply tags without the rollout/ prefix.")
+    parser.add_argument('--tag', required=True, help="Tag to load. Supply tags without the rollout/ prefix.")
+    parser.add_argument('--pos', required=False, type=str, help="Fixed starting position. Either 'prone' or 'supine'")
     args = parser.parse_args()
     date1 = args.date1
     date2 = args.date2
@@ -149,10 +150,13 @@ if __name__ == "__main__":
     display1 = args.display1
     display2 = args.display2
     tag = args.tag
+    pos = args.pos
     # save_df = args.save_df
 
     base_dir = os.path.abspath(BASE_DIR)
-    data = load_tensorboard_runs(base_dir, ["rollout/" + tag], [date1.strftime(DATE_FORMAT), date2.strftime(DATE_FORMAT)], [suffix1, suffix2])
+    data = load_tensorboard_runs(base_dir, ["rollout/" + tag],
+                                 [date1.strftime(DATE_FORMAT), date2.strftime(DATE_FORMAT)],
+                                 [suffix1, suffix2], pos)
 
     if data.empty:
         print("Es wurden keine TensorBoard-Daten gefunden. Bitte überprüfen Sie den BASE_DIR und die Ordnerstruktur.")

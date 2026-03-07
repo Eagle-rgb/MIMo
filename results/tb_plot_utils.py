@@ -24,7 +24,7 @@ def load_model_hyperparams(model_folder):
     # Remove trailing ' | '
     return out_str[:-3]
 
-def load_tensorboard_runs(base_dir, tags, date_filter, suffix_filter):
+def load_tensorboard_runs(base_dir, tags, date_filter, suffix_filter, pos=None):
     """ Loads tensorboard runs and creates and returns a pandas DataFrame with the following information:
     * Haltung: prone / supine
     * Suffix: Model suffix
@@ -40,6 +40,8 @@ def load_tensorboard_runs(base_dir, tags, date_filter, suffix_filter):
         - date_filter (str): Filter for model dates to look for. 'None' if should be ignored.
             Can be list[str] or a single [str]. Internally, it is then converted to a single-element list.
         - suffix_filter (list[str]): Filter for model suffixed to look for. 'None' if should be ignored.
+        - pos (str): None, empty string or 'prone' or 'supine'. If 'prone' or 'supine', only loads data of
+            models with that specified starting position. Default: None
     """
     all_data_list = []
     
@@ -62,6 +64,7 @@ def load_tensorboard_runs(base_dir, tags, date_filter, suffix_filter):
         if not match: continue
         date, haltung, suffix, run_num = match.groups()
 
+        if pos and haltung != pos: continue
         if date_filter and date not in date_filter: continue
         if suffix_filter and suffix not in suffix_filter: continue
 
