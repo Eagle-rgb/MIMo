@@ -111,7 +111,7 @@ def create_tri_comparison_plots_dual_model(df, plot_dir, suffix_1, suffix_2, dis
     # 5. Speichern des Plots
     # If there is exactly one suffix specified, we include that in
     # the output file name.
-    filename = f"tricomp_{suffix1}_{haltung_1}_{tag_name.replace('/', '_')}.png"
+    filename = f"tricomp_{suffix1}_{haltung_1}_{tag.replace('/', '_')}.png"
     save_path = os.path.join(plot_dir, "png", filename)
     plt.savefig(save_path, dpi=200)
     plt.close()
