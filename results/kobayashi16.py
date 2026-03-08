@@ -3,7 +3,7 @@ Docstring for results.kobayashi16
 
 Plot velocities of joints used for measurement in Kobayashi 2016 during one episode.
 """
-from mimoEnv.test.collect_observation_util import collect_kobayashi_site_y_displacement_series
+from collect_observation_util import collect_kobayashi_site_y_displacement_series
 import argparse
 import gymnasium as gym
 import mimoEnv
@@ -166,7 +166,7 @@ if __name__ == '__main__':
             df.to_csv('data.csv')
 
     elif args.load_data:
-        df = pd.read_csv('data.csv', index_col='Time from Onset [ms]')
+        df = pd.read_csv('data.csv', index_col='Time')
 
     else:
         raise ValueError
@@ -230,4 +230,3 @@ if __name__ == '__main__':
     plt.axvline(x=T_TR_Left, color='orange', linestyle='--', alpha=0.7)
     plt.axvline(x=T_TR_Right, color='orange', linestyle='--', alpha=0.7)
     plt.show()
-

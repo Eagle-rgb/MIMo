@@ -1,0 +1,9 @@
+Bis 07.03.2026 (ausschließlich) hatten wir den head gewelded
+zum upper body. Das hat erhebliche Konsequenzen aufs Training
+gehabt. Ab jetzt machen wir das nicht mehr - ab jetzt ist der
+Kopf frei beweglich. Also einschließlich 07.03.2026 sind die
+Modelle jetzt alle mit freien Kopf. Manche haben noch nicht
+das in der 'data.yml' stehen, weil ich noch kein pull gemacht
+habe auf dem rbi Rechner. Aber in späteren Modellen sollte bei
+allen konsequent 'True' stehen als reminder, dass dort jetzt
+der Kopf frei beweglich ist.

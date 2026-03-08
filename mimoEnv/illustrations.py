@@ -599,7 +599,8 @@ An example is '251206_prone_linear_1e6_test'
         'freeze_leg': freeze_leg,
         'freeze_arm': freeze_arm,
         'side_lying': side_lying,
-        'age': age
+        'age': age,
+        'headfree': True  # this is just a reminder for me that all models going forward can freely move their head.
     }
     with open(f'{save_dir}/data.yml', 'w') as outfile:
         yaml.dump(yaml_data, outfile, default_flow_style=False)

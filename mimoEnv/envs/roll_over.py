@@ -244,7 +244,7 @@ class MIMoRollOverEnv(MIMoEnv):
         Returns:
             bool: If the achieved hip rotation exceeds the desired rotation.
         """
-        achieved_rotation = self.get_achieved_goal_cos()
+        achieved_rotation = self.get_achieved_goal_cos()[0]
 
         if self.success_at_side_lying:
             desired_rotation = 0.5
