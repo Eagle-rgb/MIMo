@@ -32,8 +32,8 @@ for i in $(seq 0 ${NUMBER_OF_RUNS-1}); do
 		"conda activate mimo && "\
 		"cd MIMo && "\
 		"python mimoEnv/illustrations.py" \
-		"--train_for=1000000" \
-		"--save_every=1000000" \
+		"--train_for=2000000" \
+		"--save_every=2000000" \
 		"--roll_over_starting_position=supine" \
 		"--algorithm=PPO" \
 		"--pen_factor=0.02" \
@@ -41,7 +41,7 @@ for i in $(seq 0 ${NUMBER_OF_RUNS-1}); do
 		"--goal_achievement_function=cos" \
 		"--save_model=${MODEL_NAME}_run_$((i))" \
 		"--pbrs" \
-		"--age=9" \
+		"--age=6" \
 		"--pbrs_w=100" \
 		"--lr=0.0003" &
 done

@@ -11,6 +11,7 @@ from mimoActuation.actuation_pc1 import SpringDamperModel_PC1
 import mujoco
 from PIL import Image
 import os
+import re
 
 OBS_VESTI_KEYS = ["accelerometer_x", "accelerometer_y", "accelerometer_z", 
                   "gyro_x", "gyro_y", "gyro_z"]
@@ -302,7 +303,7 @@ def collect_kobayashi_site_y_displacement_series(env, model):
     df = pd.DataFrame(data).set_index('Time')
     return df
 
-def collect_laterality_and_success(env, model, n_success_episodes, n_abort):
+def collect_run_statistics(env, model, n_success_episodes, n_abort):
     """ Lets the (trained) model 'model' play in the environment 'env' for as many episodes
     until it reaches 'n_success_episodes' number of successful episodes. We let him play for
     a maximum of 'n_abort' episodes, after which if we did not reach 'n_success_episodes', we
@@ -312,15 +313,24 @@ def collect_laterality_and_success(env, model, n_success_episodes, n_abort):
     torso_site_id  = mujoco.mj_name2id(env.model, mujoco.mjtObj.mjOBJ_SITE, "KOBAYASHI_Torso")
     data = []
 
+    def get_frame():
+        return env.mujoco_renderer.render(render_mode="rgb_array")
+
     for episode in range(n_abort):
+        print("Playing episode...")
+        imgs = []
         done = False
         obs, _ = env.reset()
+        imgs.append(get_frame())
+        time_zero_sec = env.data.time
 
         ref_displacement = env.data.site_xpos[torso_site_id][1]
 
         while not done:
             action, _ = model.predict(obs)
             obs, _, success, failure, info = env.step(action)
+            imgs.append(get_frame())
+
             done = success or failure
 
             if success:
@@ -335,12 +345,61 @@ def collect_laterality_and_success(env, model, n_success_episodes, n_abort):
                 relative_displacement = torso_displacement - ref_displacement
                 entry['Left_Roll'] = relative_displacement >= 0
 
+                time_finish_sec = env.data.time
+                entry['Time'] = (time_finish_sec - time_zero_sec) * 1000.0  # ms
+
                 data.append(entry)
+
+                if success and entry['Time'] > 4000.0:
+                    print("We got one! Saving as video...")
+                    save_name=os.path.join('.', 'long_episode.avi')
+                    render_height = 480
+                    render_width = 480
+                    evaluation_video(imgs, save_name=save_name, resolution=((render_width, render_height)))
+                    raise ValueError
 
                 if cnt_success >= n_success_episodes:
                     return pd.DataFrame(data)
                 
     return None
+
+def collect_run_statistics_all(env, date, pos, suffix):
+    """ Searches for all models matching 'date', starting position 'pos' and suffix 'suffix'.
+    Loads all runs of these models and plays 'collect_run_statistics' on them for 10 episodes. """
+    data = []
+
+    # Pattern of model folder: <date>_<startingposition>_<suffix>_run_<i>
+    pattern = re.compile(r'(\d{2}-\d{2}-\d{2})_([a-z]+)_([a-z0-9_-]+)_run_(\d+)')
+
+    for root, dirs, files in os.walk('.'):
+        # root: Current folder on walk
+        # dirs: Directories in 'root'
+        # files: Files in 'root'
+        root_name = os.path.basename(root)
+        match = pattern.search(root_name)
+        if not match: continue
+        _date, haltung, _suffix, run_num = match.groups()
+
+        if _date != date: continue
+        if haltung != pos: continue
+        if _suffix != suffix: continue
+
+        print(f"Found run {run_num}!")
+
+        model_file = os.path.join(os.path.abspath(root), "model_1.zip")
+        model = RL.load(model_file, env)
+        n_success_episodes=10
+        n_abort=40
+        run_stats = collect_run_statistics(env, model, n_success_episodes=n_success_episodes, n_abort=n_abort)
+        if run_stats is None:
+            print(f"Run {run_num} did not reach {n_success_episodes} successful episodes in {n_abort} tries. Skipping...")
+            continue
+        run_stats['Run'] = run_num
+        run_stats = run_stats.set_index(['Run', 'Episode'])
+        data.append(run_stats)
+
+    df = pd.concat(data)
+    return df
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
