@@ -41,7 +41,7 @@ for i in $(seq 0 $((NUMBER_OF_RUNS-1))); do
 		"--goal_achievement_function=cos" \
 		"--save_model=${MODEL_NAME}_run_$((i))" \
 		"--pbrs" \
-		"--age=9" \
+		"--age=1" \
 		"--pbrs_w=100" \
 		"--lr=0.0002" &
 done

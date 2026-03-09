@@ -457,10 +457,10 @@ An example is '251206_prone_linear_1e6_test'
     # scenes at the same time.
     if age == 18:  # default
         model_path = os.path.join(SCENE_DIRECTORY, "roll_over_prone_scene.xml")
-    elif age in [0, 3, 6, 7, 8, 9]:
+    elif age in [0, 1, 3, 6, 7, 8, 9]:
         model_path = os.path.join(SCENE_DIRECTORY, f"roll_over_prone_scene_{age}_mo.xml")
     else:
-        raise ValueError("Allowed ages: 18, 9, 8, 7, 6, 3, 0.")
+        raise ValueError("Allowed ages: 18, 9, 8, 7, 6, 3, 1, 0.")
 
     if freeze_arm or freeze_leg:
         print("Warning! Some limbs are frozen.")
