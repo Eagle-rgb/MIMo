@@ -43,7 +43,7 @@ for i in $(seq 0 $((NUMBER_OF_RUNS-1))); do
 		"--pbrs" \
 		"--age=1" \
 		"--pbrs_w=100" \
-		"--lr=0.0002" &
+		"--lr=0.0003" &
 done
 
 # Wait until all ssh commands finished, i.e. all MIMo simulations are finished. Then, plot the results.
