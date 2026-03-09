@@ -56,14 +56,15 @@ def get_model_training_data_aggregated(dates, suffixes, haltungen, tags, xmax):
 
         model_data.append(entry)
 
-    return pd.DataFrame(model_data)
+    return model_data
 
-def plot_data(data: pd.DataFrame, labels: list[str], max_x: int):
+def plot_data(data, labels: list[str], max_x: int):
     x_axis = np.linspace(0, max_x, N_POINTS)
 
-    for model_idx, model_df in data.groupby(['model_idx']):
-        values = model_df['value']
-        label = labels[model_idx[0]]
+    for model_data in data:
+        model_idx = model_data['model_idx']
+        values = model_data['value']
+        label = labels[model_idx]
 
         plt.plot(x_axis, values, label=label)
 
