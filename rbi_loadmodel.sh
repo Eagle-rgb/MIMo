@@ -27,7 +27,7 @@ if [ $NUMBER_OF_RUNS -ge ${#HOSTPREFIXES[@]} ]
 		return
 fi
 
-for i in $(seq 1 $NUMBER_OF_RUNS); do
+for i in $(seq 0 $((NUMBER_OF_RUNS-1))); do
 	HOSTNAME="${HOSTPREFIXES[i]}"".rbi.cs.uni-frankfurt.de"
 	echo "Playing MIMo on host $HOSTNAME"
 	# Putting '--save_every' as same value as '--train_for' saves only the very last model.

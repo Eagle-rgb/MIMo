@@ -44,10 +44,36 @@ if __name__ == '__main__':
     min_time = np.min(time_series)
     max_time = np.max(time_series)
     avg_time = np.mean(time_series)
-
     print(f"Min: {min_time} ms")
     print(f"Max: {max_time} ms")
     print(f"Avg: {avg_time} ms")
 
+    labels = np.logspace(np.log10(30), np.log10(5000), 20)
+    counts, _ = np.histogram(time_series.values, bins=labels)
+    print(counts)
+    counts = counts.astype(np.float64)
+    num_models = np.sum(counts)
+    counts /= num_models
+    counts *= 100.0
+    print(counts)
+
+    plt.figure(figsize=(2,2))
+    plt.bar(labels[:-1], counts, width=np.diff(labels),
+            edgecolor='black', align='edge',
+            color='lightgray')
+    plt.xscale('log')
+    plt.xlim(100, 5000)
+    plt.ylabel('Number of models (%)')
+    ax = plt.gca()
+    for spine in ['top', 'right']:
+        ax.spines[spine].set_visible(False)
+    plt.tick_params(axis='x', direction='in', length=6, width=1)
+    plt.tick_params(axis='y', direction='in', length=6, width=1)
+    plt.tight_layout(pad=1.0)
+    #plt.savefig('sp.pdf',
+    #            dpi=300,
+    #            bbox_inches='tight',
+    #            format='pdf')
+    plt.show()
     print(time_series.idxmax())
     # print(successful_df.xs(8, level='Run'))

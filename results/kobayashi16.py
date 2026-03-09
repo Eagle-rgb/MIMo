@@ -3,18 +3,18 @@ Docstring for results.kobayashi16
 
 Plot velocities of joints used for measurement in Kobayashi 2016 during one episode.
 """
-from collect_observation_util import collect_kobayashi_site_y_displacement_series
+from collect_observation_util import collect_kobayashi_displacements_all
 import argparse
 import gymnasium as gym
 import mimoEnv
 from mimoActuation.actuation import SpringDamperModel
-from stable_baselines3 import PPO as RL
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from sklearn.linear_model import LinearRegression
 from sklearn.metrics import r2_score
 from signal_utils import resample_df_to_60hz, smooth_x_butterworth
+from scipy.interpolate import interp1d
 
 def is_roll_to_left(data):
     """ Returns 'True' if the data shows a roll to the left side. Else,
@@ -41,7 +41,7 @@ def relabel_right_left_limbs_in_rolling_direction(data):
         'Left Ankle': 'CL',
         'Right Ankle': 'IL',
         'Left Wrist': 'CA',
-        'Right Wrist': 'LA'})
+        'Right Wrist': 'IA'})
 
 def reorient_rollover(data):
     """ Reorients the rollover so that it is always a
@@ -126,17 +126,32 @@ def calculate_velocities_df(df):
         velocities = calculate_velocities(displacement_series)
         df[key] = velocities
 
-def calculate_average_velocity_before_and_after(velocities_df, T, R):
+def calculate_average_velocity(velocities_df, a, b):
     """ Calculates the average velocity for each limb (key) in 'velocities_df'
-    in the time range [T-R, T] ('before') and [T, T+R] ('after'). Velocities in
-    'velocities_df' are defined only pointwise. This function uses interpolation
-    to estimate velocities for points T-R, T and T+R. ... """
+    in the interval [a, b]. """
+    velocity_mean_df = []
+
+    for key in velocities_df:
+        velocities = velocities_df[key].values
+        steps = velocities_df[key].index.values
+        f_interp = interp1d(steps, velocities, kind='linear')
+        x = np.linspace(a, b, num=10)
+        y = f_interp(x)
+
+        mean = np.trapz(y, x) / (b - a)
+        velocity_mean_df.append({
+            'key': key,
+            'mean': mean
+        })
+
+    return pd.DataFrame(velocity_mean_df)
+
+def classify_stationary_limbs(velocity_mean_df: pd.DataFrame, thresh_mm_sec: float):
+    return velocity_mean_df[abs(velocity_mean_df['mean']) <= thresh_mm_sec]
 
 if __name__ == '__main__':
-
-
     parser = argparse.ArgumentParser()
-    parser.add_argument('--load_model', required=False, type=str)
+    parser.add_argument('--collect_data', required=False, action='store_true')
     parser.add_argument('--save_data', required=False, action='store_true', default=False,
                         help="Saves collected dataframe of '--load_model' as 'data.csv'.")
     parser.add_argument('--load_data', required=False, action='store_true', default=False,
@@ -144,7 +159,7 @@ if __name__ == '__main__':
     parser.add_argument('--plot_displacement', action='store_true')
     args = parser.parse_args()
 
-    if args.load_model:
+    if args.collect_data:
         env = gym.make("MIMoRollOver-v0", actuation_model=SpringDamperModel,
             starting_position='supine',
             width=480, # always 480 regardless whether we render actuations or not.
@@ -160,73 +175,79 @@ if __name__ == '__main__':
             #proprio_params=PROPRIOCEPTION_PARAMS_ONLY_QPOS,
             isr=False)
         
-        model = RL.load(args.load_model, env)
-        df = collect_kobayashi_site_y_displacement_series(env, model, n_episodes=1)
+        df = collect_kobayashi_displacements_all(env, '26-03-07', 'supine', 'age9')
         if args.save_data:
-            df.to_csv('data.csv')
+            df.to_csv('kobayashidata.csv')
 
     elif args.load_data:
-        df = pd.read_csv('data.csv', index_col='Time')
+        df = pd.read_csv('kobayashidata.csv', index_col=['Run', 'Time'])
 
     else:
         raise ValueError
-
-    df = df.rename(columns={'Torso': 'TR'})
-    df = relabel_right_left_limbs_in_rolling_direction(df)
-    reorient_rollover(df)
-
-    if args.plot_displacement:
-        ax = df['TR'].plot(color='red', label='Raw 100Hz unsmoothed')
-
-    df = resample_df_to_60hz(df)
-    df = df.apply(smooth_x_butterworth)
-
-    # Get the torso speeds, normalize them to [0, 1] and fit to a sigmoid using log. regression.
-    torso = df['TR']
-    if args.plot_displacement:
-        torso.plot(ax=ax, color='blue', label="60Hz Smoothed")
-
-    torso_sigmoid, (beta_0, beta_1) = fit_normalized_to_sigmoid(torso)
-
-    if args.plot_displacement:
-        torso_sigmoid.plot(ax=ax, color='green', label='Sigmoid Fitted')
-        plt.legend()
-        # plt.hlines(100.0, df.index[0], df.index[-1], linestyles=['dashed'], colors=['yellow'])
-        plt.xlabel("Milliseconds from Onset")
-        plt.ylabel("Relative Displacement (mm)")
-        plt.show()
-
-    # Verify that R-squared value is > 0.6
-    r2 = r2_score(torso, torso_sigmoid)
-    if r2 < 0.6:
-        print(f"Too low R-squared value!")
-        raise ValueError
     
-    # Get time of maximum torso velocity T_TR. For log. sigmoid, we can very elegantly calculate
-    # time at which the curve hits 0.5 - it all boils down to this simple quotient of the beta
-    # parameters.
-    T_TR = -beta_0 / beta_1
-    print(f"T_TR: {T_TR} ms")
+    groupby_run = df.groupby('Run')
 
-    # Calculate left and right interval bounds for the range to classify stationary limbs.
-    # Kobayashi used 0.25s left/right to 'T_TR', but our MIMo is too fast, so we must use
-    # smaller values. Based on Siegel 2024, infants on average roll in 3.6+-2.8 sec to
-    # lateral position from a supine. So we say that 0.25s is based on the 3.6 and vary
-    # that proportional to the speed our MIMo has.
-    duration_ms = df.index.max()
-    duration_siegel_mean_ms = 3600.0
-    time_range_left_right_kob_ms = 250.0
-    time_range_left_right_our_ms = int(time_range_left_right_kob_ms * duration_ms / duration_siegel_mean_ms)
+    ax_displacement = None
 
-    T_TR_Left = T_TR - time_range_left_right_our_ms
-    T_TR_Right = T_TR + time_range_left_right_our_ms
+    stationary_limbs_df = []
 
-    # Velocities.
-    calculate_velocities_df(df)
-    df.plot()
-    plt.title("Velocities")
-    plt.xlabel("Milliseconds from Onset")
-    plt.ylabel("Velocity [mm/sec]")
-    plt.axvline(x=T_TR_Left, color='orange', linestyle='--', alpha=0.7)
-    plt.axvline(x=T_TR_Right, color='orange', linestyle='--', alpha=0.7)
-    plt.show()
+    for run, df_run in groupby_run:
+        df_run = relabel_right_left_limbs_in_rolling_direction(df_run)
+        reorient_rollover(df_run)
+
+        df_run = resample_df_to_60hz(df_run)
+        df_run = df_run.apply(smooth_x_butterworth)
+
+        # Get the torso speeds, normalize them to [0, 1] and fit to a sigmoid using log. regression.
+        torso = df_run['TR']
+
+        torso_sigmoid, (beta_0, beta_1) = fit_normalized_to_sigmoid(torso)
+
+        if args.plot_displacement:
+            if ax_displacement is None:
+                ax_displacement = torso_sigmoid.plot(label=f"Run {run}")
+            else:
+                torso_sigmoid.plot(ax=ax_displacement, label=f"Run {run}")
+
+        # Verify that R-squared value is > 0.6
+        r2 = r2_score(torso, torso_sigmoid)
+        if r2 < 0.6:
+            print(f"Too low R-squared value!")
+            continue
+            raise ValueError
+        
+        # Get time of maximum torso velocity T_TR. For log. sigmoid, we can very elegantly calculate
+        # time at which the curve hits 0.5 - it all boils down to this simple quotient of the beta
+        # parameters.
+        T_TR = -beta_0 / beta_1
+
+        # Calculate left and right interval bounds for the range to classify stationary limbs.
+        # Kobayashi used 0.25s left/right to 'T_TR', but our MIMo is too fast, so we must use
+        # smaller values. Based on Siegel 2024, infants on average roll in 3.6+-2.8 sec to
+        # lateral position from a supine. So we say that 0.25s is based on the 3.6 and vary
+        # that proportional to the speed our MIMo has.
+        duration_ms = df_run.index.max()
+        duration_siegel_mean_ms = 3600.0
+        time_range_left_right_kob_ms = 250.0
+        time_range_left_right_our_ms = int(time_range_left_right_kob_ms * duration_ms / duration_siegel_mean_ms)
+
+        T_TR_Left = T_TR - time_range_left_right_our_ms
+        T_TR_Right = T_TR + time_range_left_right_our_ms
+
+        if T_TR_Right > duration_ms:
+            print(f"T_TR is very late: {T_TR} ms for total duration {duration_ms} ms...")
+            T_TR_Right = duration_ms
+
+        # Velocities.
+        calculate_velocities_df(df_run)
+
+        df_ipsilateral = df_run[['IA', 'IL']]
+
+        df_mean = calculate_average_velocity(df_ipsilateral, T_TR_Left, T_TR_Right)
+        df_stationary = classify_stationary_limbs(df_mean, thresh_mm_sec=400)
+        df_stationary['Run'] = run
+        stationary_limbs_df.append(df_stationary)
+
+    stationary_limbs_df = pd.concat(stationary_limbs_df, ignore_index=True)
+    print(stationary_limbs_df)
+

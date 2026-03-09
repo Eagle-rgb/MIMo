@@ -22,36 +22,37 @@ fi
 
 today=$(date +%y-%m-%d)
 
-for i in $(seq 1 $NUMBER_OF_RUNS); do
+RUN_OFFSET=${18}
+
+for i in $(seq 0 $((NUMBER_OF_RUNS-1))); do
 	HOSTNAME="${HOSTPREFIXES[i]}"".rbi.cs.uni-frankfurt.de"
 	echo "Playing MIMo on host $HOSTNAME"
 	# Putting '--save_every' as same value as '--train_for' saves only the very last model.
 	ssh -o "StrictHostKeyChecking accept-new" -l ${USERNAME} ${HOSTNAME} \
 		"conda activate mimo && "\
-		"cd MIMo && "\
+		"cd MIMo && " \
 		"python mimoEnv/illustrations.py" \
 		"--test" \
-        "--render_final_image" \
+        "--render_frames" \
+		"--render_video" \
 		"--roll_over_starting_position=supine" \
-		"--algorithm=PPO" \
-		"--pen_fac=0.02" \
-		"--roll_over_model_path_auto" \
-		"--roll_over_goal_function=cos" \
-		"--save_model=${MODEL_NAME}_run_${i}" \
-        "--load_model=models/roll_over/${MODEL_DATE}/supine/${MODEL_DATE}_supine_${MODEL_NAME}_run_${i}/model_1.zip" \
-		"--pbrs" \
-		"--pbrs_w=100" \
-		"--side_lying" \
-		"--lr=0.0003" &
+        "--load_model=models/roll_over/${MODEL_DATE}/supine/${MODEL_DATE}_supine_${MODEL_NAME}_run_$((i+RUN_OFFSET))/model_1.zip" &
 done
 
 # Wait until all ssh commands finished, i.e. all MIMo simulations are finished. Then, plot the results.
 wait
 
-# Copy videos.
-for i in $(seq 1 $NUMBER_OF_RUNS); do
+# Copy images.
+for i in $(seq 0 $((NUMBER_OF_RUNS-1))); do
     echo "Copying run ${i}"
-    scp "${USERNAME}@adrastos.rbi.cs.uni-frankfurt.de:~/MIMo/models/roll_over/${today}/supine/${today}_supine_${MODEL_NAME}_run_${i}/episode_0.png" "vid/${MODEL_DATE}_supine_${MODEL_NAME}_run_${i}.png" &
+    scp "${USERNAME}@adrastos.rbi.cs.uni-frankfurt.de:~/MIMo/models/roll_over/${MODEL_DATE}/supine/${MODEL_DATE}_supine_${MODEL_NAME}_run_$((i+RUN_OFFSET))/*.png" "models/arch/laterality/${MODEL_DATE}_supine_${MODEL_NAME}_run_$((i+RUN_OFFSET))" &
+done
+wait
+
+# Copy videos.
+for i in $(seq 0 $((NUMBER_OF_RUNS-1))); do
+    echo "Copying run ${i}"
+    scp "${USERNAME}@adrastos.rbi.cs.uni-frankfurt.de:~/MIMo/models/roll_over/${MODEL_DATE}/supine/${MODEL_DATE}_supine_${MODEL_NAME}_run_$((i+RUN_OFFSET))/*.avi" "models/arch/laterality/${MODEL_DATE}_supine_${MODEL_NAME}_run_$((i+RUN_OFFSET))" &
 done
 wait
 

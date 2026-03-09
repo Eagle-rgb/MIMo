@@ -300,7 +300,39 @@ def collect_kobayashi_site_y_displacement_series(env, model):
             entry['Time'] = env.data.time * 1000.0 - time_offset # env.data.time is in sec.
             data.append(entry)
 
-    df = pd.DataFrame(data).set_index('Time')
+    return pd.DataFrame(data)
+
+def collect_kobayashi_displacements_all(env, date, pos, suffix):
+    """ Searches for all models matching 'date', starting position 'pos' and suffix 'suffix'.
+    Loads all runs of these models and plays 'collect_kobayashi_site_y_displacement_series' on them for 1 episode. """
+    data = []
+
+    # Pattern of model folder: <date>_<startingposition>_<suffix>_run_<i>
+    pattern = re.compile(r'(\d{2}-\d{2}-\d{2})_([a-z]+)_([a-z0-9_-]+)_run_(\d+)')
+
+    for root, dirs, files in os.walk('.'):
+        # root: Current folder on walk
+        # dirs: Directories in 'root'
+        # files: Files in 'root'
+        root_name = os.path.basename(root)
+        match = pattern.search(root_name)
+        if not match: continue
+        _date, haltung, _suffix, run_num = match.groups()
+
+        if _date != date: continue
+        if haltung != pos: continue
+        if _suffix != suffix: continue
+
+        print(f"Found run {run_num}!")
+
+        model_file = os.path.join(os.path.abspath(root), "model_1.zip")
+        model = RL.load(model_file, env)
+        df = collect_kobayashi_site_y_displacement_series(env, model)
+        df['Run'] = run_num
+        df = df.set_index(['Run', 'Time'])
+        data.append(df)
+
+    df = pd.concat(data)
     return df
 
 def collect_run_statistics(env, model, n_success_episodes, n_abort):

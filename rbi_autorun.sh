@@ -24,7 +24,7 @@ if [ $NUMBER_OF_RUNS -ge ${#HOSTPREFIXES[@]} ]
 		return
 fi
 
-for i in $(seq 0 ${NUMBER_OF_RUNS-1}); do
+for i in $(seq 0 $((NUMBER_OF_RUNS-1))); do
 	HOSTNAME="${HOSTPREFIXES[i]}"".rbi.cs.uni-frankfurt.de"
 	echo "Playing MIMo on host $HOSTNAME"
 	# Putting '--save_every' as same value as '--train_for' saves only the very last model.
@@ -32,8 +32,8 @@ for i in $(seq 0 ${NUMBER_OF_RUNS-1}); do
 		"conda activate mimo && "\
 		"cd MIMo && "\
 		"python mimoEnv/illustrations.py" \
-		"--train_for=2000000" \
-		"--save_every=2000000" \
+		"--train_for=1000000" \
+		"--save_every=1000000" \
 		"--roll_over_starting_position=supine" \
 		"--algorithm=PPO" \
 		"--pen_factor=0.02" \
@@ -41,9 +41,9 @@ for i in $(seq 0 ${NUMBER_OF_RUNS-1}); do
 		"--goal_achievement_function=cos" \
 		"--save_model=${MODEL_NAME}_run_$((i))" \
 		"--pbrs" \
-		"--age=6" \
+		"--age=9" \
 		"--pbrs_w=100" \
-		"--lr=0.0003" &
+		"--lr=0.0002" &
 done
 
 # Wait until all ssh commands finished, i.e. all MIMo simulations are finished. Then, plot the results.
