@@ -47,11 +47,13 @@ def get_model_training_data_aggregated(dates, suffixes, haltungen, tags, xmax):
         df_stats = interpolate_runs_to_dict(df_model, n_points=N_POINTS, max_step=xmax)
         values = df_stats['mean']
         steps = df_stats['steps']
+        std = df_stats['std']
 
         entry = {
             'model_idx': i,
             'value': values,
-            'step': steps
+            'step': steps,
+            'std': std
         }
 
         model_data.append(entry)
@@ -67,6 +69,11 @@ def plot_data(data, labels: list[str], max_x: int):
         label = labels[model_idx]
 
         plt.plot(x_axis, values, label=label)
+        plt.fill_between(x_axis,
+            values - model_data['std'], 
+            values + model_data['std'], 
+            alpha=0.15 
+        )
 
     plt.legend()
     plt.xlabel('Steps')
@@ -135,5 +142,5 @@ if __name__ == "__main__":
     if len(dates) == 0:
         raise ValueError("No models specified...")
     
-    data = get_model_training_data_aggregated(dates, suffixes, haltungen, tags)
-    plot_data(data, labels)
+    data = get_model_training_data_aggregated(dates, suffixes, haltungen, tags, 1e6)
+    plot_data(data, labels, 1e6)
