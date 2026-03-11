@@ -60,7 +60,7 @@ def get_model_training_data_aggregated(dates, suffixes, haltungen, tags, xmax):
 
     return model_data
 
-def plot_data(data, labels: list[str], max_x: int):
+def plot_data(data, labels: list[str], max_x: int, save_file: str):
     x_axis = np.linspace(0, max_x, N_POINTS)
 
     for model_data in data:
@@ -79,7 +79,10 @@ def plot_data(data, labels: list[str], max_x: int):
     plt.xlabel('Steps')
     plt.ylabel('Success Rate')
     plt.grid(True, linestyle='--', alpha=0.5)
-    plt.savefig()
+    plt.savefig(f'{save_file}.pdf',
+                dpi=300,
+                bbox_inches='tight',
+                format='pdf')
         
 def valid_date(s: str) -> datetime:
     try:
@@ -99,6 +102,8 @@ if __name__ == "__main__":
     # this suffix is included in the output .png file name.
     parser = argparse.ArgumentParser()
     max_models = 8
+
+    parser.add_argument('--name', required=True, type=str, help=f"Output filename")
 
     for i in range(1,max_models+1):
         parser.add_argument(f'--date{i}', required=i==1, type=valid_date, help=f"Date of the runs {i}")
@@ -145,4 +150,4 @@ if __name__ == "__main__":
         raise ValueError("No models specified...")
     
     data = get_model_training_data_aggregated(dates, suffixes, haltungen, tags, 1e6)
-    plot_data(data, labels, 1e6)
+    plot_data(data, labels, 1e6, args.name)
