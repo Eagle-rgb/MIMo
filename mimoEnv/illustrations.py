@@ -43,7 +43,7 @@ import yaml
 import numpy as np
 
 from mimoEnv.envs.roll_over import TOUCH_PARAMS as ROLL_OVER_TOUCH_PARAMS
-from mimoEnv.envs.roll_over_logger import HipChestAngleLogger
+from mimoEnv.envs.roll_over_callback import RollOverCallback
 
 from PIL import Image
 
@@ -159,7 +159,7 @@ def test(wrapped_env, save_dir, model=None, render_video=False, render_frames=Fa
 
     wrapped_env.reset()
 
-def train(model, train_for, save_every, save_dir, isr):
+def train(model, train_for, save_every, save_dir, isr, save_intermediate=False):
     """ Training function of a model.
 
     If 'isr' is active, then trains the model for 75% with 'isr' enabled and the remaining last 25%
@@ -172,9 +172,11 @@ def train(model, train_for, save_every, save_dir, isr):
         save_every (int): Number of timesteps where we save a model.
         save_dir (str): The path to save the model.
         isr (bool): Activate Initial State Randomization?
+        save_intermediate (bool): Save intermediate model at reaching 90% side lying success rate?
     """ 
     counter = 0
     train_for_total = train_for
+    callback = RollOverCallback(save_intermediate=save_intermediate, save_dir=save_dir)
     while train_for > 0:
         counter += 1
 
@@ -199,7 +201,7 @@ def train(model, train_for, save_every, save_dir, isr):
             "disabling isr.")
             model.learn(total_timesteps=train_for_until_reaching_75,
                         reset_num_timesteps=False,
-                        callback=HipChestAngleLogger())
+                        callback=callback)
 
             print("Disabling isr...")
 
@@ -213,12 +215,12 @@ def train(model, train_for, save_every, save_dir, isr):
                 print(f"Training remaining {train_for_iter-train_for_until_reaching_75} timesteps.")
                 model.learn(total_timesteps=train_for_iter-train_for_until_reaching_75,
                             reset_num_timesteps=False,
-                            callback=HipChestAngleLogger())
+                            callback=callback)
 
         else:
             model.learn(total_timesteps=train_for_iter,
                         reset_num_timesteps=False,
-                        callback=HipChestAngleLogger())
+                        callback=callback)
 
         model.save(os.path.join(save_dir, "model_" + str(counter)))
 
@@ -396,6 +398,8 @@ An example is '251206_prone_linear_1e6_test'
                         " and saves them as 'frame_{1-5}.png'.")
     parser.add_argument('--age', default=18, required=False, type=int,
                         help="MIMo's age in months. Default: 18.")
+    parser.add_argument('--save_intermediate', action='store_true', help="Save intermediate model at reaching " \
+                        "90% side lying success rate.")
     
     # Parse yaml if we specified '--load_model'.
     args, remaining_argv = parser.parse_known_args()
@@ -436,6 +440,7 @@ An example is '251206_prone_linear_1e6_test'
     side_lying = args.side_lying
     render_frames = args.render_frames
     age = args.age
+    save_intermediate = args.save_intermediate
 
     print(f"pen_factor: {pen_factor}")
 
@@ -608,7 +613,7 @@ An example is '251206_prone_linear_1e6_test'
     if train_for > 0:
         if model is None:
             raise RuntimeError("Model not defined. Please provide an algorithm name.")
-        train(model=model, save_dir=save_dir, train_for=train_for, save_every=save_every, isr=isr)
+        train(model=model, save_dir=save_dir, train_for=train_for, save_every=save_every, isr=isr, save_intermediate=save_intermediate)
 
     if should_test:
         # Note here we do not check for 'model is None', because we allow it. If in testing the model is
