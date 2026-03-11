@@ -20,53 +20,59 @@ def get_model_training_data_aggregated(dates, suffixes, haltungen, tags, xmax):
     fits to a sigmoid. Returns a list matching the size of the
     parameter lists containing entries with normlization statistics
     and sigmoid parameters. """
-    all_run_data = load_tensorboard_runs(base_dir=os.path.abspath(BASE_DIR), tags=tags, date_filter=dates, suffix_filter=suffixes)
+    all_model_data = load_tensorboard_runs(base_dir=os.path.abspath(BASE_DIR), tags=tags, date_filter=dates, suffix_filter=suffixes)
     # list of individual model training data.
     model_data = []
-    n_runs = len(dates)
+    n_models = len(dates)
     x_axis = np.linspace(0, xmax, N_POINTS)
 
-    if all_run_data.empty:
+    if all_model_data.empty:
         raise ValueError
 
-    for i in range(n_runs):
+    for i in range(n_models):
         date = dates[i]
         suffix = suffixes[i]
         haltung = haltungen[i]
         tag = tags[i]
 
         # 'df_model' still has many runs. We need to average over runs.
-        df_model = all_run_data[(all_run_data['Date']==date) &
-                              (all_run_data['Suffix']==suffix) &
-                              (all_run_data['Haltung']==haltung) &
-                              (all_run_data['Tag']==tag)]
+        df_model = all_model_data[(all_model_data['Date']==date) &
+                              (all_model_data['Suffix']==suffix) &
+                              (all_model_data['Haltung']==haltung) &
+                              (all_model_data['Tag']==tag)]
         
         if df_model.empty:
             raise ValueError(f"No data found for date {date}, suffix {suffix}, haltung {haltung}, tag {tag}")
         
-        df_stats = interpolate_runs_to_dict(df_model, n_points=N_POINTS, max_step=xmax)
+        df_stats = interpolate_runs_to_dict(df_model, n_points=N_POINTS, min_step=0, max_step=xmax)
         values = df_stats['mean']
         steps = df_stats['steps']
         std = df_stats['std']
+
+        num_runs = len(df_model['Run'].unique())
 
         entry = {
             'model_idx': i,
             'value': values,
             'step': steps,
-            'std': std
+            'std': std,
+            'num_runs': num_runs,
         }
 
         model_data.append(entry)
 
     return model_data
 
-def plot_data(data, labels: list[str], max_x: int, save_file: str):
+def plot_data(data, labels: list[str], max_x: int, save_file: str, append_num_runs_to_label: bool=False):
     x_axis = np.linspace(0, max_x, N_POINTS)
 
     for model_data in data:
         model_idx = model_data['model_idx']
         values = model_data['value']
         label = labels[model_idx]
+
+        if append_num_runs_to_label:
+            label += model_data['num_runs']
 
         plt.plot(x_axis, values, label=label)
         plt.fill_between(x_axis,
@@ -77,7 +83,7 @@ def plot_data(data, labels: list[str], max_x: int, save_file: str):
 
     plt.legend()
     plt.xlabel('Steps')
-    plt.ylabel('Success Rate')
+    plt.ylabel('Mean Success Rate')
     plt.grid(True, linestyle='--', alpha=0.5)
     plt.savefig(f'{save_file}.pdf',
                 dpi=300,
@@ -104,6 +110,8 @@ if __name__ == "__main__":
     max_models = 8
 
     parser.add_argument('--name', required=True, type=str, help=f"Output filename")
+    parser.add_argument('--num_runs_in_label', action='store_true', help=f"Suffix label " \
+                        "with number of runs.")
 
     for i in range(1,max_models+1):
         parser.add_argument(f'--date{i}', required=i==1, type=valid_date, help=f"Date of the runs {i}")
@@ -149,5 +157,5 @@ if __name__ == "__main__":
     if len(dates) == 0:
         raise ValueError("No models specified...")
     
-    data = get_model_training_data_aggregated(dates, suffixes, haltungen, tags, 1e6)
-    plot_data(data, labels, 1e6, args.name)
+    data: pd.DataFrame = get_model_training_data_aggregated(dates, suffixes, haltungen, tags, 1e6)
+    plot_data(data, labels, 1e6, args.name, args.num_runs_in_label)
