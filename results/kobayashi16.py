@@ -126,6 +126,11 @@ def calculate_velocities_df(df):
         velocities = calculate_velocities(displacement_series)
         df[key] = velocities
 
+def normalize_velocities_to_torso(df: pd.DataFrame):
+    torso_velocity_series: pd.Series = df['TR']
+    for key in df.keys().difference(['TR']):
+        df[key] = df[key].div(torso_velocity_series, fill_value=0) * 100.0
+
 def calculate_average_velocity(velocities_df, a, b):
     """ Calculates the average velocity for each limb (key) in 'velocities_df'
     in the interval [a, b]. """
@@ -191,6 +196,13 @@ if __name__ == '__main__':
 
     stationary_limbs_df = []
 
+    n_pattern = {
+        'Two Stationary': 0,
+        'Stationary IA': 0,
+        'Stationary IL': 0,
+        'No Stationary': 0
+    }
+
     for run, df_run in groupby_run:
         df_run = relabel_right_left_limbs_in_rolling_direction(df_run)
         reorient_rollover(df_run)
@@ -240,14 +252,34 @@ if __name__ == '__main__':
 
         # Velocities.
         calculate_velocities_df(df_run)
+        #normalize_velocities_to_torso(df_run)
+
+        #df_run.plot()
+        #plt.ylim(-2000, 2000)
+        #plt.ylabel('% of Torso')
+        #plt.show()
+        #raise ValueError
 
         df_ipsilateral = df_run[['IA', 'IL']]
 
         df_mean = calculate_average_velocity(df_ipsilateral, T_TR_Left, T_TR_Right)
-        df_stationary = classify_stationary_limbs(df_mean, thresh_mm_sec=400)
+        df_stationary = classify_stationary_limbs(df_mean, thresh_mm_sec=100)
         df_stationary['Run'] = run
         stationary_limbs_df.append(df_stationary)
 
+        stationary_ia = not df_stationary[df_stationary['key'] == 'IA'].empty
+        stationary_il = not df_stationary[df_stationary['key'] == 'IL'].empty
+
+        if stationary_ia and stationary_il:
+            n_pattern['Two Stationary'] += 1
+        elif stationary_ia and not stationary_il:
+            n_pattern['Stationary IA'] += 1
+        elif not stationary_ia and stationary_il:
+            n_pattern['Stationary IL'] += 1
+        else:
+            n_pattern['No Stationary'] += 1
+
     stationary_limbs_df = pd.concat(stationary_limbs_df, ignore_index=True)
+    print(n_pattern)
     print(stationary_limbs_df)
 

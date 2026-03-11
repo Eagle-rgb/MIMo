@@ -78,7 +78,7 @@ def plot_data(data, labels: list[str], max_x: int):
     plt.legend()
     plt.xlabel('Steps')
     plt.grid(True, linestyle='--', alpha=0.5)
-    plt.show()
+    plt.savefig()
         
 def valid_date(s: str) -> datetime:
     try:
