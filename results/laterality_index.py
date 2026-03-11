@@ -48,7 +48,8 @@ if __name__ == '__main__':
             pbrs=True,
             #proprio_params=PROPRIOCEPTION_PARAMS_ONLY_QPOS,
             isr=False)
-        data = collect_run_statistics_all(env, '26-03-07', 'supine', 'age9')
+        #data = collect_run_statistics_all(env, '26-03-07', 'supine', 'age9')
+        data = collect_run_statistics_all(env, '26-03-11', 'supine', 'random_rot_45')
         data.to_csv('statistics.csv')
     else:
         data = pd.read_csv('statistics.csv', index_col=['Run', 'Episode'])
