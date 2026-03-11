@@ -77,6 +77,7 @@ def plot_data(data, labels: list[str], max_x: int):
 
     plt.legend()
     plt.xlabel('Steps')
+    plt.ylabel('Success Rate')
     plt.grid(True, linestyle='--', alpha=0.5)
     plt.savefig()
         
@@ -104,7 +105,7 @@ if __name__ == "__main__":
         parser.add_argument(f'--suffix{i}', required=i==1, type=str, help=f"Model name suffix {i}")
         parser.add_argument(f'--label{i}', required=i==1, type=str, help=f"Label for model {i}")
         parser.add_argument(f'--haltung{i}', required=i==1, type=str, choices=['prone', 'supine'], help=f"Haltung of model {i}")
-        parser.add_argument(f'--tag{i}', required=i==1, choices=['success_rate'], help=f"Tag to load for model {i}")
+        #parser.add_argument(f'--tag{i}', required=i==1, choices=['success_rate'], help=f"Tag to load for model {i}")
     args = parser.parse_args()
     dates = []
     suffixes = []
@@ -122,22 +123,23 @@ if __name__ == "__main__":
             raise ValueError(f"No suffix provided for model {i}")
         
         label = getattr(args, f'label{i}')
-        if suffix is None:
+        if label is None:
             raise ValueError(f"No label provided for model {i}")
         
         haltung = getattr(args, f'haltung{i}')
-        if suffix is None:
+        if haltung is None:
             raise ValueError(f"No haltung provided for model {i}")
         
-        tag = getattr(args, f'tag{i}')
-        if suffix is None:
-            raise ValueError(f"No tag provided for model {i}")
+        #tag = getattr(args, f'tag{i}')
+        #if suffix is None:
+        #    raise ValueError(f"No tag provided for model {i}")
         
         dates.append(date.strftime(DATE_FORMAT))
         suffixes.append(suffix)
         labels.append(label)
         haltungen.append(haltung)
-        tags.append("rollout/" + tag)
+        #tags.append("rollout/" + tag)
+        tags.append("rollout/success_rate")
 
     if len(dates) == 0:
         raise ValueError("No models specified...")

@@ -36,22 +36,22 @@ for i in $(seq 0 $((NUMBER_OF_RUNS-1))); do
         "--render_frames" \
 		"--render_video" \
 		"--roll_over_starting_position=supine" \
-        "--load_model=models/roll_over/${MODEL_DATE}/supine/${MODEL_DATE}_supine_${MODEL_NAME}_run_$((i+RUN_OFFSET))/model_sidelying.zip" &
+        "--load_model=models/roll_over/${MODEL_DATE}/supine/${MODEL_DATE}_supine_${MODEL_NAME}_run_$((i+RUN_OFFSET))/model_intermediate.zip" &
 done
 
 # Wait until all ssh commands finished, i.e. all MIMo simulations are finished. Then, plot the results.
 wait
 
 # Copy images.
-for i in $(seq 0 $((NUMBER_OF_RUNS-1))); do
-    echo "Copying run ${i}"
-	mkdir "./${MODEL_DATE}_supine_${MODEL_NAME}_run_$((i+RUN_OFFSET))"
-    scp "${USERNAME}@adrastos.rbi.cs.uni-frankfurt.de:~/MIMo/models/roll_over/${MODEL_DATE}/supine/${MODEL_DATE}_supine_${MODEL_NAME}_run_$((i+RUN_OFFSET))/*.png" "./${MODEL_DATE}_supine_${MODEL_NAME}_run_$((i+RUN_OFFSET))"
-done
+#for i in $(seq 0 $((NUMBER_OF_RUNS-1))); do
+#    echo "Copying run ${i}"
+#	mkdir "./${MODEL_DATE}_supine_${MODEL_NAME}_run_$((i+RUN_OFFSET))"
+#    scp "${USERNAME}@adrastos.rbi.cs.uni-frankfurt.de:~/MIMo/models/roll_over/${MODEL_DATE}/supine/${MODEL_DATE}_supine_${MODEL_NAME}_run_$((i+RUN_OFFSET))/*.png" "./${MODEL_DATE}_supine_${MODEL_NAME}_run_$((i+RUN_OFFSET))"
+#done
 
 # Copy videos.
-for i in $(seq 0 $((NUMBER_OF_RUNS-1))); do
-    echo "Copying run ${i}"
-    scp "${USERNAME}@adrastos.rbi.cs.uni-frankfurt.de:~/MIMo/models/roll_over/${MODEL_DATE}/supine/${MODEL_DATE}_supine_${MODEL_NAME}_run_$((i+RUN_OFFSET))/*.avi" "./${MODEL_DATE}_supine_${MODEL_NAME}_run_$((i+RUN_OFFSET))"
-done
+#for i in $(seq 0 $((NUMBER_OF_RUNS-1))); do
+#    echo "Copying run ${i}"
+#    scp "${USERNAME}@adrastos.rbi.cs.uni-frankfurt.de:~/MIMo/models/roll_over/${MODEL_DATE}/supine/${MODEL_DATE}_supine_${MODEL_NAME}_run_$((i+RUN_OFFSET))/*.avi" "./${MODEL_DATE}_supine_${MODEL_NAME}_run_$((i+RUN_OFFSET))"
+#done
 

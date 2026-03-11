@@ -98,7 +98,7 @@ def fit_normalized_to_sigmoid(data):
     vals_fitted = (max_value - min_value) * vals_fitted + min_value
 
     data[:] = vals_fitted
-    return data, (beta_0, beta_1)
+    return data, (beta_0, beta_1), (min_value, max_value)
 
 def calculate_velocities(displacement_series):
     """ Calculates the velocity by differentiation of the
@@ -154,6 +154,15 @@ def calculate_average_velocity(velocities_df, a, b):
 def classify_stationary_limbs(velocity_mean_df: pd.DataFrame, thresh_mm_sec: float):
     return velocity_mean_df[abs(velocity_mean_df['mean']) <= thresh_mm_sec]
 
+def calculate_max_sigmoid_velocity(beta_0, beta_1, timestep_ms):
+    """ Returns the (displacement) velocity of the sigmoid defined by
+    parameters 'beta_0' and 'beta_1' at its maximum.
+    Derivative of the sigmoid P(x)=.. is simply P'(x)=beta_1*P(x)*(1-P(x)).
+    Since we consider maximum displacement speed, P(x)=0.5."""
+    velocity_mm_step = beta_1 * 0.5**2.0
+    velocity_mm_ms = velocity_mm_step / timestep_ms
+    return velocity_mm_ms * 1000.0  # to mm/sec
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--collect_data', required=False, action='store_true')
@@ -162,9 +171,17 @@ if __name__ == '__main__':
     parser.add_argument('--load_data', required=False, action='store_true', default=False,
                         help="Loads data 'data.csv'.")
     parser.add_argument('--plot_displacement', action='store_true')
+    parser.add_argument('--age', choices=[6, 9], type=int, help="Infant Age. Choices: 6, 9", required=True)
     args = parser.parse_args()
 
     if args.collect_data:
+        if args.age == 6:
+            model_date = '26-03-10'
+            model_suffix = 'age6'
+        elif args.age == 9:
+            model_date = '26-03-07'
+            model_suffix = 'age9'
+
         env = gym.make("MIMoRollOver-v0", actuation_model=SpringDamperModel,
             starting_position='supine',
             width=480, # always 480 regardless whether we render actuations or not.
@@ -180,15 +197,13 @@ if __name__ == '__main__':
             #proprio_params=PROPRIOCEPTION_PARAMS_ONLY_QPOS,
             isr=False)
         
-        # df = collect_kobayashi_displacements_all(env, '26-03-07', 'supine', 'age9')
-        df = collect_kobayashi_displacements_all(env, '26-03-10', 'supine', 'age6')
+        df = collect_kobayashi_displacements_all(env, model_date, 'supine', model_suffix)
         if args.save_data:
-            # df.to_csv('kobayashidata.csv')
-            df.to_csv('kobayashidata_age6.csv')
+            df.to_csv(f'kobayashidata_age{args.age}.csv')
 
     elif args.load_data:
         # df = pd.read_csv('kobayashidata.csv', index_col=['Run', 'Time'])
-        df = pd.read_csv('kobayashidata_age6.csv', index_col=['Run', 'Time'])
+        df = pd.read_csv(f'kobayashidata_age{args.age}.csv', index_col=['Run', 'Time'])
 
     else:
         raise ValueError
@@ -206,6 +221,12 @@ if __name__ == '__main__':
         'No Stationary': 0
     }
 
+    # Statistics of the runs. Includes:
+    # V_TR, V_CA, V_CL: Velocities of maximum displacement after normalized & fitted to sigmoid.
+    # Stationary_IA: True / False if IA stationary
+    # Stationary_IL: True / False if IL stationary
+    df_stats = []
+
     for run, df_run in groupby_run:
         df_run = relabel_right_left_limbs_in_rolling_direction(df_run)
         reorient_rollover(df_run)
@@ -216,7 +237,7 @@ if __name__ == '__main__':
         # Get the torso speeds, normalize them to [0, 1] and fit to a sigmoid using log. regression.
         torso = df_run['TR']
 
-        torso_sigmoid, (beta_0, beta_1) = fit_normalized_to_sigmoid(torso)
+        torso_sigmoid, (beta_0, beta_1), (min_tr, max_tr) = fit_normalized_to_sigmoid(torso)
 
         if args.plot_displacement:
             if ax_displacement is None:
@@ -253,6 +274,17 @@ if __name__ == '__main__':
             print(f"T_TR is very late: {T_TR} ms for total duration {duration_ms} ms...")
             T_TR_Right = duration_ms
 
+        # Calculate T_CA and T_CL.
+        _, (beta_ca_0, beta_ca_1), (min_ca, max_ca) = fit_normalized_to_sigmoid(df_run['CA'])
+        _, (beta_cl_0, beta_cl_1), (min_cl, max_cl) = fit_normalized_to_sigmoid(df_run['CL'])
+        T_CA = -beta_ca_0 / beta_ca_1
+        T_CL = -beta_cl_0 / beta_cl_1
+
+        # Get speeds.
+        V_TR = calculate_max_sigmoid_velocity(beta_0, beta_1, timestep_ms=10.0)
+        V_CA = calculate_max_sigmoid_velocity(beta_ca_0, beta_ca_1, timestep_ms=10.0)
+        V_CL = calculate_max_sigmoid_velocity(beta_cl_0, beta_cl_1, timestep_ms=10.0)
+
         # Velocities.
         calculate_velocities_df(df_run)
         #normalize_velocities_to_torso(df_run)
@@ -263,6 +295,8 @@ if __name__ == '__main__':
         #plt.show()
         #raise ValueError
 
+        #df_run.plot()
+        #plt.show()
         df_ipsilateral = df_run[['IA', 'IL']]
 
         df_mean = calculate_average_velocity(df_ipsilateral, T_TR_Left, T_TR_Right)
@@ -273,6 +307,17 @@ if __name__ == '__main__':
         stationary_ia = not df_stationary[df_stationary['key'] == 'IA'].empty
         stationary_il = not df_stationary[df_stationary['key'] == 'IL'].empty
 
+        entry_stats = {
+            'Run': run,
+            'Stationary_IA': stationary_ia,
+            'Stationary_IL': stationary_il,
+            'V_TR': V_TR,
+            'V_CA': V_CA,
+            'V_CL': V_CL
+        }
+
+        df_stats.append(entry_stats)
+
         if stationary_ia and stationary_il:
             n_pattern['Two Stationary'] += 1
         elif stationary_ia and not stationary_il:
@@ -282,7 +327,28 @@ if __name__ == '__main__':
         else:
             n_pattern['No Stationary'] += 1
 
+    df_stats = pd.DataFrame(df_stats)
+
+    V_TR_mean = df_stats['V_TR'].mean()
+    V_CA_mean = df_stats['V_CA'].mean()
+    V_CL_mean = df_stats['V_CL'].mean()
+    V_TR_std = df_stats['V_TR'].std()
+    V_CA_std = df_stats['V_CA'].std()
+    V_CL_std = df_stats['V_CL'].std()
+
+    print(f"V_TR_mean: {V_TR_mean}")
+    print(f"V_CA_mean: {V_CA_mean}")
+    print(f"V_CL_mean: {V_CL_mean}")
+    print(f"V_TR_std: {V_TR_std}")
+    print(f"V_CA_std: {V_CA_std}")
+    print(f"V_CL_std: {V_CL_std}")
+
     stationary_limbs_df = pd.concat(stationary_limbs_df, ignore_index=True)
     print(n_pattern)
     print(stationary_limbs_df)
+
+    if args.plot_displacement:
+        plt.show()
+
+    print(df_stats)
 

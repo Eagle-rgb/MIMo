@@ -397,13 +397,13 @@ def collect_run_statistics(env, model, n_success_episodes, n_abort):
 
                 data.append(entry)
 
-                if success and entry['Time'] > 4000.0:
-                    print("We got one! Saving as video...")
-                    save_name=os.path.join('.', 'long_episode.avi')
-                    render_height = 480
-                    render_width = 480
-                    evaluation_video(imgs, save_name=save_name, resolution=((render_width, render_height)))
-                    raise ValueError
+                #if success and entry['Time'] > 4000.0:
+                #    print("We got one! Saving as video...")
+                #    save_name=os.path.join('.', 'long_episode.avi')
+                #    render_height = 480
+                #    render_width = 480
+                #    evaluation_video(imgs, save_name=save_name, resolution=((render_width, render_height)))
+                #    raise ValueError
 
                 if cnt_success >= n_success_episodes:
                     return pd.DataFrame(data)
