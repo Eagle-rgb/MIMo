@@ -180,12 +180,15 @@ if __name__ == '__main__':
             #proprio_params=PROPRIOCEPTION_PARAMS_ONLY_QPOS,
             isr=False)
         
-        df = collect_kobayashi_displacements_all(env, '26-03-07', 'supine', 'age9')
+        # df = collect_kobayashi_displacements_all(env, '26-03-07', 'supine', 'age9')
+        df = collect_kobayashi_displacements_all(env, '26-03-10', 'supine', 'age6')
         if args.save_data:
-            df.to_csv('kobayashidata.csv')
+            # df.to_csv('kobayashidata.csv')
+            df.to_csv('kobayashidata_age6.csv')
 
     elif args.load_data:
-        df = pd.read_csv('kobayashidata.csv', index_col=['Run', 'Time'])
+        # df = pd.read_csv('kobayashidata.csv', index_col=['Run', 'Time'])
+        df = pd.read_csv('kobayashidata_age6.csv', index_col=['Run', 'Time'])
 
     else:
         raise ValueError
@@ -263,7 +266,7 @@ if __name__ == '__main__':
         df_ipsilateral = df_run[['IA', 'IL']]
 
         df_mean = calculate_average_velocity(df_ipsilateral, T_TR_Left, T_TR_Right)
-        df_stationary = classify_stationary_limbs(df_mean, thresh_mm_sec=100)
+        df_stationary = classify_stationary_limbs(df_mean, thresh_mm_sec=400)
         df_stationary['Run'] = run
         stationary_limbs_df.append(df_stationary)
 

@@ -1,7 +1,7 @@
 """ This file is used to log achieved hip & chest angle as a mean over many
 episodes and the achieved side lying success rate.
 Alongside this, you have the option to save an intermediate model at reaching
-90% side lying success rate. """
+50% side_lying success rate. """
 
 from stable_baselines3.common.callbacks import BaseCallback
 from collections import deque
@@ -44,9 +44,11 @@ class RollOverCallback(BaseCallback):
                 self.logger.record("rollout/side_lying_success_rate", np.mean(self.side_lying_success))
 
         # Save intermediate model - if specified.
-        if self.save_intermediate and not self.intermediate_saved and self.save_dir is not None:
-            if np.mean(self.side_lying_success) > 0.9:
+        # We need the 'len(self.side....) > 0' to prevent in the first step callbacks accessing
+        # the empty object.
+        if len(self.side_lying_success) > 0 and self.save_intermediate and not self.intermediate_saved and self.save_dir is not None:
+            if np.mean(self.side_lying_success) > 0.5:
                 self.intermediate_saved = True
                 # Save the model ...
-                self.model.save(os.path.join(self.save_dir, "model_sidelying"))
+                self.model.save(os.path.join(self.save_dir, "model_intermediate"))
         return True

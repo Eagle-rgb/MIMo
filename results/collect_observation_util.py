@@ -207,7 +207,7 @@ def collect_observations(env, model, n_episodes, save_file=None, pca=None, rende
     df_action = pd.DataFrame(all_action_dicts)
     return df, df_action
 
-def collect_kobayashi_site_y_displacement_series(env, model):
+def collect_kobayashi_site_y_displacement_series(env, model, n_tries=1):
     """ Lets the (trained) model 'model' play in the environment 'env'
     for one episode. Records the y displacement of each site defined
     as kobayashi site. Collects in total a number of (n_steps + 1)
@@ -221,6 +221,9 @@ def collect_kobayashi_site_y_displacement_series(env, model):
 
     Returns the data as a pandas DataFrame with modified more-beautiful
     names for the sites as keys. Has a standard count index.
+
+    Tries maximum of 'n_tries' attempts to get a successful run. If not,
+    it returns 'None'.
     """
     KOBAYASHI_SITES = ["KOBAYASHI_RWrist",
                     "KOBAYASHI_RAnkle",
@@ -237,11 +240,6 @@ def collect_kobayashi_site_y_displacement_series(env, model):
     for site in KOBAYASHI_SITES:
         site_id = mujoco.mj_name2id(env.model, mujoco.mjtObj.mjOBJ_SITE, site)
         kobayashi_site_ids.append(site_id)
-
-    # Time [ms] from onset until reaching this step.
-    time_from_onset_ms = []
-    # List of dictionaries - ordered by steps in the environment.
-    data = []
 
     # Dictionary of reference coordinates to calculate relative displacement
     # of site. Set after the first 'env.reset()'.
@@ -266,41 +264,54 @@ def collect_kobayashi_site_y_displacement_series(env, model):
             absolute_displacements[key] -= reference_coords[key]
         return absolute_displacements
 
-    obs, _ = env.reset()
-    reference_coords = get_site_absolute_displacements()
-    done = False
-    deg_45_reached = False
-    side_lying_reached = False
+    is_success = False
 
-    # For some reason, at the start of the episode, we do not start with
-    # 'env.data.time=0'. So we simply subtract this from each following
-    # time.
-    time_offset = env.data.time * 1000.0
+    for n_try in range(n_tries):
+        print(f"Doing try {n_try+1}")
+        # List of dictionaries - ordered by steps in the environment.
+        data = []
+        obs, _ = env.reset()
+        reference_coords = get_site_absolute_displacements()
+        done = False
+        deg_45_reached = False
+        side_lying_reached = False
 
-    while not done:
-        action, _ = model.predict(obs)
-        entry = get_site_relative_displacements()
-        entry['Time'] = env.data.time * 1000.0 - time_offset # env.data.time is in sec.
-        data.append(entry)
-        obs, reward, truncated, terminated, info = env.step(action)
+        # For some reason, at the start of the episode, we do not start with
+        # 'env.data.time=0'. So we simply subtract this from each following
+        # time.
+        time_offset = env.data.time * 1000.0
         
-        done = truncated or terminated
-
-        if truncated:
-            print("Success!")
-
-        elif terminated:
-            print("No Success!")
-
-        if done:
-            frame = env.mujoco_renderer.render(render_mode='rgb_array', camera_name='top')
-            img = Image.fromarray(frame)
-            img.save(os.path.join('.', f'test.png'))
+        while not done:
+            action, _ = model.predict(obs)
             entry = get_site_relative_displacements()
             entry['Time'] = env.data.time * 1000.0 - time_offset # env.data.time is in sec.
             data.append(entry)
+            obs, reward, truncated, terminated, info = env.step(action)
+            
+            done = truncated or terminated
 
-    return pd.DataFrame(data)
+            if truncated:
+                is_success = True
+                print("Success!")
+
+            elif terminated:
+                print("No Success!")
+
+            if done and is_success:
+                frame = env.mujoco_renderer.render(render_mode='rgb_array', camera_name='top')
+                img = Image.fromarray(frame)
+                img.save(os.path.join('.', f'test.png'))
+                entry = get_site_relative_displacements()
+                entry['Time'] = env.data.time * 1000.0 - time_offset # env.data.time is in sec.
+                data.append(entry)
+
+        if is_success:
+            break
+
+    if is_success:
+        return pd.DataFrame(data)
+    else:
+        return None
 
 def collect_kobayashi_displacements_all(env, date, pos, suffix):
     """ Searches for all models matching 'date', starting position 'pos' and suffix 'suffix'.
@@ -327,7 +338,11 @@ def collect_kobayashi_displacements_all(env, date, pos, suffix):
 
         model_file = os.path.join(os.path.abspath(root), "model_1.zip")
         model = RL.load(model_file, env)
-        df = collect_kobayashi_site_y_displacement_series(env, model)
+        n_tries = 10
+        df = collect_kobayashi_site_y_displacement_series(env, model, n_tries=n_tries)
+        if df is None:
+            print(f"Run {run_num} had no successfull episodes in {n_tries} tries. Skipping...")
+            continue
         df['Run'] = run_num
         df = df.set_index(['Run', 'Time'])
         data.append(df)

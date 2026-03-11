@@ -172,7 +172,7 @@ def train(model, train_for, save_every, save_dir, isr, save_intermediate=False):
         save_every (int): Number of timesteps where we save a model.
         save_dir (str): The path to save the model.
         isr (bool): Activate Initial State Randomization?
-        save_intermediate (bool): Save intermediate model at reaching 90% side lying success rate?
+        save_intermediate (bool): Save intermediate model at reaching 50% side lying success rate?
     """ 
     counter = 0
     train_for_total = train_for
@@ -399,7 +399,7 @@ An example is '251206_prone_linear_1e6_test'
     parser.add_argument('--age', default=18, required=False, type=int,
                         help="MIMo's age in months. Default: 18.")
     parser.add_argument('--save_intermediate', action='store_true', help="Save intermediate model at reaching " \
-                        "90% side lying success rate.")
+                        "50% side lying success rate.")
     
     # Parse yaml if we specified '--load_model'.
     args, remaining_argv = parser.parse_known_args()

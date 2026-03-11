@@ -34,7 +34,7 @@ for i in $(seq 0 $((NUMBER_OF_RUNS-1))); do
 		"python mimoEnv/illustrations.py" \
 		"--train_for=1000000" \
 		"--save_every=1000000" \
-		"--roll_over_starting_position=prone" \
+		"--roll_over_starting_position=supine" \
 		"--algorithm=PPO" \
 		"--pen_factor=0.02" \
 		"--roll_over_model_path_auto" \
@@ -43,6 +43,7 @@ for i in $(seq 0 $((NUMBER_OF_RUNS-1))); do
 		"--pbrs" \
 		"--age=9" \
 		"--pbrs_w=100" \
+		"--save_intermediate" \
 		"--lr=0.0003" &
 done
 
