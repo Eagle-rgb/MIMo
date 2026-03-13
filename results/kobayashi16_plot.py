@@ -42,5 +42,7 @@ if __name__ == '__main__':
     ax.legend(prop={'size': 8}, frameon=True)
 
     # Layout optimieren und anzeigen
-    plt.tight_layout()
-    plt.show()
+    plt.savefig('kobayashi_velocity_barchart.pdf',
+                dpi=300,
+                bbox_inches='tight',
+                format='pdf')

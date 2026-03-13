@@ -82,10 +82,9 @@ class MIMoRollOverEnv(MIMoEnv):
     """
 
     def __init__(self,
-                 model_path=ROLL_OVER_XML,
                  initial_qpos=None,
                  frame_skip=2,
-                 age=None,
+                 age=9,
                  proprio_params=DEFAULT_PROPRIOCEPTION_PARAMS,
                  touch_params=TOUCH_PARAMS,
                  vision_params=None,
@@ -134,6 +133,17 @@ class MIMoRollOverEnv(MIMoEnv):
             msg = f"Unknown intrinsic goal '{intrinsic_goal}'. "
             msg += "Needs to be 'all', 'vesti', 'vesti_acc' or 'sparse_proprio'."
             raise ValueError(msg)
+        
+        # Instead of supplying 'age' as a parameter to the environment directly, we beforehand created the
+        # appropriate age scene. So we manually specify the scene location.
+        # This is necessary because the parallel RBI runs have problems deleting and creating the temporary
+        # scenes at the same time.
+        if age == 18:  # default
+            model_path = os.path.join(SCENE_DIRECTORY, "roll_over_prone_scene.xml")
+        elif age in [0, 1, 3, 6, 7, 8, 9]:
+            model_path = os.path.join(SCENE_DIRECTORY, f"roll_over_prone_scene_{age}_mo.xml")
+        else:
+            raise ValueError("Allowed ages: 18, 9, 8, 7, 6, 3, 1, 0.")
 
         self.intrinsic_goals_created = False
         self.goal_function=goal_function
@@ -161,7 +171,8 @@ class MIMoRollOverEnv(MIMoEnv):
         super().__init__(model_path=model_path,
                          initial_qpos=initial_qpos,
                          frame_skip=frame_skip,
-                         age=age,
+                         age=None,  # we created age model scenes beforehand, we explicitly do not want to
+                            # create them again.
                          proprio_params=proprio_params,
                          touch_params=touch_params,
                          vision_params=vision_params,
@@ -283,6 +294,7 @@ class MIMoRollOverEnv(MIMoEnv):
         - z: 0°
         """
         euler = np.zeros(3)
+        euler[0] = np.pi / 3.0
         if self.isr:
             # euler[0] = np.random.uniform(low=-1, high=1) * np.pi / 2.0
             euler[0] = np.random.beta(a=1, b=3) * np.pi  # 0° - 180°

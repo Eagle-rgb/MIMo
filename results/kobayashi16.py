@@ -194,6 +194,7 @@ if __name__ == '__main__':
             achieved_goal_in_observation=False,
             pbrs=True,
             success_at_side_lying=True,
+            age=args.age,
             #proprio_params=PROPRIOCEPTION_PARAMS_ONLY_QPOS,
             isr=False)
         

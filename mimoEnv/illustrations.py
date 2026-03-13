@@ -456,17 +456,6 @@ An example is '251206_prone_linear_1e6_test'
         'vestibular': intrinsic_goal_vesti_w
     }
 
-    # Instead of supplying 'age' as a parameter to the environment directly, we beforehand created the
-    # appropriate age scene. Currently only for 6 months. So we manually specify the scene location.
-    # This is necessary because the parallel RBI runs have problems deleting and creating the temporary
-    # scenes at the same time.
-    if age == 18:  # default
-        model_path = os.path.join(SCENE_DIRECTORY, "roll_over_prone_scene.xml")
-    elif age in [0, 1, 3, 6, 7, 8, 9]:
-        model_path = os.path.join(SCENE_DIRECTORY, f"roll_over_prone_scene_{age}_mo.xml")
-    else:
-        raise ValueError("Allowed ages: 18, 9, 8, 7, 6, 3, 1, 0.")
-
     if freeze_arm or freeze_leg:
         print("Warning! Some limbs are frozen.")
 
@@ -543,7 +532,7 @@ An example is '251206_prone_linear_1e6_test'
             freeze_leg=freeze_leg,
             freeze_arm=freeze_arm,
             success_at_side_lying=side_lying,
-            model_path=model_path)
+            age=age)
         # if log_actuations:
         #     wrapped_env = MIMoRollOverWrapper(env, log_file=os.path.join(save_dir,"actuation_log.csv"))
         # else:
@@ -560,8 +549,6 @@ An example is '251206_prone_linear_1e6_test'
         if mean_dict:
             env.observation_normalization_mean = mean_dict
             env.observation_normalization_std = std_dict
-
-
 
     # load pretrained model or create new one
     # Set learning rate for PPO algorithm.

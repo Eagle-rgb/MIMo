@@ -30,7 +30,7 @@ if __name__ == '__main__':
             goal_function='cos',
             achieved_goal_in_observation=False,
             pbrs=True,
-            model_path=os.path.join(SCENE_DIRECTORY, f"roll_over_prone_scene_{9}_mo.xml"),
+            age=9,
             #proprio_params=PROPRIOCEPTION_PARAMS_ONLY_QPOS,
             isr=False)
         data = collect_run_statistics_all(env, '26-03-07', 'supine', 'age9')
