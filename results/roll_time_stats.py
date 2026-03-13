@@ -16,6 +16,7 @@ from collect_observation_util import collect_run_statistics_all
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--load_data', action='store_true')
+    parser.add_argument('--age', type=int, required=True)
     args = parser.parse_args()
 
     if not args.load_data:
@@ -30,14 +31,25 @@ if __name__ == '__main__':
             goal_function='cos',
             achieved_goal_in_observation=False,
             pbrs=True,
-            age=9,
+            age=args.age,
             #proprio_params=PROPRIOCEPTION_PARAMS_ONLY_QPOS,
             isr=False)
-        data = collect_run_statistics_all(env, '26-03-07', 'supine', 'age9')
-        data.to_csv('statistics.csv')
+        
+        ages = [1, 3, 6, 9]
+        dates = ['26-03-09', '26-03-09', '26-03-10', '26-03-07']
+        haltung = 'supine'
+        suffixes = ['age1', 'age3', 'age6', 'age9']
+
+        if args.age not in ages:
+            raise ValueError
+        
+        idx = ages.index(args.age)
+
+        data = collect_run_statistics_all(env, dates[idx], haltung, suffixes[idx])
+        data.to_csv(f'statistics_age{args.age}.csv')
 
     else:
-        data = pd.read_csv('statistics.csv', index_col=['Run', 'Episode'])
+        data = pd.read_csv(f'statistics_age{args.age}.csv', index_col=['Run', 'Episode'])
 
     successful_df = data[data['Success'] == True]
     time_series = successful_df['Time']
