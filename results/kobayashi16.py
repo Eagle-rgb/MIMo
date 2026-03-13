@@ -143,7 +143,7 @@ def calculate_average_velocity(velocities_df, a, b):
         x = np.linspace(a, b, num=10)
         y = f_interp(x)
 
-        mean = np.trapz(y, x) / (b - a)
+        mean = np.trapezoid(y, x) / (b - a)
         velocity_mean_df.append({
             'key': key,
             'mean': mean
@@ -229,6 +229,8 @@ if __name__ == '__main__':
     df_stats = []
 
     for run, df_run in groupby_run:
+        if run != 20:
+            continue
         df_run = relabel_right_left_limbs_in_rolling_direction(df_run)
         reorient_rollover(df_run)
 
@@ -237,6 +239,7 @@ if __name__ == '__main__':
 
         # Get the torso speeds, normalize them to [0, 1] and fit to a sigmoid using log. regression.
         torso = df_run['TR']
+        ax_displacement = torso.plot()
 
         torso_sigmoid, (beta_0, beta_1), (min_tr, max_tr) = fit_normalized_to_sigmoid(torso)
 
@@ -246,10 +249,14 @@ if __name__ == '__main__':
             else:
                 torso_sigmoid.plot(ax=ax_displacement, label=f"Run {run}")
 
+
+        plt.show()
+        raise ValueError
+
         # Verify that R-squared value is > 0.6
         r2 = r2_score(torso, torso_sigmoid)
         if r2 < 0.6:
-            print(f"Too low R-squared value!")
+            print(f"Too low R-squared value: {r2}!")
             continue
             raise ValueError
         
@@ -302,7 +309,6 @@ if __name__ == '__main__':
 
         df_mean = calculate_average_velocity(df_ipsilateral, T_TR_Left, T_TR_Right)
         df_stationary = classify_stationary_limbs(df_mean, thresh_mm_sec=400)
-        df_stationary['Run'] = run
         stationary_limbs_df.append(df_stationary)
 
         stationary_ia = not df_stationary[df_stationary['key'] == 'IA'].empty
