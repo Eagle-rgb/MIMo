@@ -12,12 +12,12 @@ if __name__ == '__main__':
     categories = ['TR', 'CA', 'CL']
 
     # Mittelwerte (Means)
-    means_grey = [0.1562, 0.134, 0.0619]
-    means_black = [0.5333, 0.3908, 0.5976]
+    means_grey = [0.5391, 0.5604, 0.4584]
+    means_black = [0.5520, 0.5901, 0.6557]
 
     # Standardfehler (Std Error)
-    std_err_grey = [0.0931, 0.1082, 0.1306]
-    std_err_black = [0.1702, 0.2275, 0.2009]
+    std_err_grey = [0.1239, 0.1501, 0.1531]
+    std_err_black = [0.1273, 0.1283, 0.1469]
 
     # Positionen der Balken auf der x-Achse
     x = np.arange(len(categories))

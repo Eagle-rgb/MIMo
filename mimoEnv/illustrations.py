@@ -399,7 +399,7 @@ An example is '251206_prone_linear_1e6_test'
     parser.add_argument('--age', default=18, required=False, type=int,
                         help="MIMo's age in months. Default: 18.")
     parser.add_argument('--save_intermediate', action='store_true', help="Save intermediate model at reaching " \
-                        "50% side lying success rate.")
+                        "90% side lying success rate.")
     
     # Parse yaml if we specified '--load_model'.
     args, remaining_argv = parser.parse_known_args()

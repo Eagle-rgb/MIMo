@@ -229,8 +229,6 @@ if __name__ == '__main__':
     df_stats = []
 
     for run, df_run in groupby_run:
-        if run != 20:
-            continue
         df_run = relabel_right_left_limbs_in_rolling_direction(df_run)
         reorient_rollover(df_run)
 
@@ -248,10 +246,6 @@ if __name__ == '__main__':
                 ax_displacement = torso_sigmoid.plot(label=f"Run {run}")
             else:
                 torso_sigmoid.plot(ax=ax_displacement, label=f"Run {run}")
-
-
-        plt.show()
-        raise ValueError
 
         # Verify that R-squared value is > 0.6
         r2 = r2_score(torso, torso_sigmoid)

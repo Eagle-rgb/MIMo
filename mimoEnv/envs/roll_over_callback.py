@@ -1,7 +1,7 @@
 """ This file is used to log achieved hip & chest angle as a mean over many
 episodes and the achieved side lying success rate.
 Alongside this, you have the option to save an intermediate model at reaching
-50% side_lying success rate. """
+90% side_lying success rate. """
 
 from stable_baselines3.common.callbacks import BaseCallback
 from collections import deque
@@ -23,7 +23,7 @@ class RollOverCallback(BaseCallback):
         self.end_hip_deg = deque(maxlen=window_size)
         self.end_chest_deg = deque(maxlen=window_size)
         self.side_lying_success = deque(maxlen=window_size)
-        self.intermediate_saved = False
+        self.intermediate_90_saved = False
 
     def _on_step(self) -> bool:
         # We are in a DummyVecEnv
@@ -46,9 +46,9 @@ class RollOverCallback(BaseCallback):
         # Save intermediate model - if specified.
         # We need the 'len(self.side....) > 0' to prevent in the first step callbacks accessing
         # the empty object.
-        if len(self.side_lying_success) > 0 and self.save_intermediate and not self.intermediate_saved and self.save_dir is not None:
-            if np.mean(self.side_lying_success) > 0.5:
-                self.intermediate_saved = True
+        if len(self.side_lying_success) > 0 and self.save_intermediate and not self.intermediate_90_saved and self.save_dir is not None:
+            if np.mean(self.side_lying_success) > 0.9:
+                self.intermediate_90_saved = True
                 # Save the model ...
-                self.model.save(os.path.join(self.save_dir, "model_intermediate"))
+                self.model.save(os.path.join(self.save_dir, "model_intermediate_90"))
         return True
