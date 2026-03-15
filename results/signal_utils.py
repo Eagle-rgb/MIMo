@@ -54,8 +54,8 @@ def smooth_x_butterworth(data, cutoff_hz=6, fs=60):
     nyquist = 0.5 * fs
     low = cutoff_hz / nyquist
     
-    # order: 2
-    b, a = butter(2, low, btype='low')
+    # order: 4
+    b, a = butter(4, low, btype='low')
     
     # filtfilt wendet den Filter vorwärts und rückwärts an -> kein Delay
     smoothed_data = filtfilt(b, a, data)

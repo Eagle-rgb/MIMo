@@ -43,7 +43,6 @@ for i in $(seq 0 $((NUMBER_OF_RUNS-1))); do
 		"--pbrs" \
 		"--age=9" \
 		"--pbrs_w=100" \
-		"--save_intermediate" \
 		"--lr=0.0003" &
 done
 

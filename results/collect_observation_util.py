@@ -207,13 +207,14 @@ def collect_observations(env, model, n_episodes, save_file=None, pca=None, rende
     df_action = pd.DataFrame(all_action_dicts)
     return df, df_action
 
-def collect_kobayashi_site_y_displacement_series(env, model, n_tries=1):
+def collect_kobayashi_site_y_displacement_series(env, model, n_tries=10):
     """ Lets the (trained) model 'model' play in the environment 'env'
-    for one episode. Records the y displacement of each site defined
+    for a total of 'n_tries' episodes. Records the y displacement of each site defined
     as kobayashi site. Collects in total a number of (n_steps + 1)
     values if the model takes 'n_steps' in the environment, because
     we record one set of value before each step, but also after the final
-    step.
+    step. Only records successful episodes. Tries in total 'n_tries' and if
+    after that, no successful episode was done, returns 'None'.
 
     Very important distinction: This function records the RELATIVE displacement
     of each site, i.e. the displacement relative to the coordinate the site
@@ -221,9 +222,6 @@ def collect_kobayashi_site_y_displacement_series(env, model, n_tries=1):
 
     Returns the data as a pandas DataFrame with modified more-beautiful
     names for the sites as keys. Has a standard count index.
-
-    Tries maximum of 'n_tries' attempts to get a successful run. If not,
-    it returns 'None'.
     """
     KOBAYASHI_SITES = ["KOBAYASHI_RWrist",
                     "KOBAYASHI_RAnkle",
@@ -266,6 +264,10 @@ def collect_kobayashi_site_y_displacement_series(env, model, n_tries=1):
 
     is_success = False
 
+    # keeps track of number of already recorded successful episodes.
+    n_successful_episodes = 0
+    all_successful_data = []
+
     for n_try in range(n_tries):
         print(f"Doing try {n_try+1}")
         # List of dictionaries - ordered by steps in the environment.
@@ -280,36 +282,43 @@ def collect_kobayashi_site_y_displacement_series(env, model, n_tries=1):
         # 'env.data.time=0'. So we simply subtract this from each following
         # time.
         time_offset = env.data.time * 1000.0
+        entry = get_site_relative_displacements()
+        entry['Episode'] = n_successful_episodes + 1
+        entry['Time'] = env.data.time * 1000.0 - time_offset # env.data.time is in sec.
+        entry['Side_Lying'] = False
+        entry['45_Deg'] = False
+        data.append(entry)
         
         while not done:
             action, _ = model.predict(obs)
-            entry = get_site_relative_displacements()
-            entry['Time'] = env.data.time * 1000.0 - time_offset # env.data.time is in sec.
-            data.append(entry)
             obs, reward, truncated, terminated, info = env.step(action)
-            
+
+            side_lying_reached = side_lying_reached or (info['side_lying'] == 1.0)
+            deg_45_reached = deg_45_reached or (info['45_deg'] == 1.0)
+
+            entry = get_site_relative_displacements()
+            entry['Episode'] = n_successful_episodes + 1
+            entry['Time'] = env.data.time * 1000.0 - time_offset # env.data.time is in sec.
+            entry['Side_Lying'] = side_lying_reached
+            entry['45_Deg'] = deg_45_reached
+            data.append(entry)
+
             done = truncated or terminated
 
             if truncated:
                 is_success = True
                 print("Success!")
 
+                for entry in data:
+                    all_successful_data.append(entry)
+
+                n_successful_episodes += 1
+
             elif terminated:
                 print("No Success!")
 
-            if done and is_success:
-                frame = env.mujoco_renderer.render(render_mode='rgb_array', camera_name='top')
-                img = Image.fromarray(frame)
-                img.save(os.path.join('.', f'test.png'))
-                entry = get_site_relative_displacements()
-                entry['Time'] = env.data.time * 1000.0 - time_offset # env.data.time is in sec.
-                data.append(entry)
-
-        if is_success:
-            break
-
     if is_success:
-        return pd.DataFrame(data)
+        return pd.DataFrame(all_successful_data)
     else:
         return None
 
@@ -344,7 +353,7 @@ def collect_kobayashi_displacements_all(env, date, pos, suffix):
             print(f"Run {run_num} had no successfull episodes in {n_tries} tries. Skipping...")
             continue
         df['Run'] = run_num
-        df = df.set_index(['Run', 'Time'])
+        df = df.set_index(['Run', 'Episode', 'Time'])
         data.append(df)
 
     df = pd.concat(data)
