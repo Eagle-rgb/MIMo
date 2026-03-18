@@ -42,7 +42,7 @@
         </body>
 
         <camera name="corner" pos="3 -3 3" fovy="20" mode="targetbody" target="mimo_location"/>
-        <camera name="top" pos="0 0 2" euler="0 0 -90" mode="fixed"/>
+        <camera name="top" pos="0 0 1.4" euler="0 0 -90" mode="fixed"/>
         <camera name="side1" pos="2 0 .5" euler="90 90 0" mode="fixed"/>
         <camera name="side2" pos="0 2 .5" euler="90 180 0" mode="fixed"/>
         <camera name="closeup" pos="0.25 -0.25 1" mode="targetbody" target="mimo_location"/>

@@ -46,6 +46,7 @@ from mimoEnv.envs.roll_over import TOUCH_PARAMS as ROLL_OVER_TOUCH_PARAMS
 from mimoEnv.envs.roll_over_callback import RollOverCallback
 
 from PIL import Image
+import mujoco
 
 def test(wrapped_env, save_dir, model=None, render_video=False, render_frames=False, render_actuations=False):
     """ Tests the model for one episode.
@@ -83,10 +84,10 @@ def test(wrapped_env, save_dir, model=None, render_video=False, render_frames=Fa
         if render_actuations:
             return evaluation_img(wrapped_env, up='actuations')
         else:
-            return wrapped_env.mujoco_renderer.render(render_mode="rgb_array")
+            return wrapped_env.mujoco_renderer.render(camera_name='top', render_mode="rgb_array")
         
     def save_image(name):
-        save_name=os.path.join(save_dir, f'{name}.png')
+        save_name=os.path.join(save_dir, f'{name}.pdf')
         Image.fromarray(get_frame()).save(save_name)
         
     # Render initial frame.

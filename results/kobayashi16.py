@@ -67,7 +67,6 @@ def reorient_rollover(data):
     if is_roll_to_left(data):
         # good!
         return
-    print(f"Reorienting rollover...")
     data.iloc[:, :] *= -1
 
 def fit_normalized_to_sigmoid(data):
@@ -135,10 +134,13 @@ def calculate_velocities(displacement_series):
     return velocities
 
 def calculate_velocities_df(df):
-    for key in df.keys():
-        displacement_series = df[key]
+    df_velocities = df.copy()
+    for key in df_velocities.keys():
+        displacement_series = df_velocities[key]
         velocities = calculate_velocities(displacement_series)
-        df[key] = velocities
+        df_velocities[key] = velocities
+
+    return df_velocities
 
 def normalize_velocities_to_torso(df: pd.DataFrame):
     """ Manipulates 'df' in the following way: For each body part key
@@ -168,8 +170,39 @@ def calculate_average_velocity(velocities_df, a, b):
 
     return pd.DataFrame(velocity_mean_df)
 
-def classify_stationary_limbs(velocity_mean_df: pd.DataFrame, thresh_mm_sec: float):
+def classify_stationary_limbs_kobayashi(velocity_mean_df: pd.DataFrame, thresh_mm_sec: float):
     return velocity_mean_df[abs(velocity_mean_df['mean']) <= thresh_mm_sec]
+
+def get_kobayashi_left_right_T_TR_interval(T_TR, df_displacement):
+    """ Reads the total duration of the MIMo supine -> prone roll from the maximum index
+    in 'df_displacement'. Returns a tuple T_TR_Left, T_TR_Right representing the 250ms
+    left/right interval around T_TR that Kobayashi 2016 used. Our MIMo rolls much faster than
+    real infants. 250ms is way too long. We get a much smaller interval by comparing our
+    duration to the duration Kobayashi has in one of his example plots (~1500ms) and calculate
+    a proportionately smaller '250ms' time range than him. """
+    kobayashi_time_range=250.0 # ms
+    kobayashi_duration=1500.0 # ms
+    duration_mimo = df_displacement.index.max() # ms
+    time_range_mimo = int(kobayashi_time_range * duration_mimo / kobayashi_duration)
+    T_TR_Left = T_TR - time_range_mimo
+    T_TR_Right = T_TR + time_range_mimo
+
+    if T_TR_Left < 0: T_TR_Left = 0
+    if T_TR_Right >= duration_mimo: T_TR_Right = duration_mimo
+
+    return T_TR_Left, T_TR_Right, time_range_mimo
+
+def classify_stationary_limbs_siegel(normalized_to_torso_velocity_ipsilateral_df: pd.DataFrame):
+    """ Classifies ipsilateral limbs as in Siegel 2024 "How do babies roll? Identifying the
+    coordinated movements of infant rolling through video compared to laboratory techniques."
+    
+    A moving limb is a limb with a normalized velocity >= 125% of the torso velocity. It is not
+    fully clear what Siegel means with "velocity". Is it the mean velocity? In this function we
+    assume it is.
+    """
+    means = normalized_to_torso_velocity_ipsilateral_df.mean()
+    mask = means >= 125.0
+    return normalized_to_torso_velocity_ipsilateral_df.loc[:, mask]
 
 def calculate_max_sigmoid_velocity(beta_0, beta_1, timestep_ms):
     """ Returns the (displacement) velocity of the sigmoid defined by
@@ -181,11 +214,11 @@ def calculate_max_sigmoid_velocity(beta_0, beta_1, timestep_ms):
     return velocity_mm_ms * 1000.0  # to mm/sec
 
 def get_time_and_velocity_maximum_sigmoid_velocity(df_displacement, key):
-    """ Returns T_{key} and V_{key}. """
-    _, (beta_0, beta_1), _ = fit_normalized_to_sigmoid(df_displacement[key])
+    """ Returns T_{key} and V_{key} and reconstruction. """
+    reconstructed_values, (beta_0, beta_1), _ = fit_normalized_to_sigmoid(df_displacement[key])
     T = -beta_0 / beta_1
     V = calculate_max_sigmoid_velocity(beta_0, beta_1, timestep_ms=10.0)
-    return T, V
+    return T, V, reconstructed_values
 
 def get_timing_moving_limb(T_TR, T_Limb, Th):
     """ Returns timing of limb (leading, synchronous, following) relative
@@ -198,6 +231,155 @@ def get_timing_moving_limb(T_TR, T_Limb, Th):
         return 'following'
     else:
         return 'synchronous'
+    
+def analysis_siegel(df_100hz_butter: pd.DataFrame):
+    # Step 1: Calculate speeds of each limb.
+    df_velocities = calculate_velocities_df(df_100hz_butter)
+    # Step 2: Normalize velocities of limbs to torso.
+    normalize_velocities_to_torso(df_velocities)
+    #df_velocities.plot()
+    #plt.show()
+    # Step 3: Classify stationary / moving ipsilateral limbs.
+    ipsilateral_velocities_df = df_velocities[['IL', 'IA']]
+    stationary_limbs_df = classify_stationary_limbs_siegel(ipsilateral_velocities_df)
+    stationary_ia = 'IA' in stationary_limbs_df.keys()
+    stationary_il = 'IL' in stationary_limbs_df.keys()
+
+    # Step 4: Identify direction of moving ipsilateral limbs (forwards / backwards)
+    ipsilateral_velocities_mean = ipsilateral_velocities_df.mean()
+    direction_il = 'stationary'
+    direction_ia = 'stationary'
+
+    if not stationary_ia:
+        direction_ia = 'forward' if ipsilateral_velocities_mean['IA'] >= 0 else 'backward'
+    if not stationary_il:
+        direction_il = 'forward' if ipsilateral_velocities_mean['IL'] >= 0 else 'backward'
+
+    entry_stats = {
+        'Stationary_IA': stationary_ia,
+        'Stationary_IL': stationary_il,
+        #'T_TR': None,
+        #'T_CA': None,
+        #'T_CL': None,
+        #'T_IA': None,
+        #'T_IL': None,
+        #'V_TR': None,
+        #'V_CA': None,
+        #'V_CL': None,
+        #'V_IA': None,
+        #'V_IL': None,
+        'Direction_IA': direction_ia,
+        'Direction_IL': direction_il,
+        #'Timing_IA': None,
+        #'Timing_IL': None,
+        #'Timing_CA': None,
+        #'Timing_CL': None
+    }
+
+    return entry_stats
+
+def analysis_kobayashi(df_60hz_butter: pd.DataFrame):
+    """ Performs Kobayashi 2016 analysis. This function does:
+    1. Normalizes torso displacement to [0,1] and fits it to a sigmoid.
+    2. Verifies "good" fit by checking r2 score being at least 0.6. If not, this function
+        returns 'None'.
+    3. Calculates T_TR, T_CA and T_CL and their speeds V_TR, V_CA and V_CL for torso and
+        contralateral limbs as times of maximum displacement velocity of the fitted sigmoid.
+    4. Kobayashi uses a 250ms interval left / right of T_TR in which he classifies moving / stationary
+        limbs. MIMo is much faster in rolling than normal infants. In the plots in Kobayashi's study,
+        he has an example with ~1500ms supine -> lateral time. We take that as a reference. Instead of
+        using 250ms, we calculate a fraction proportional to MIMo's supine -> lateral time in this run.
+        We compute the mean velocity of ipsilateral limbs in that timeframe and compare to a threshold -
+        in Kobayashi this is 100mm/sec, but we use 400mm/sec. Ipsilateral limbs with less mean velocity
+        in the range are classified as stationary and else as moving.
+    
+    """
+    # Get the torso speeds, normalize them to [0, 1] and fit to a sigmoid using log. regression.
+    torso = df_episode['TR']
+
+    T_TR, V_TR, torso_sigmoid = get_time_and_velocity_maximum_sigmoid_velocity(df_episode, 'TR')
+
+    # Verify that R-squared value is > 0.6
+    r2 = r2_score(torso, torso_sigmoid)
+    if r2 < 0.6:
+        print(f"Too low R-squared value: {r2}!")
+        return None
+    
+    # Calculate T_CA and T_CL.
+    T_CA, V_CA, _ = get_time_and_velocity_maximum_sigmoid_velocity(df_episode, 'CA')
+    T_CL, V_CL, _ = get_time_and_velocity_maximum_sigmoid_velocity(df_episode, 'CL')
+
+    # Pattern Classification.
+    # Copy so we can use it later to fit nonstationary ipsilateral limb displacement to sigmoid.
+    df_velocities = calculate_velocities_df(df_episode)
+    #normalize_velocities_to_torso(df_episode)
+
+    #df_episode.plot()
+    #plt.ylim(-2000, 2000)
+    #plt.ylabel('% of Torso')
+    #plt.show()
+    #raise ValueError
+
+    # DataFrame containing only the ipsilateral limbs.
+    df_ipsilateral = df_velocities[['IA', 'IL']]
+
+    #df_episode.plot()
+    #plt.show()
+
+    T_TR_Left, T_TR_Right, T_H = get_kobayashi_left_right_T_TR_interval(T_TR, df_episode)
+    df_mean = calculate_average_velocity(df_ipsilateral, T_TR_Left, T_TR_Right)
+    df_stationary = classify_stationary_limbs_kobayashi(df_mean, thresh_mm_sec=400.0)
+
+    stationary_ia = not df_stationary[df_stationary['key'] == 'IA'].empty
+    stationary_il = not df_stationary[df_stationary['key'] == 'IL'].empty
+
+    # Calculate T_IA, T_IL for nonstationary ipsilateral limbs.
+    T_IA = 0
+    T_IL = 0
+    V_IA = 0
+    V_IL = 0
+    direction_il = 'stationary'
+    direction_ia = 'stationary'
+    if not stationary_ia:
+        T_IA, V_IA, _ = get_time_and_velocity_maximum_sigmoid_velocity(df_episode, 'IA')
+        direction_ia = 'forward' if V_IA > 0 else 'backward'
+    if not stationary_il:
+        T_IL, V_IL, _ = get_time_and_velocity_maximum_sigmoid_velocity(df_episode, 'IL')
+        direction_il = 'forward' if V_IL > 0 else 'backward'
+
+    # Calculate timing of moving limbs (leading, synchronous, following)
+    Timing_CA = get_timing_moving_limb(T_TR, T_CA, Th=T_H)
+    Timing_CL = get_timing_moving_limb(T_TR, T_CL, Th=T_H)
+    Timing_IL = 'stationary'
+    Timing_IA = 'stationary'
+    if not stationary_il:
+        Timing_IL = get_timing_moving_limb(T_TR, T_IL, Th=T_H)
+    if not stationary_ia:
+        Timing_IA = get_timing_moving_limb(T_TR, T_IA, Th=T_H)
+
+    entry_stats = {
+        'Stationary_IA': stationary_ia,
+        'Stationary_IL': stationary_il,
+        'T_TR': T_TR,
+        'T_CA': T_CA,
+        'T_CL': T_CL,
+        'T_IA': T_IA,
+        'T_IL': T_IL,
+        'V_TR': V_TR,
+        'V_CA': V_CA,
+        'V_CL': V_CL,
+        'V_IA': V_IA,
+        'V_IL': V_IL,
+        'Direction_IA': direction_ia,
+        'Direction_IL': direction_il,
+        'Timing_IA': Timing_IA,
+        'Timing_IL': Timing_IL,
+        'Timing_CA': Timing_CA,
+        'Timing_CL': Timing_CL,
+        'T_H': T_H
+    }
+
+    return entry_stats   
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
@@ -208,11 +390,10 @@ if __name__ == '__main__':
                         help="Loads data 'data.csv'.")
     parser.add_argument('--plot_displacement', action='store_true')
     parser.add_argument('--age', choices=[6, 9], type=int, help="Infant Age. Choices: 6, 9", required=True)
-    parser.add_argument('--normalized_to_torso', action='store_true',
-                        help="Normalize limb displacement speeds to torso and classify moving / stationary limbs " \
-                        "based on 125% torso displacement velocity threshold.")
+    parser.add_argument('--siegel', action='store_true')
     parser.add_argument('--until', type=str, default="side_lying",
                         choices=["side_lying", "45"], help="Roll milestone to analyze until.")
+    
     args = parser.parse_args()
 
     if args.collect_data:
@@ -273,148 +454,46 @@ if __name__ == '__main__':
             df_episode = relabel_right_left_limbs_in_rolling_direction(df_episode)
             reorient_rollover(df_episode)
 
-            df_episode = resample_df_to_60hz(df_episode)
+            # Kobayashi uses 60Hz, Siegel uses 100Hz. Our data is already at 100Hz, so for Siegel,
+            # we do not need to resample
+            if not args.siegel:
+                df_episode = resample_df_to_60hz(df_episode)
+            else:
+                df_episode = resample_df_to_60hz(df_episode, target_fs=100.0)
+
             df_episode = df_episode.apply(smooth_x_butterworth)
 
-            # Get the torso speeds, normalize them to [0, 1] and fit to a sigmoid using log. regression.
-            torso = df_episode['TR']
-            ax_displacement = torso.plot()
+            if args.siegel:
+                entry_stats = analysis_siegel(df_episode)
+            else:
+                entry_stats = analysis_kobayashi(df_episode)
 
-            torso_sigmoid, (beta_0, beta_1), (min_tr, max_tr) = fit_normalized_to_sigmoid(torso)
-
-            if args.plot_displacement:
-                if ax_displacement is None:
-                    ax_displacement = torso_sigmoid.plot(label=f"Run {run}, Episode {episode}")
-                else:
-                    torso_sigmoid.plot(ax=ax_displacement, label=f"Run {run}, Episode {episode}")
-
-            # Verify that R-squared value is > 0.6
-            r2 = r2_score(torso, torso_sigmoid)
-            if r2 < 0.6:
-                print(f"Too low R-squared value: {r2}!")
+            if entry_stats is None:
                 continue
-            
-            # Get time of maximum torso velocity T_TR. For log. sigmoid, we can very elegantly calculate
-            # time at which the curve hits 0.5 - it all boils down to this simple quotient of the beta
-            # parameters.
-            T_TR = -beta_0 / beta_1
 
-            # Calculate left and right interval bounds for the range to classify stationary limbs.
-            # Kobayashi used 0.25s left/right to 'T_TR', but our MIMo is too fast, so we must use
-            # smaller values. Based on Siegel 2024, infants on average roll in 3.6+-2.8 sec to
-            # lateral position from a supine. So we say that 0.25s is based on the 3.6 and vary
-            # that proportional to the speed our MIMo has.
-            duration_ms = df_episode.index.max()
-            duration_siegel_mean_ms = 3600.0
-            time_range_left_right_kob_ms = 250.0
-            time_range_left_right_our_ms = int(time_range_left_right_kob_ms * duration_ms / duration_siegel_mean_ms)
-
-            T_TR_Left = T_TR - time_range_left_right_our_ms
-            T_TR_Right = T_TR + time_range_left_right_our_ms
-
-            if T_TR_Right > duration_ms:
-                print(f"T_TR is very late: {T_TR} ms for total duration {duration_ms} ms...")
-                T_TR_Right = duration_ms
-
-            V_TR = calculate_max_sigmoid_velocity(beta_0, beta_1, timestep_ms=10.0)
-
-            # Calculate T_CA and T_CL.
-            T_CA, V_CA = get_time_and_velocity_maximum_sigmoid_velocity(df_episode, 'CA')
-            T_CL, V_CL = get_time_and_velocity_maximum_sigmoid_velocity(df_episode, 'CL')
-
-            # Moving direction of contralatera limbs ('forward' or 'backward' relative to rolling direction)
-            direction_ca = 'forward' if V_CA > 0 else 'backward'
-            direction_cl = 'forward' if V_CL > 0 else 'backward'
-
-            # Pattern Classification.
-            # Copy so we can use it later to fit nonstationary ipsilateral limb displacement to sigmoid.
-            df_raw_displacement = df_episode.copy()
-            calculate_velocities_df(df_episode)
-            #normalize_velocities_to_torso(df_episode)
-
-            #df_episode.plot()
-            #plt.ylim(-2000, 2000)
-            #plt.ylabel('% of Torso')
-            #plt.show()
-            #raise ValueError
-        
-            # DataFrame containing only the ipsilateral limbs.
-            df_ipsilateral = df_episode[['IA', 'IL']]
-
-            #df_episode.plot()
-            #plt.show()
-
-            df_mean = calculate_average_velocity(df_ipsilateral, T_TR_Left, T_TR_Right)
-            df_stationary = classify_stationary_limbs(df_mean, thresh_mm_sec=400)
-
-            stationary_ia = not df_stationary[df_stationary['key'] == 'IA'].empty
-            stationary_il = not df_stationary[df_stationary['key'] == 'IL'].empty
-
-            # Calculate T_IA, T_IL for nonstationary ipsilateral limbs.
-            T_IA = 0
-            T_IL = 0
-            V_IA = 0
-            V_IL = 0
-            direction_il = 'stationary'
-            direction_ia = 'stationary'
-            if not stationary_ia:
-                T_IA, V_IA = get_time_and_velocity_maximum_sigmoid_velocity(df_raw_displacement, 'IA')
-                direction_ia = 'forward' if V_IA > 0 else 'backward'
-            if not stationary_il:
-                T_IL, V_IL = get_time_and_velocity_maximum_sigmoid_velocity(df_raw_displacement, 'IL')
-                direction_il = 'forward' if V_IL > 0 else 'backward'
-
-            # Calculate timing of moving limbs (leading, synchronous, following)
-            T_H = time_range_left_right_our_ms
-            Timing_CA = get_timing_moving_limb(T_TR, T_CA, Th=T_H)
-            Timing_CL = get_timing_moving_limb(T_TR, T_CL, Th=T_H)
-            Timing_IL = 'stationary'
-            Timing_IA = 'stationary'
-            if not stationary_il:
-                Timing_IL = get_timing_moving_limb(T_TR, T_IL, Th=T_H)
-            if not stationary_ia:
-                Timing_IA = get_timing_moving_limb(T_TR, T_IA, Th=T_H)
-
-            entry_stats = {
-                'Episode': episode,
-                'Run': run,
-                'Stationary_IA': stationary_ia,
-                'Stationary_IL': stationary_il,
-                'T_TR': T_TR,
-                'T_CA': T_CA,
-                'T_CL': T_CL,
-                'T_IA': T_IA,
-                'T_IL': T_IL,
-                'V_TR': V_TR,
-                'V_CA': V_CA,
-                'V_CL': V_CL,
-                'V_IA': V_IA,
-                'V_IL': V_IL,
-                'Direction_IA': direction_ia,
-                'Direction_IL': direction_il,
-                'Timing_IA': Timing_IA,
-                'Timing_IL': Timing_IL,
-                'Timing_CA': Timing_CA,
-                'Timing_CL': Timing_CL
-            }
+            entry_stats['Run'] = run
+            entry_stats['Episode'] = episode
 
             stats_list.append(entry_stats)
 
     df_stats = pd.DataFrame(stats_list)
 
-    V_TR_mean = df_stats['V_TR'].mean()
-    V_CA_mean = df_stats['V_CA'].mean()
-    V_CL_mean = df_stats['V_CL'].mean()
-    V_TR_std = df_stats['V_TR'].std()
-    V_CA_std = df_stats['V_CA'].std()
-    V_CL_std = df_stats['V_CL'].std()
+    if not args.siegel:
+        V_TR_mean = df_stats['V_TR'].mean()
+        V_CA_mean = df_stats['V_CA'].mean()
+        V_CL_mean = df_stats['V_CL'].mean()
+        V_TR_std = df_stats['V_TR'].std()
+        V_CA_std = df_stats['V_CA'].std()
+        V_CL_std = df_stats['V_CL'].std()
 
-    print(f"V_TR_mean: {V_TR_mean}")
-    print(f"V_CA_mean: {V_CA_mean}")
-    print(f"V_CL_mean: {V_CL_mean}")
-    print(f"V_TR_std: {V_TR_std}")
-    print(f"V_CA_std: {V_CA_std}")
-    print(f"V_CL_std: {V_CL_std}")
+        print(f"V_TR_mean: {V_TR_mean}")
+        print(f"V_CA_mean: {V_CA_mean}")
+        print(f"V_CL_mean: {V_CL_mean}")
+        print(f"V_TR_std: {V_TR_std}")
+        print(f"V_CA_std: {V_CA_std}")
+        print(f"V_CL_std: {V_CL_std}")
+
+        print(f"T_H mean: {df_stats['T_H'].mean()}")
 
     n_pattern = {
         'Two Stationary': 0,
@@ -448,10 +527,8 @@ if __name__ == '__main__':
 
     print(n_pattern)
 
-    if args.plot_displacement:
-        plt.show()
-
     print(df_stats)
+    analysis_type = 'siegel' if args.siegel else 'kobayashi'
     df_stats.to_csv(
-        f'kobayashiresults_260315/kobayashi_results_until_{'sidelying' if args.until == 'side_lying' else '45'}age{args.age}.csv')
+        f'kobayashiresults_260315/kobayashi_results_{analysis_type}_until_{'sidelying' if args.until == 'side_lying' else '45'}age{args.age}.csv')
 
