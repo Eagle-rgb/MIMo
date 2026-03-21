@@ -364,7 +364,8 @@ def collect_run_statistics(env, model, n_success_episodes, n_abort):
     until it reaches 'n_success_episodes' number of successful episodes. We let him play for
     a maximum of 'n_abort' episodes, after which if we did not reach 'n_success_episodes', we
     return 'None'. Otherwise we return a pandas DataFrame containing the laterality of the
-    run and if it was successful or not. """
+    run and if it was successful or not.
+    """
     cnt_success = 0
     torso_site_id  = mujoco.mj_name2id(env.model, mujoco.mjtObj.mjOBJ_SITE, "KOBAYASHI_Torso")
     data = []
@@ -374,20 +375,27 @@ def collect_run_statistics(env, model, n_success_episodes, n_abort):
 
     for episode in range(n_abort):
         print("Playing episode...")
-        imgs = []
+        #imgs = []
         done = False
         obs, _ = env.reset()
-        imgs.append(get_frame())
+        #imgs.append(get_frame())
         time_zero_sec = env.data.time
 
         ref_displacement = env.data.site_xpos[torso_site_id][1]
 
+        deg_45_reached = False
+        side_lying_reached = False
+
         while not done:
             action, _ = model.predict(obs)
             obs, _, success, failure, info = env.step(action)
-            imgs.append(get_frame())
+            #imgs.append(get_frame())
 
             done = success or failure
+
+            if not side_lying_reached and info['side_lying'] == 1:
+                side_lying_reached = True
+                time_sidelying_sec = env.data.time
 
             if success:
                 cnt_success += 1
@@ -403,6 +411,11 @@ def collect_run_statistics(env, model, n_success_episodes, n_abort):
 
                 time_finish_sec = env.data.time
                 entry['Time'] = (time_finish_sec - time_zero_sec) * 1000.0  # ms
+
+                if side_lying_reached:
+                    entry['Time_SideLying'] = (time_sidelying_sec - time_zero_sec) * 1000.0 # ms
+                else:
+                    entry['Time_SideLying'] = 0
 
                 data.append(entry)
 

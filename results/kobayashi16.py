@@ -15,6 +15,7 @@ from sklearn.linear_model import LinearRegression
 from sklearn.metrics import r2_score
 from signal_utils import resample_df_to_60hz, smooth_x_butterworth
 from scipy.interpolate import interp1d
+from collections import Counter
 
 def is_roll_to_left(data):
     """ Returns 'True' if the data shows a roll to the left side. Else,
@@ -178,12 +179,12 @@ def get_kobayashi_left_right_T_TR_interval(T_TR, df_displacement):
     in 'df_displacement'. Returns a tuple T_TR_Left, T_TR_Right representing the 250ms
     left/right interval around T_TR that Kobayashi 2016 used. Our MIMo rolls much faster than
     real infants. 250ms is way too long. We get a much smaller interval by comparing our
-    duration to the duration Kobayashi has in one of his example plots (~1500ms) and calculate
-    a proportionately smaller '250ms' time range than him. """
+    duration to the duration Siegel has (3600ms) and calculate a proportionately smaller '250ms'
+    time range. """
     kobayashi_time_range=250.0 # ms
-    kobayashi_duration=1500.0 # ms
+    siegel_duration=3600.0 # ms
     duration_mimo = df_displacement.index.max() # ms
-    time_range_mimo = int(kobayashi_time_range * duration_mimo / kobayashi_duration)
+    time_range_mimo = int(kobayashi_time_range * duration_mimo / siegel_duration)
     T_TR_Left = T_TR - time_range_mimo
     T_TR_Right = T_TR + time_range_mimo
 
@@ -328,7 +329,7 @@ def analysis_kobayashi(df_60hz_butter: pd.DataFrame):
 
     T_TR_Left, T_TR_Right, T_H = get_kobayashi_left_right_T_TR_interval(T_TR, df_episode)
     df_mean = calculate_average_velocity(df_ipsilateral, T_TR_Left, T_TR_Right)
-    df_stationary = classify_stationary_limbs_kobayashi(df_mean, thresh_mm_sec=400.0)
+    df_stationary = classify_stationary_limbs_kobayashi(df_mean, thresh_mm_sec=300.0)
 
     stationary_ia = not df_stationary[df_stationary['key'] == 'IA'].empty
     stationary_il = not df_stationary[df_stationary['key'] == 'IL'].empty
@@ -379,7 +380,49 @@ def analysis_kobayashi(df_60hz_butter: pd.DataFrame):
         'T_H': T_H
     }
 
-    return entry_stats   
+    return entry_stats
+
+def classify_abcdef(entry_stats):
+    stationary_ia = entry_stats['Stationary_IA']
+    stationary_il = entry_stats['Stationary_IL']
+    timing_ia = entry_stats['Timing_IA']
+    timing_il = entry_stats['Timing_IL']
+    timing_ca = entry_stats['Timing_CA']
+    timing_cl = entry_stats['Timing_CL']
+
+    if stationary_ia and stationary_il:
+        # A or B or else?
+        if timing_ca == 'synchronous' and timing_cl == 'synchronous':
+            return 'A'
+        elif timing_ca =='synchronous' and timing_cl == 'following':
+            return 'B'
+        else:
+            return 'O'
+    
+    if stationary_ia and not stationary_il:
+        # C or D or else?
+        if timing_ca == 'synchronous' and \
+            timing_cl == 'synchronous' and \
+            timing_il == 'synchronous':
+            return 'C'
+        elif timing_ca == 'synchronous' and \
+            timing_cl == 'following' and \
+            timing_il == 'synchronous':
+            return 'D'
+        else:
+            return 'O'
+        
+    if stationary_il and not stationary_ia:
+        # E?
+        if timing_ca == 'synchronous' and \
+            timing_ia == 'synchronous' and \
+            timing_cl == 'following':
+            return 'E'
+        else:
+            return 'O'
+        
+    # F
+    return 'F'
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
@@ -527,8 +570,53 @@ if __name__ == '__main__':
 
     print(n_pattern)
 
-    print(df_stats)
+    # print(df_stats)
     analysis_type = 'siegel' if args.siegel else 'kobayashi'
-    df_stats.to_csv(
-        f'kobayashiresults_260315/kobayashi_results_{analysis_type}_until_{'sidelying' if args.until == 'side_lying' else '45'}age{args.age}.csv')
+    #df_stats.to_csv(
+    #    f'kobayashiresults/kobayashi_results_{analysis_type}_until_{'sidelying' if args.until == 'side_lying' else '45'}age{args.age}.csv')
+    
+    # A, B, C, D, E, F classification
+    if not args.siegel:
+        keys = ['Timing_IL', 'Timing_IA','Timing_CA', 'Timing_CL']
+        filtered_list = [{k: v for k, v in d.items() if k in keys} for d in stats_list]
+
+
+        patterns = [tuple(d.values()) for d in filtered_list]
+
+        df_patterns = []
+    
+        cnt = Counter(patterns)
+        total_cnt = cnt.total()
+        for pattern, count in cnt.items():
+            timing_il = pattern[0]
+            timing_ia = pattern[1]
+            timing_ca = pattern[2]
+            timing_cl = pattern[3]
+            entry = {
+                'IL': timing_il,
+                'IA': timing_ia,
+                'CA': timing_ca,
+                'CL': timing_cl,
+                'count': count,
+                'fraction': count / total_cnt
+            }
+            df_patterns.append(entry)
+
+        df_patterns = pd.DataFrame(df_patterns)
+        #df_patterns.to_csv(f'kobayashiresults/patterns_age{args.age}.csv')
+
+        pattern_A = ('stationary', 'stationary', 'synchronous', 'synchronous')
+        pattern_B = ('stationary', 'stationary', 'synchronous', 'following')
+        pattern_C = ('synchronous', 'stationary', 'synchronous', 'synchronous')
+        pattern_D = ('synchronous', 'stationary', 'synchronous', 'following')
+        pattern_E = ('stationary', 'synchronous', 'synchronous', 'following')
+        pattern_F = ('synchronous', 'synchronous', 'synchronous', 'synchronous')
+
+        print(f"Cnt A: {cnt[pattern_A]/total_cnt}")
+        print(f"Cnt B: {cnt[pattern_B]/total_cnt}")
+        print(f"Cnt C: {cnt[pattern_C]/total_cnt}")
+        print(f"Cnt D: {cnt[pattern_D]/total_cnt}")
+        print(f"Cnt E: {cnt[pattern_E]/total_cnt}")
+        print(f"Cnt F: {cnt[pattern_F]/total_cnt}")
+        print(f"Total: {total_cnt}")
 
