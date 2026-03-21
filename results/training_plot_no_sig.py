@@ -76,7 +76,7 @@ def plot_data(data, labels: list[str], max_x: int, save_file: str, append_num_ru
         label = labels[model_idx]
 
         if append_num_runs_to_label:
-            label += str(model_data['num_runs'])
+            label += f", {model_data['num_runs']} runs"
 
         plt.plot(x_axis, values, label=label)
         # Prevent drawing over 1.0 or under 0.0 for success rate.
