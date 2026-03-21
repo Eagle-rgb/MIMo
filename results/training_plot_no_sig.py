@@ -7,6 +7,7 @@ import argparse
 from tb_plot_utils import load_tensorboard_runs, load_model_hyperparams, interpolate_runs_to_dict
 from sklearn.linear_model import LinearRegression
 import pandas as pd
+import icdlplot
 
 # --- Konfiguration ---
 BASE_DIR = "."
@@ -67,6 +68,8 @@ def plot_data(data, labels: list[str], max_x: int, save_file: str, append_num_ru
               legend_title: str=None):
     x_axis = np.linspace(0, max_x, N_POINTS)
 
+    plt.figure(figsize=(3,3))
+
     for model_data in data:
         model_idx = model_data['model_idx']
         values = model_data['value']
@@ -88,6 +91,7 @@ def plot_data(data, labels: list[str], max_x: int, save_file: str, append_num_ru
     plt.xlabel('Steps')
     plt.ylabel('Mean Success Rate')
     plt.grid(True, linestyle='--', alpha=0.5)
+    plt.tight_layout()
     plt.savefig(f'{save_file}.pdf',
                 dpi=300,
                 bbox_inches='tight',
