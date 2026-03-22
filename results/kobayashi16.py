@@ -185,6 +185,7 @@ def get_kobayashi_left_right_T_TR_interval(T_TR, df_displacement):
     siegel_duration=3600.0 # ms
     duration_mimo = df_displacement.index.max() # ms
     time_range_mimo = int(kobayashi_time_range * duration_mimo / siegel_duration)
+    time_range_mimo = kobayashi_time_range
     T_TR_Left = T_TR - time_range_mimo
     T_TR_Right = T_TR + time_range_mimo
 
@@ -329,7 +330,7 @@ def analysis_kobayashi(df_60hz_butter: pd.DataFrame):
 
     T_TR_Left, T_TR_Right, T_H = get_kobayashi_left_right_T_TR_interval(T_TR, df_episode)
     df_mean = calculate_average_velocity(df_ipsilateral, T_TR_Left, T_TR_Right)
-    df_stationary = classify_stationary_limbs_kobayashi(df_mean, thresh_mm_sec=300.0)
+    df_stationary = classify_stationary_limbs_kobayashi(df_mean, thresh_mm_sec=100.0)
 
     stationary_ia = not df_stationary[df_stationary['key'] == 'IA'].empty
     stationary_il = not df_stationary[df_stationary['key'] == 'IL'].empty

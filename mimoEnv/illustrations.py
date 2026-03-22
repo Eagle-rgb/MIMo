@@ -32,7 +32,7 @@ from mimoActuation.actuation import SpringDamperModel
 from mimoActuation.muscle import MuscleModel
 from mimoEnv.envs.mimo_env import SCENE_DIRECTORY
 
-from render.utils import evaluation_img, evaluation_video
+from render.utils import evaluation_img, evaluation_video, create_renderer, create_top_down_camera, render_top_down
 
 from mimoEnv.envs.roll_over_wrapper import MIMoRollOverWrapper
 from stable_baselines3.common.vec_env import DummyVecEnv
@@ -48,7 +48,7 @@ from mimoEnv.envs.roll_over_callback import RollOverCallback
 from PIL import Image
 import mujoco
 
-def test(wrapped_env, save_dir, model=None, render_video=False, render_frames=False, render_actuations=False):
+def test(wrapped_env, save_dir, model=None, render_video=False, render_frames=False, render_actuations=False, roll_over_starting_position='prone'):
     """ Tests the model for one episode.
 
     Args:
@@ -80,15 +80,19 @@ def test(wrapped_env, save_dir, model=None, render_video=False, render_frames=Fa
     reached_45_deg=False
     reached_side_lying=False
 
+    renderer = create_renderer(wrapped_env.unwrapped.model)
+    cam = create_top_down_camera(roll_over_starting_position)
+
     def get_frame():
         if render_actuations:
             return evaluation_img(wrapped_env, up='actuations')
         else:
-            return wrapped_env.mujoco_renderer.render(camera_name='top', render_mode="rgb_array")
+            return wrapped_env.mujoco_renderer.render(render_mode="rgb_array")
         
     def save_image(name):
         save_name=os.path.join(save_dir, f'{name}.pdf')
-        Image.fromarray(get_frame()).save(save_name)
+        frame = render_top_down(wrapped_env.unwrapped.data, renderer, cam)
+        Image.fromarray(frame).save(save_name)
         
     # Render initial frame.
     if render_frames:
@@ -606,7 +610,13 @@ An example is '251206_prone_linear_1e6_test'
     if should_test:
         # Note here we do not check for 'model is None', because we allow it. If in testing the model is
         # 'None', we just take random actions.
-        test(env, save_dir, model=model, render_video=render, render_frames=render_frames, render_actuations=render_actuations)
+        test(env,
+             save_dir,
+             model=model,
+             render_video=render,
+             render_frames=render_frames,
+             render_actuations=render_actuations,
+             roll_over_starting_position=roll_over_starting_position)
 
     env.close()
 

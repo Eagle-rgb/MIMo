@@ -11,9 +11,9 @@ import pandas as pd
 import os
 from mimoEnv.envs.mimo_env import SCENE_DIRECTORY
 import seaborn as sns
-import icdlplot
 
 from collect_observation_util import collect_run_statistics_all
+import icdlplot
 
 def load_successful_age_statistic_df(age):
     data = pd.read_csv(f'statistics_age{age}.csv', index_col=['Run', 'Episode'])

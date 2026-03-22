@@ -13,6 +13,51 @@ import sys
 
 EPS=1e-6
 
+def create_renderer(model):
+    """ Creates mujoco render object. """
+    renderer = mujoco.Renderer(model, height=240, width=240)
+    return renderer
+
+def create_top_down_camera(roll_over_starting_position='prone'):
+    """ Creates and returns camera [mujoco.MjvCamera] object
+    that looks top-down.
+    """
+    cam = mujoco.MjvCamera()
+    cam.type = mujoco.mjtCamera.mjCAMERA_FREE
+    cam.fixedcamid = -1
+    cam.distance = 1.1
+    cam.elevation = -90
+
+    # We must rotate 180° because else MIMo's head is at the bottom of
+    # the screen for supine starting position
+    cam.azimuth = 180 if roll_over_starting_position=='supine' else 0
+    return cam
+
+def get_surrounding_rect_center(data):
+    """ Returns the center of the rectangle that is the projection
+    of the surrounding cube of MIMo. Alternatively, you can think
+    of this function drawing a top-down rectangle around MIMo and
+    returning its center. Returns it as x, y tuple. """
+    x_coords = data.xpos[:,0]
+    y_coords = data.xpos[:,1]
+    x_min, x_max = np.min(x_coords), np.max(x_coords)
+    y_min, y_max = np.min(y_coords), np.max(y_coords)
+    return (x_min + x_max) / 2.0, (y_min + y_max) / 2.0
+
+def render_top_down(data, renderer, top_down_camera):
+    """ Renders and returns the RGB array of MIMo top-down.
+    Supply 'env.data' and the renderer created using
+    'create_renderer' and the camera created using
+    'create_top_down_camera'. """
+    x, y = get_surrounding_rect_center(data)
+    top_down_camera.lookat[0] = x
+    top_down_camera.lookat[1] = y
+
+    # cam.lookat = wrapped_env.unwrapped.data.body('mimo_location').xpos
+    renderer.update_scene(data, camera=top_down_camera)
+    pixels = renderer.render()
+    return pixels
+
 def render(env, camera="corner"):
     img = env.mujoco_renderer.render(render_mode="rgb_array", camera_name=camera)
     return img.astype(np.uint8)

@@ -26,3 +26,6 @@ MUJOCO_LOG.TXT
 vid
 *.avi
 *.pdf
+age_comparison_prone.sh
+.gitignore
+age_comparison_supine.sh
