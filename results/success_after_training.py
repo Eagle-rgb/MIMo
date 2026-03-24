@@ -20,7 +20,7 @@ if __name__ == '__main__':
     args = parser.parse_args()
     age = args.age
     env = make_env(age)
-    data = collect_run_statistics_all(env, date=args.date, pos='supine', suffix=args.suffix, n_episodes=2, n_success_episodes=-1)
+    data = collect_run_statistics_all(env, date=args.date, pos='supine', suffix=args.suffix, n_episodes=40, n_success_episodes=-1)
 
     # Drop not-needed columns
     print(data.keys())

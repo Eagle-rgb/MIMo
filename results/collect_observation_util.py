@@ -456,7 +456,6 @@ def collect_run_statistics_all(env, date, pos, suffix, n_episodes=40, n_success_
         if _date != date: continue
         if haltung != pos: continue
         if _suffix != suffix: continue
-        if run_num != '1': continue
 
         print(f"Found run {run_num}!")
 
