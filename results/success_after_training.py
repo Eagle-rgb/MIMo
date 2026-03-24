@@ -17,7 +17,7 @@ if __name__ == '__main__':
     parser.add_argument('--age', choices=[1,3,6,9], type=int, required=True)
     parser.add_argument('--date', type=str, required=True)
     parser.add_argument('--suffix', type=str, required=True)
-    parser.add_argument('--pen_fac', type=float, required=False)
+    parser.add_argument('--pen_fac', type=float, default=0.02, required=False)
     args = parser.parse_args()
     age = args.age
     env = make_env(age, pen_fac=args.pen_fac)
