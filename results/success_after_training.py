@@ -35,8 +35,8 @@ if __name__ == '__main__':
         success_rate = num_true / num_total
 
         entries.append({
-            'Run': {run[0]},
-            'Success_Rate': {success_rate}
+            'Run': run[0],
+            'Success_Rate': success_rate
         })
 
     entries_df = pd.DataFrame(entries).set_index(['Run'])
