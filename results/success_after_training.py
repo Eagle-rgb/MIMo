@@ -20,7 +20,7 @@ if __name__ == '__main__':
     parser.add_argument('--pen_fac', type=float, required=False)
     args = parser.parse_args()
     age = args.age
-    env = make_env(age, args.pen_fac)
+    env = make_env(age, pen_fac=args.pen_fac)
     data = collect_run_statistics_all(env, date=args.date, pos='supine', suffix=args.suffix, n_episodes=40, n_success_episodes=-1)
 
     # Drop not-needed columns
