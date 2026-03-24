@@ -17,9 +17,10 @@ if __name__ == '__main__':
     parser.add_argument('--age', choices=[1,3,6,9], type=int, required=True)
     parser.add_argument('--date', type=str, required=True)
     parser.add_argument('--suffix', type=str, required=True)
+    parser.add_argument('--pen_fac', type=float, required=False)
     args = parser.parse_args()
     age = args.age
-    env = make_env(age)
+    env = make_env(age, args.pen_fac)
     data = collect_run_statistics_all(env, date=args.date, pos='supine', suffix=args.suffix, n_episodes=40, n_success_episodes=-1)
 
     # Drop not-needed columns
