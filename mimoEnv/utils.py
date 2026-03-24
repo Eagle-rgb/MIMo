@@ -2,6 +2,8 @@ import numpy as np
 from matplotlib import pyplot as plt
 import mujoco
 from typing import List, Dict, Tuple
+import os
+import yaml
 
 EPS = 1e-10
 
@@ -949,3 +951,15 @@ def get_minimal_z_coordinate(model, data):
             min_z = current_bottom
 
     return min_z
+
+def load_model_yaml(load_model):
+    """ Loads parameters from the yaml in the model directory. """
+    folder = os.path.dirname(load_model)
+
+    try:
+        with open(os.path.join(folder, 'data.yml'), 'r') as file:
+            print(f"Loading yaml from model '{load_model}'.")
+            return yaml.safe_load(file)
+    except Exception:
+        print(f"Could not load yaml data to model '{load_model}'.")
+        return None

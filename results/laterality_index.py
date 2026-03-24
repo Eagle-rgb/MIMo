@@ -2,13 +2,11 @@
 trained model play for 10 episodes. We record the laterality and output
 a graph like in kobayashi16 as the laterality index. """
 import argparse
-import gymnasium as gym
-import mimoEnv
-from mimoActuation.actuation import SpringDamperModel
 from stable_baselines3 import PPO as RL
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+from utils import make_env
 
 from collect_observation_util import collect_run_statistics_all
 
@@ -35,19 +33,7 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     if not args.load_data:
-        env = gym.make("MIMoRollOver-v0", actuation_model=SpringDamperModel,
-            starting_position='supine',
-            width=480, # always 480 regardless whether we render actuations or not.
-            height=480,
-            render_mode='rgb_array',
-            touch_params=None,
-            nopen=False,
-            pen_factor=0.02,
-            goal_function='cos',
-            achieved_goal_in_observation=False,
-            pbrs=True,
-            #proprio_params=PROPRIOCEPTION_PARAMS_ONLY_QPOS,
-            isr=False)
+        env = make_env(age=9)
         #data = collect_run_statistics_all(env, '26-03-07', 'supine', 'age9')
         data = collect_run_statistics_all(env, '26-03-11', 'supine', 'random_rot_45')
         data.to_csv('statistics.csv')

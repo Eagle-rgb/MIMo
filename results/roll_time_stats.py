@@ -1,9 +1,6 @@
 """ This file is used to find out rolling time statistics over many models and many
 individual successfull tries. We also """
 import argparse
-import gymnasium as gym
-import mimoEnv
-from mimoActuation.actuation import SpringDamperModel
 from stable_baselines3 import PPO as RL
 import matplotlib.pyplot as plt
 import numpy as np
@@ -11,6 +8,7 @@ import pandas as pd
 import os
 from mimoEnv.envs.mimo_env import SCENE_DIRECTORY
 import seaborn as sns
+from utils import make_env
 
 from collect_observation_util import collect_run_statistics_all
 import icdlplot
@@ -53,20 +51,7 @@ if __name__ == '__main__':
     age_idx = ages.index(age)
 
     if not args.load_data:
-        env = gym.make("MIMoRollOver-v0", actuation_model=SpringDamperModel,
-            starting_position='supine',
-            width=480, # always 480 regardless whether we render actuations or not.
-            height=480,
-            render_mode='rgb_array',
-            touch_params=None,
-            nopen=False,
-            pen_factor=0.02,
-            goal_function='cos',
-            achieved_goal_in_observation=False,
-            pbrs=True,
-            age=age,
-            #proprio_params=PROPRIOCEPTION_PARAMS_ONLY_QPOS,
-            isr=False)
+        env = make_env(age=age)
 
         data = collect_run_statistics_all(env, dates[age_idx], haltung, suffixes[age_idx])
         data.to_csv(f'statistics_age{age}.csv')

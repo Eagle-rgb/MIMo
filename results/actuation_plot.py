@@ -1,15 +1,13 @@
 """ This file is used to plot one episode of MIMo's actuations. We group
 actuators into limbs (IA, CA, IL, CL, TR) just like in Kobayashi '16."""
 import argparse
-import gymnasium as gym
-import mimoEnv
-from mimoActuation.actuation import SpringDamperModel
 from stable_baselines3 import PPO as RL
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from signal_utils import resample_df_to_60hz, smooth_x_butterworth
 import seaborn as sns
+from utils import make_env
 
 # Need to be prefixed with 'act:left_' or 'act:right_' - depending on
 # the roll direction.
@@ -151,19 +149,9 @@ if __name__ == '__main__':
     parser.add_argument('--load_model', required=False, type=str)
     args = parser.parse_args()
 
-    env = gym.make("MIMoRollOver-v0", actuation_model=SpringDamperModel,
-        starting_position='supine',
-        width=480, # always 480 regardless whether we render actuations or not.
-        height=480,
-        render_mode='rgb_array',
-        touch_params=None,
-        nopen=False,
-        pen_factor=0.02,
-        goal_function='cos',
-        achieved_goal_in_observation=False,
-        pbrs=True,
-        #proprio_params=PROPRIOCEPTION_PARAMS_ONLY_QPOS,
-        isr=False)
+    raise ValueError("It is not clear what age this file uses.")
+
+    env = make_env(age=9)
     
     model = RL.load(args.load_model, env)
     data = []

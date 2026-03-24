@@ -5,9 +5,6 @@ Plot velocities of joints used for measurement in Kobayashi 2016 during one epis
 """
 from collect_observation_util import collect_kobayashi_displacements_all
 import argparse
-import gymnasium as gym
-import mimoEnv
-from mimoActuation.actuation import SpringDamperModel
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -16,6 +13,8 @@ from sklearn.metrics import r2_score
 from signal_utils import resample_df_to_60hz, smooth_x_butterworth
 from scipy.interpolate import interp1d
 from collections import Counter
+import datetime
+from utils import make_env
 
 def is_roll_to_left(data):
     """ Returns 'True' if the data shows a roll to the left side. Else,
@@ -32,6 +31,9 @@ def crop_until_milestone(data: pd.DataFrame, milestone="Side_Lying"):
 
     Also removes milestone columns from data.
     """
+    if milestone is None:
+        return data.drop(columns=['Side_Lying', '45_Deg'])
+
     if milestone not in ["Side_Lying", "45_Deg"]:
         raise ValueError()
     
@@ -186,6 +188,7 @@ def get_kobayashi_left_right_T_TR_interval(T_TR, df_displacement):
     duration_mimo = df_displacement.index.max() # ms
     time_range_mimo = int(kobayashi_time_range * duration_mimo / siegel_duration)
     time_range_mimo = kobayashi_time_range
+    time_range_mimo = kobayashi_time_range / 3.0
     T_TR_Left = T_TR - time_range_mimo
     T_TR_Right = T_TR + time_range_mimo
 
@@ -280,7 +283,7 @@ def analysis_siegel(df_100hz_butter: pd.DataFrame):
 
     return entry_stats
 
-def analysis_kobayashi(df_60hz_butter: pd.DataFrame):
+def analysis_kobayashi(df_60hz_butter: pd.DataFrame, thresh=100.0, T_H=250.0):
     """ Performs Kobayashi 2016 analysis. This function does:
     1. Normalizes torso displacement to [0,1] and fits it to a sigmoid.
     2. Verifies "good" fit by checking r2 score being at least 0.6. If not, this function
@@ -328,9 +331,14 @@ def analysis_kobayashi(df_60hz_butter: pd.DataFrame):
     #df_episode.plot()
     #plt.show()
 
-    T_TR_Left, T_TR_Right, T_H = get_kobayashi_left_right_T_TR_interval(T_TR, df_episode)
+    # T_TR_Left, T_TR_Right, T_H = get_kobayashi_left_right_T_TR_interval(T_TR, df_episode)
+    T_TR_Left = T_TR - T_H
+    T_TR_Right = T_TR + T_H
+    duration_mimo = df_episode.index.max() # ms
+    if T_TR_Left < 0: T_TR_Left = 0
+    if T_TR_Right > duration_mimo: T_TR_Right = duration_mimo
     df_mean = calculate_average_velocity(df_ipsilateral, T_TR_Left, T_TR_Right)
-    df_stationary = classify_stationary_limbs_kobayashi(df_mean, thresh_mm_sec=100.0)
+    df_stationary = classify_stationary_limbs_kobayashi(df_mean, thresh_mm_sec=thresh)
 
     stationary_ia = not df_stationary[df_stationary['key'] == 'IA'].empty
     stationary_il = not df_stationary[df_stationary['key'] == 'IL'].empty
@@ -436,7 +444,11 @@ if __name__ == '__main__':
     parser.add_argument('--age', choices=[6, 9], type=int, help="Infant Age. Choices: 6, 9", required=True)
     parser.add_argument('--siegel', action='store_true')
     parser.add_argument('--until', type=str, default="side_lying",
-                        choices=["side_lying", "45"], help="Roll milestone to analyze until.")
+                        choices=["side_lying", "45", "full"], help="Roll milestone to analyze until.")
+    parser.add_argument('--thresh', type=int, default=100,
+                        help="Speed threshold to use in Kobayashi Analysis to classify stationary limbs. Default: 100mm/sec.")
+    parser.add_argument('--range', type=int, default=250,
+                        help="Range around T_TR to use for classifying stationary limbs. Default 250ms.")
     
     args = parser.parse_args()
 
@@ -448,21 +460,7 @@ if __name__ == '__main__':
             model_date = '26-03-07'
             model_suffix = 'age9'
 
-        env = gym.make("MIMoRollOver-v0", actuation_model=SpringDamperModel,
-            starting_position='supine',
-            width=480, # always 480 regardless whether we render actuations or not.
-            height=480,
-            render_mode='rgb_array',
-            touch_params=None,
-            nopen=False,
-            pen_factor=0.02,
-            goal_function='cos',
-            achieved_goal_in_observation=False,
-            pbrs=True,
-            success_at_side_lying=False,
-            age=args.age,
-            #proprio_params=PROPRIOCEPTION_PARAMS_ONLY_QPOS,
-            isr=False)
+        env = make_env(args.age)
         
         df = collect_kobayashi_displacements_all(env, model_date, 'supine', model_suffix)
         if args.save_data:
@@ -489,7 +487,12 @@ if __name__ == '__main__':
         for episode, df_episode in df_run.groupby(['Episode']):
             # Crop DataFrame to the section relevant for our analysis. This is either until
             # side lying or until reaching 45°.
-            df_episode = crop_until_milestone(df_episode, milestone='Side_Lying' if args.until=='side_lying' else '45_Deg')
+            milestone = None
+            if args.until == 'side_lying':
+                milestone = 'Side_Lying'
+            elif args.until == '45':
+                milestone = '45_Deg'
+            df_episode = crop_until_milestone(df_episode, milestone=milestone)
 
             if len(df_episode) <= 26:
                 print(f"Skipping run {run}, episode {episode}, because it is too short!")
@@ -510,7 +513,7 @@ if __name__ == '__main__':
             if args.siegel:
                 entry_stats = analysis_siegel(df_episode)
             else:
-                entry_stats = analysis_kobayashi(df_episode)
+                entry_stats = analysis_kobayashi(df_episode, thresh=args.thresh, T_H=args.range)
 
             if entry_stats is None:
                 continue
@@ -572,9 +575,16 @@ if __name__ == '__main__':
     print(n_pattern)
 
     # print(df_stats)
+    date_today = datetime.datetime.today().strftime('%y-%m-%d')
     analysis_type = 'siegel' if args.siegel else 'kobayashi'
-    #df_stats.to_csv(
-    #    f'kobayashiresults/kobayashi_results_{analysis_type}_until_{'sidelying' if args.until == 'side_lying' else '45'}age{args.age}.csv')
+    if args.until == 'side_lying':
+        analysis_until = 'lateral'
+    elif args.until == '45':
+        analysis_until = '45'
+    elif args.until == 'full':
+        analyiss_until = 'full'
+    df_stats.to_csv(
+        f'kobayashiresults/{date_today}_{analysis_type}_thresh_{args.thresh}_range_{args.range}_until_{analysis_until}_age{args.age}.csv')
     
     # A, B, C, D, E, F classification
     if not args.siegel:
@@ -604,7 +614,8 @@ if __name__ == '__main__':
             df_patterns.append(entry)
 
         df_patterns = pd.DataFrame(df_patterns)
-        #df_patterns.to_csv(f'kobayashiresults/patterns_age{args.age}.csv')
+        df_patterns.to_csv(
+            f'kobayashiresults/{date_today}_patterns_thresh_{args.thresh}_range_{args.range}_until_{analysis_until}_age{args.age}.csv')
 
         pattern_A = ('stationary', 'stationary', 'synchronous', 'synchronous')
         pattern_B = ('stationary', 'stationary', 'synchronous', 'following')

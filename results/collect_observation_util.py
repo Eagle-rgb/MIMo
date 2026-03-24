@@ -12,6 +12,7 @@ import mujoco
 from PIL import Image
 import os
 import re
+from utils import make_env
 
 OBS_VESTI_KEYS = ["accelerometer_x", "accelerometer_y", "accelerometer_z", 
                   "gyro_x", "gyro_y", "gyro_z"]
@@ -359,37 +360,40 @@ def collect_kobayashi_displacements_all(env, date, pos, suffix):
     df = pd.concat(data)
     return df
 
-def collect_run_statistics(env, model, n_success_episodes, n_abort):
-    """ Lets the (trained) model 'model' play in the environment 'env' for as many episodes
-    until it reaches 'n_success_episodes' number of successful episodes. We let him play for
-    a maximum of 'n_abort' episodes, after which if we did not reach 'n_success_episodes', we
-    return 'None'. Otherwise we return a pandas DataFrame containing the laterality of the
-    run and if it was successful or not.
+def collect_run_statistics(env, model, n_episodes, n_success_episodes=-1):
+    """ Lets the (trained) model 'model' play in the environment 'env' for a total of 'n_episodes'.
+    If 'n_success_episodes > 0' is specified, finishes after reaching 'n_success_episodes' many
+    successful episodes. In case the model does not reach 'n_success_episodes' after 'n_episodes'
+    tries, returns 'None' (Only if 'n_success_episodes' is specified).
+
+    Returns pd.DataFrame containing keys:
+    * Episode: Played episode number
+    * Success: True or False
+    * Left_Roll: This was a roll to the left (only valid if 'Success' is 'True')
+    * Time: The duration of ms of the entire roll (or episode)
+    * Time_SideLying: The duration until reaching sidelying. Only valid if model actually
+        reached side lying. Usually, we just check if the model performed the entire roll,
+        so check for 'Success' 'True'.
     """
     cnt_success = 0
     torso_site_id  = mujoco.mj_name2id(env.model, mujoco.mjtObj.mjOBJ_SITE, "KOBAYASHI_Torso")
     data = []
 
-    def get_frame():
-        return env.mujoco_renderer.render(render_mode="rgb_array")
+    for episode in range(n_episodes):
+        if n_success_episodes <= 0:
+            print(f"Playing episode {episode+1} of {n_episodes}")
+        else:
+            print(f"Playing episode {episode+1} of {n_episodes}. Currently, {cnt_success} of {n_success_episodes} successful episodes.")
 
-    for episode in range(n_abort):
-        print("Playing episode...")
-        #imgs = []
         done = False
         obs, _ = env.reset()
-        #imgs.append(get_frame())
         time_zero_sec = env.data.time
-
         ref_displacement = env.data.site_xpos[torso_site_id][1]
-
-        deg_45_reached = False
         side_lying_reached = False
 
         while not done:
             action, _ = model.predict(obs)
             obs, _, success, failure, info = env.step(action)
-            #imgs.append(get_frame())
 
             done = success or failure
 
@@ -419,22 +423,22 @@ def collect_run_statistics(env, model, n_success_episodes, n_abort):
 
                 data.append(entry)
 
-                #if success and entry['Time'] > 4000.0:
-                #    print("We got one! Saving as video...")
-                #    save_name=os.path.join('.', 'long_episode.avi')
-                #    render_height = 480
-                #    render_width = 480
-                #    evaluation_video(imgs, save_name=save_name, resolution=((render_width, render_height)))
-                #    raise ValueError
-
-                if cnt_success >= n_success_episodes:
+                if n_success_episodes > 0 and cnt_success >= n_success_episodes:
                     return pd.DataFrame(data)
                 
-    return None
+    # Do we have the success parameter supplied? In this case if we reach this line of code,
+    # we did not reach 'n_success_episodes' in 'n_episodes' tries. Return 'None'.
+    if n_success_episodes > 0:
+        return None
+    
+    return pd.DataFrame(data)
 
-def collect_run_statistics_all(env, date, pos, suffix):
+def collect_run_statistics_all(env, date, pos, suffix, n_episodes=40, n_success_episodes=10):
     """ Searches for all models matching 'date', starting position 'pos' and suffix 'suffix'.
-    Loads all runs of these models and plays 'collect_run_statistics' on them for 10 episodes. """
+    Loads all runs of these models and plays 'collect_run_statistics' on them for
+    'n_episodes' (default: 40) many episodes with success condition 'n_success_episodes'
+    (default: 10). Set 'n_success_episodes=-1' if you just want to let the models play
+    for 'n_episodes' without worrying them having to reach a number of successful episodes. """
     data = []
 
     # Pattern of model folder: <date>_<startingposition>_<suffix>_run_<i>
@@ -452,41 +456,32 @@ def collect_run_statistics_all(env, date, pos, suffix):
         if _date != date: continue
         if haltung != pos: continue
         if _suffix != suffix: continue
+        if run_num != '1': continue
 
         print(f"Found run {run_num}!")
 
         model_file = os.path.join(os.path.abspath(root), "model_1.zip")
         model = RL.load(model_file, env)
-        n_success_episodes=10
-        n_abort=40
-        run_stats = collect_run_statistics(env, model, n_success_episodes=n_success_episodes, n_abort=n_abort)
+        run_stats = collect_run_statistics(env, model, n_episodes=n_episodes, n_success_episodes=n_success_episodes)
         if run_stats is None:
-            print(f"Run {run_num} did not reach {n_success_episodes} successful episodes in {n_abort} tries. Skipping...")
+            print(f"Run {run_num} did not reach {n_success_episodes} successful episodes in {n_episodes} tries. Skipping...")
             continue
         run_stats['Run'] = run_num
         run_stats = run_stats.set_index(['Run', 'Episode'])
         data.append(run_stats)
 
-    df = pd.concat(data)
+    if len(data) > 1:
+        df = pd.concat(data)
+    else:
+        df = pd.DataFrame(data[0])
     return df
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--load_model', required=True, type=str)
     args = parser.parse_args()
-    env = gym.make("MIMoRollOver-v0", actuation_model=SpringDamperModel,
-        starting_position='supine',
-        width=480, # always 480 regardless whether we render actuations or not.
-        height=480,
-        render_mode='rgb_array',
-        touch_params=None,
-        nopen=False,
-		pen_factor=0.04,
-        goal_function='cos',
-        achieved_goal_in_observation=False,
-        pbrs=True,
-		#proprio_params=PROPRIOCEPTION_PARAMS_ONLY_QPOS,
-        isr=False)
+    raise ValueError("It is not clear what age this file uses!")
+    env = make_env(age=9)
     
     model = RL.load(args.load_model, env)
     

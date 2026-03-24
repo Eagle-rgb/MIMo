@@ -45,6 +45,8 @@ import numpy as np
 from mimoEnv.envs.roll_over import TOUCH_PARAMS as ROLL_OVER_TOUCH_PARAMS
 from mimoEnv.envs.roll_over_callback import RollOverCallback
 
+from mimoEnv.utils import load_model_yaml
+
 from PIL import Image
 import mujoco
 
@@ -280,18 +282,6 @@ def load_observation_normalization_dict(obs):
 
     print("Successfully loaded observation normalization.")
     return mean_dict, std_dict
-
-def load_model_yaml(load_model):
-    """ Loads parameters from the yaml in the model directory. """
-    folder = os.path.dirname(load_model)
-
-    try:
-        with open(os.path.join(folder, 'data.yml'), 'r') as file:
-            print(f"Loading yaml from model '{load_model}'.")
-            return yaml.safe_load(file)
-    except Exception:
-        print(f"Could not load yaml data to model '{load_model}'.")
-        return None
 
 def main():
     """ CLI for the demonstration environments.
