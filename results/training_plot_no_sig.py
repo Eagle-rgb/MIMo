@@ -69,6 +69,7 @@ def plot_data(data, labels: list[str], max_x: int, save_file: str, append_num_ru
     x_axis = np.linspace(0, max_x, N_POINTS)
 
     plt.figure(figsize=(3,3))
+    color_idx = 0
 
     for model_data in data:
         model_idx = model_data['model_idx']
@@ -78,11 +79,12 @@ def plot_data(data, labels: list[str], max_x: int, save_file: str, append_num_ru
         if append_num_runs_to_label:
             label += f", {model_data['num_runs']} runs"
 
-        plt.plot(x_axis, values, label=label)
+        plt.plot(x_axis, values, label=label, color=PLT_COLORS[color_idx])
         # Prevent drawing over 1.0 or under 0.0 for success rate.
         std_min = np.clip(values - model_data['std'], 0.0, 1.0)
         std_max = np.clip(values + model_data['std'], 0.0, 1.0)
-        plt.fill_between(x_axis, std_min, std_max, alpha=0.15)
+        plt.fill_between(x_axis, std_min, std_max, alpha=0.15, color=PLT_COLORS[color_idx])
+        color_idx += 1
 
     if legend_title:
         plt.legend(title=legend_title)

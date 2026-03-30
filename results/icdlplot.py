@@ -10,3 +10,10 @@ plt.rcParams.update({
     "ytick.labelsize": 9,
     "legend.fontsize": 8,
 })
+
+PLT_COLORS = ["#99ff99",
+    "#ff9999",
+    "#9999ff",
+    "#9f9f9f",
+    "#0FEFEB",
+    "#DCEB12"]
