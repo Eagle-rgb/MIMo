@@ -3,6 +3,7 @@ individual successfull tries. We also """
 import argparse
 from stable_baselines3 import PPO as RL
 import matplotlib.pyplot as plt
+import matplotlib
 import numpy as np
 import pandas as pd
 import os
@@ -78,7 +79,7 @@ if __name__ == '__main__':
             df_all.append(df)
 
         df_all = pd.concat(df_all, ignore_index=True)
-        plt.figure(figsize=(2,2))
+        plt.figure(figsize=(2.5,2.5))
 
         ax = sns.violinplot(
             data=df_all,
@@ -104,14 +105,21 @@ if __name__ == '__main__':
         siegel_mean = 3600
         siegel_std = 2800
         lower_bound = siegel_mean - siegel_std # 800ms
-        upper_bound = siegel_mean
+        upper_bound = siegel_mean + siegel_std
+        kobayashi = 1500
+
+        ax.set_yscale('log')
+        ax.set_yticks([400, 600, 1000, 1500, 2000, 3600])
+        ax.get_yaxis().set_major_formatter(matplotlib.ticker.ScalarFormatter())
 
         plt.axhspan(lower_bound, upper_bound, color='red', alpha=0.1, label='Siegel et al.')
         plt.axhline(siegel_mean, color='red', linestyle='--', alpha=0.4, linewidth=1)
+        plt.axhline(kobayashi, color='green', linestyle='--', alpha=0.4, linewidth=1, label='Kobayashi 2016')
 
         plt.legend(loc='upper right')
         plt.ylabel("Roll Duration [ms]")
         plt.xlabel("Age [months]")
+        
 
         plt.tight_layout()
         plt.savefig(f'mimo_speed_plot_{'lateral' if args.side_lying else 'full'}.pdf',

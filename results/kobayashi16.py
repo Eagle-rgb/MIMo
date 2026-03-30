@@ -350,10 +350,10 @@ def analysis_kobayashi(df_60hz_butter: pd.DataFrame, thresh=100.0, T_H=250.0):
     V_IL = 0
     direction_il = 'stationary'
     direction_ia = 'stationary'
-    if not stationary_ia:
+    if True: # not stationary_ia:
         T_IA, V_IA, _ = get_time_and_velocity_maximum_sigmoid_velocity(df_episode, 'IA')
         direction_ia = 'forward' if V_IA > 0 else 'backward'
-    if not stationary_il:
+    if True: # not stationary_il:
         T_IL, V_IL, _ = get_time_and_velocity_maximum_sigmoid_velocity(df_episode, 'IL')
         direction_il = 'forward' if V_IL > 0 else 'backward'
 
@@ -386,7 +386,7 @@ def analysis_kobayashi(df_60hz_butter: pd.DataFrame, thresh=100.0, T_H=250.0):
         'Timing_IL': Timing_IL,
         'Timing_CA': Timing_CA,
         'Timing_CL': Timing_CL,
-        'T_H': T_H
+        'T_H': T_H,
     }
 
     return entry_stats
@@ -529,16 +529,24 @@ if __name__ == '__main__':
         V_TR_mean = df_stats['V_TR'].mean()
         V_CA_mean = df_stats['V_CA'].mean()
         V_CL_mean = df_stats['V_CL'].mean()
+        V_IA_mean = df_stats['V_IA'].mean()
+        V_IL_mean = df_stats['V_IL'].mean()
         V_TR_std = df_stats['V_TR'].std()
         V_CA_std = df_stats['V_CA'].std()
         V_CL_std = df_stats['V_CL'].std()
+        V_IA_std = df_stats['V_IA'].std()
+        V_IL_std = df_stats['V_IL'].std()
 
         print(f"V_TR_mean: {V_TR_mean}")
         print(f"V_CA_mean: {V_CA_mean}")
         print(f"V_CL_mean: {V_CL_mean}")
+        print(f"V_IA_mean: {V_IA_mean}")
+        print(f"V_IL_mean: {V_IL_mean}")
         print(f"V_TR_std: {V_TR_std}")
         print(f"V_CA_std: {V_CA_std}")
         print(f"V_CL_std: {V_CL_std}")
+        print(f"V_IA_std: {V_IA_std}")
+        print(f"V_IL_std: {V_IL_std}")
 
         print(f"T_H mean: {df_stats['T_H'].mean()}")
 
@@ -583,16 +591,22 @@ if __name__ == '__main__':
         analysis_until = '45'
     elif args.until == 'full':
         analyiss_until = 'full'
-    df_stats.to_csv(
-        f'kobayashiresults/{date_today}_{analysis_type}_thresh_{args.thresh}_range_{args.range}_until_{analysis_until}_age{args.age}.csv')
+    #df_stats.to_csv(
+    #    f'kobayashiresults/{date_today}_{analysis_type}_thresh_{args.thresh}_range_{args.range}_until_{analysis_until}_age{args.age}.csv')
     
     # A, B, C, D, E, F classification
     if not args.siegel:
         keys = ['Timing_IL', 'Timing_IA','Timing_CA', 'Timing_CL']
-        filtered_list = [{k: v for k, v in d.items() if k in keys} for d in stats_list]
+        patterns = []
 
-
-        patterns = [tuple(d.values()) for d in filtered_list]
+        for d in stats_list:
+            pattern = (
+                d['Timing_IL'],
+                d['Timing_IA'],
+                d['Timing_CA'],
+                d['Timing_CL']
+            )
+            patterns.append(pattern)
 
         df_patterns = []
     
@@ -614,8 +628,8 @@ if __name__ == '__main__':
             df_patterns.append(entry)
 
         df_patterns = pd.DataFrame(df_patterns)
-        df_patterns.to_csv(
-            f'kobayashiresults/{date_today}_patterns_thresh_{args.thresh}_range_{args.range}_until_{analysis_until}_age{args.age}.csv')
+        #df_patterns.to_csv(
+        #    f'kobayashiresults/{date_today}_patterns_thresh_{args.thresh}_range_{args.range}_until_{analysis_until}_age{args.age}.csv')
 
         pattern_A = ('stationary', 'stationary', 'synchronous', 'synchronous')
         pattern_B = ('stationary', 'stationary', 'synchronous', 'following')

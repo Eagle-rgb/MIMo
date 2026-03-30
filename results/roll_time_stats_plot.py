@@ -10,7 +10,7 @@ if __name__ == '__main__':
 
     x = np.arange(len(categories))
 
-    fig, ax = plt.subplots(figsize=(2, 2))
+    fig, ax = plt.subplots(figsize=(2.5, 2.5))
 
     rects = ax.bar(x, min_duration_ms, edgecolor='black', color='grey', capsize=5)
     # --- Styling ---

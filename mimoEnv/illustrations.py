@@ -497,7 +497,8 @@ An example is '251206_prone_linear_1e6_test'
             print("Creating folders for model save path '" + save_dir + "'")
             os.makedirs(save_dir)
     else:
-        save_dir = os.path.dirname(load_model)
+        save_dir = os.path.abspath(os.path.dirname(load_model))
+        print(f"Saving to save_dir {save_dir}.")
 
     # wrapped_env = None
     render_height = 720 if render_actuations else 480
