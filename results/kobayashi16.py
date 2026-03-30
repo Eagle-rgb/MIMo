@@ -214,8 +214,7 @@ def calculate_max_sigmoid_velocity(beta_0, beta_1, timestep_ms):
     parameters 'beta_0' and 'beta_1' at its maximum.
     Derivative of the sigmoid P(x)=.. is simply P'(x)=beta_1*P(x)*(1-P(x)).
     Since we consider maximum displacement speed, P(x)=0.5."""
-    velocity_mm_step = beta_1 * 0.5**2.0
-    velocity_mm_ms = velocity_mm_step / timestep_ms
+    velocity_mm_ms = beta_1 * 0.5**2.0
     return velocity_mm_ms * 1000.0  # to mm/sec
 
 def get_time_and_velocity_maximum_sigmoid_velocity(df_displacement, key):
