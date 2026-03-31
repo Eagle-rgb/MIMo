@@ -17,7 +17,7 @@ def plot_bar_util(data_list, categories, save_file, show_ylabel=True, show_legen
 
     offset = 0.1
     width = (1.0-2*offset) / len(data_list)
-    fig, ax = plt.subplots(figsize=(2.5, 2.5))
+    fig, ax = plt.subplots(figsize=(3.8, 2.0))
 
     x = np.arange(len(categories))
 

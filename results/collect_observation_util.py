@@ -415,7 +415,7 @@ def collect_kobayashi_site_y_displacement_series(env, model, n_tries=10, with_ac
     else:
         return None
 
-def collect_kobayashi_displacements_all(env, date, pos, suffix):
+def collect_kobayashi_displacements_all(env, date, pos, suffix, with_actuations=False):
     """ Searches for all models matching 'date', starting position 'pos' and suffix 'suffix'.
     Loads all runs of these models and plays 'collect_kobayashi_site_y_displacement_series' on them for 1 episode. """
     data = []
@@ -441,7 +441,7 @@ def collect_kobayashi_displacements_all(env, date, pos, suffix):
         model_file = os.path.join(os.path.abspath(root), "model_1.zip")
         model = RL.load(model_file, env)
         n_tries = 10
-        df = collect_kobayashi_site_y_displacement_series(env, model, n_tries=n_tries)
+        df = collect_kobayashi_site_y_displacement_series(env, model, n_tries=n_tries, with_actuations=with_actuations)
         if df is None:
             print(f"Run {run_num} had no successfull episodes in {n_tries} tries. Skipping...")
             continue

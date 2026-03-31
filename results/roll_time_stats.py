@@ -79,7 +79,7 @@ if __name__ == '__main__':
             df_all.append(df)
 
         df_all = pd.concat(df_all, ignore_index=True)
-        plt.figure(figsize=(2.5,2.5))
+        plt.figure(figsize=(1.8,2.0))
 
         ax = sns.violinplot(
             data=df_all,
