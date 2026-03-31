@@ -441,7 +441,7 @@ if __name__ == '__main__':
     parser.add_argument('--load_data', required=False, action='store_true', default=False,
                         help="Loads data 'data.csv'.")
     parser.add_argument('--plot_displacement', action='store_true')
-    parser.add_argument('--age', choices=[6, 9], type=int, help="Infant Age. Choices: 6, 9", required=True)
+    parser.add_argument('--age', choices=[1,3,6,9], type=int, help="Infant Age. Choices: 1, 3, 6, 9", required=True)
     parser.add_argument('--siegel', action='store_true')
     parser.add_argument('--until', type=str, default="side_lying",
                         choices=["side_lying", "45", "full"], help="Roll milestone to analyze until.")
@@ -459,6 +459,12 @@ if __name__ == '__main__':
         elif args.age == 9:
             model_date = '26-03-07'
             model_suffix = 'age9'
+        elif args.age == 3:
+            model_date = '26-03-10'
+            model_suffix = 'age3'
+        elif args.age == 1:
+            model_date = '26-03-09'
+            model_suffix = 'age1'
 
         env = make_env(args.age)
         
