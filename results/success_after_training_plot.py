@@ -85,7 +85,7 @@ if __name__ == '__main__':
         data['Not Successful'].append(cnt_10)
         data['Ambigious'].append(cnt_other)
 
-    fig, ax = plt.subplots(figsize=icdlplot.figsize(0.25))
+    fig, ax = plt.subplots(figsize=icdlplot.figsize(0.25), doublecol=True)
     bottom = np.zeros(len(data['Ambigious']))
     width = 0.5
 

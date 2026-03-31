@@ -208,7 +208,43 @@ def collect_observations(env, model, n_episodes, save_file=None, pca=None, rende
     df_action = pd.DataFrame(all_action_dicts)
     return df, df_action
 
-def collect_kobayashi_site_y_displacement_series(env, model, n_tries=10):
+# Need to be prefixed with 'act:left_' or 'act:right_' - depending on
+# the roll direction.
+ARM_ACTUATORS = ["shoulder_horizontal",
+                 "shoulder_abduction",
+                 "shoulder_internal",
+                 "elbow"]
+
+# Need to be prefixed with 'act:left_' or 'act:right_' - depending on
+# the roll direction.
+LEG_ACTUATORS = ["hip_flex",
+                 "hip_abduction",
+                 "hip_rotation",
+                 "knee"]
+
+# Need to be prefixed with 'act:'
+TORSO_ACTUATORS = ["chest_twist",
+                   "chest_lean"]
+
+# Need to be prefixed with 'act:'
+HIP_ACTUATORS = ["hip_bend",
+                 "hip_twist",
+                 "hip_lean"]
+
+def get_actuator_index(env, act):
+    """ Returns the index of the actuator 'act' - specified
+    using full qualified name in 'env.mimo_actuators' array.
+    
+    You may then proceed to read out the torque values of this
+    actuator from the actuation model at that control_input index."""
+    for i in range(len(env.mimo_actuators)):
+        act_id = env.mimo_actuators[i]  # id in mjModel.actuator(...)
+        act_name = env.model.actuator(act_id).name
+        if act_name != act: continue
+        return i
+    return -1
+
+def collect_kobayashi_site_y_displacement_series(env, model, n_tries=10, with_actuations=True):
     """ Lets the (trained) model 'model' play in the environment 'env'
     for a total of 'n_tries' episodes. Records the y displacement of each site defined
     as kobayashi site. Collects in total a number of (n_steps + 1)
@@ -243,6 +279,60 @@ def collect_kobayashi_site_y_displacement_series(env, model, n_tries=10):
     # Dictionary of reference coordinates to calculate relative displacement
     # of site. Set after the first 'env.reset()'.
     reference_coords = None
+
+    # Prepare muscles
+    # Prepare by collecting index of each actuator in 'env.mimo_actuators' so that
+    # we have fast access to reading the actuation values of each actuators from the
+    # actuation model.
+    torso_act_idx = {}
+    hip_act_idx = {}
+    left_arm_act_idx = {}
+    right_arm_act_idx = {}
+    left_leg_act_idx = {}
+    right_leg_act_idx = {}
+
+    for act_shortname in ARM_ACTUATORS:
+        act_fullname = "act:left_" + act_shortname
+        left_arm_act_idx[act_fullname] = get_actuator_index(env, act_fullname)
+        act_fullname = "act:right_" + act_shortname
+        right_arm_act_idx[act_fullname] = get_actuator_index(env, act_fullname)
+
+    for act_shortname in LEG_ACTUATORS:
+        act_fullname = "act:left_" + act_shortname
+        left_leg_act_idx[act_fullname] = get_actuator_index(env, act_fullname)
+        act_fullname = "act:right_" + act_shortname
+        right_leg_act_idx[act_fullname] = get_actuator_index(env, act_fullname)
+
+    for act_shortname in TORSO_ACTUATORS:
+        act_fullname = "act:" + act_shortname
+        torso_act_idx[act_fullname] = get_actuator_index(env, act_fullname)
+
+    for act_shortname in HIP_ACTUATORS:
+        act_fullname = "act:" + act_shortname
+        hip_act_idx[act_fullname] = get_actuator_index(env, act_fullname)
+
+    # Collection of all the indexes above into the groups we will use.
+    act_idx = {
+        'Act_Torso': torso_act_idx,
+        'Act_Hip': hip_act_idx,
+        'Act_Right_Leg': right_leg_act_idx,
+        'Act_Left_Leg': left_leg_act_idx,
+        'Act_Right_Arm': right_arm_act_idx,
+        'Act_Left_Arm': left_arm_act_idx
+    }
+
+    def get_actuation_of_group(group_key):
+        vals = []
+        for _, act_indx in act_idx[group_key].items():
+            vals.append(abs(env.actuation_model.control_input[act_indx]))
+        return np.mean(np.array(vals))
+    
+    def collect_actuations(zero=False):
+        entry = {}
+        for group_key in act_idx.keys():
+            mean_act = get_actuation_of_group(group_key) if not zero else 0.0
+            entry[group_key] = mean_act
+        return entry
 
     def get_site_absolute_displacements():
         """ Returns the absolute displacements, i.e.
@@ -288,6 +378,7 @@ def collect_kobayashi_site_y_displacement_series(env, model, n_tries=10):
         entry['Time'] = env.data.time * 1000.0 - time_offset # env.data.time is in sec.
         entry['Side_Lying'] = False
         entry['45_Deg'] = False
+        entry = entry | collect_actuations(zero=True)
         data.append(entry)
         
         while not done:
@@ -302,6 +393,7 @@ def collect_kobayashi_site_y_displacement_series(env, model, n_tries=10):
             entry['Time'] = env.data.time * 1000.0 - time_offset # env.data.time is in sec.
             entry['Side_Lying'] = side_lying_reached
             entry['45_Deg'] = deg_45_reached
+            entry = entry | collect_actuations()
             data.append(entry)
 
             done = truncated or terminated
