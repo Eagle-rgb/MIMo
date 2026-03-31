@@ -90,9 +90,9 @@ if __name__ == '__main__':
     width = 0.5
 
     colors = (
-        '#44dd44',
-        '#4444dd',
-        '#dd4444',
+        icdlplot.PLT_COLORS[0]
+        icdlplot.PLT_COLORS[2]
+        icdlplot.PLT_COLORS[1]
     )
 
     indx = 0
