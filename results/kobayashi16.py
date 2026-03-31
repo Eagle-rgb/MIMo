@@ -51,14 +51,22 @@ def relabel_right_left_limbs_in_rolling_direction(data):
             'Left Ankle': 'IL',
             'Right Ankle': 'CL',
             'Left Wrist': 'IA',
-            'Right Wrist': 'CA'})
+            'Right Wrist': 'CA',
+            'Act_Right_Leg': 'Act_CL',
+            'Act_Left_Leg': 'Act_IL',
+            'Act_Right_Arm': 'Act_CA',
+            'Act_Left_Arm': 'Act_IA'})
     
     # Roll over the right.
     return data.rename(columns={
         'Left Ankle': 'CL',
         'Right Ankle': 'IL',
         'Left Wrist': 'CA',
-        'Right Wrist': 'IA'})
+        'Right Wrist': 'IA',
+        'Act_Right_Leg': 'Act_IL',
+        'Act_Left_Leg': 'Act_CL',
+        'Act_Right_Arm': 'Act_IA',
+        'Act_Left_Arm': 'Act_CA'})
 
 def reorient_rollover(data):
     """ Reorients the rollover so that it is always a
@@ -460,7 +468,7 @@ if __name__ == '__main__':
             model_date = '26-03-07'
             model_suffix = 'age9'
         elif args.age == 3:
-            model_date = '26-03-10'
+            model_date = '26-03-09'
             model_suffix = 'age3'
         elif args.age == 1:
             model_date = '26-03-09'
@@ -505,27 +513,31 @@ if __name__ == '__main__':
                 continue
 
             df_episode = relabel_right_left_limbs_in_rolling_direction(df_episode)
-            reorient_rollover(df_episode)
+            df_displacement = df_episode[['TR', 'CA', 'CL', 'IA', 'IL']]
+            reorient_rollover(df_displacement)
 
             # Kobayashi uses 60Hz, Siegel uses 100Hz. Our data is already at 100Hz, so for Siegel,
             # we do not need to resample
             if not args.siegel:
-                df_episode = resample_df_to_60hz(df_episode)
+                df_displacement = resample_df_to_60hz(df_displacement)
             else:
-                df_episode = resample_df_to_60hz(df_episode, target_fs=100.0)
+                df_displacement = resample_df_to_60hz(df_displacement, target_fs=100.0)
 
-            df_episode = df_episode.apply(smooth_x_butterworth)
+            df_displacement = df_displacement.apply(smooth_x_butterworth)
 
             if args.siegel:
-                entry_stats = analysis_siegel(df_episode)
+                entry_stats = analysis_siegel(df_displacement)
             else:
-                entry_stats = analysis_kobayashi(df_episode, thresh=args.thresh, T_H=args.range)
+                entry_stats = analysis_kobayashi(df_displacement, thresh=args.thresh, T_H=args.range)
 
             if entry_stats is None:
                 continue
 
             entry_stats['Run'] = run
             entry_stats['Episode'] = episode
+
+            for act_key in ['Act_Torso', 'Act_IA', 'Act_IL', 'Act_CA', 'Act_CL']:
+                entry_stats[act_key] = df_episode[act_key].mean()
 
             stats_list.append(entry_stats)
 
@@ -594,49 +606,42 @@ if __name__ == '__main__':
     
     # A, B, C, D, E, F classification
     if not args.siegel:
+        patterns = [
+            ('stationary', 'stationary', 'synchronous', 'synchronous'), # A
+            ('stationary', 'stationary', 'synchronous', 'following'), # B
+            ('synchronous', 'stationary', 'synchronous', 'synchronous'), # C
+            ('synchronous', 'stationary', 'synchronous', 'following'), # D
+            ('stationary', 'synchronous', 'synchronous', 'following'), # E
+            ('synchronous', 'synchronous', 'synchronous', 'synchronous'), # F
+        ]
+
         keys = ['Timing_IL', 'Timing_IA','Timing_CA', 'Timing_CL']
-        filtered_list = [{k: v for k, v in d.items() if k in keys} for d in stats_list]
 
+        for i in range(len(stats_list)):
+            entry = stats_list[i]
+            tup_pattern = (
+                entry[keys[0]],
+                entry[keys[1]],
+                entry[keys[2]],
+                entry[keys[3]]
+            )
 
-        patterns = [tuple(d.values()) for d in filtered_list]
+            if tup_pattern not in patterns:
+                stats_list[i]['Pattern'] = 'N'
 
-        df_patterns = []
-    
-        cnt = Counter(patterns)
-        total_cnt = cnt.total()
-        for pattern, count in cnt.items():
-            timing_il = pattern[0]
-            timing_ia = pattern[1]
-            timing_ca = pattern[2]
-            timing_cl = pattern[3]
-            entry = {
-                'IL': timing_il,
-                'IA': timing_ia,
-                'CA': timing_ca,
-                'CL': timing_cl,
-                'count': count,
-                'fraction': count / total_cnt
-            }
-            df_patterns.append(entry)
+            stats_list[i]['Pattern'] = 'A' + patterns.index(tup_pattern)
 
-        df_patterns = pd.DataFrame(df_patterns)
-        df_patterns.to_csv(
-            f'kobayashiresults/{date_today}_patterns_thresh_{args.thresh}_range_{args.range}_until_{analysis_until}_age{args.age}.csv')
+        df_stats = pd.DataFrame(stats_list)
+        cnt_total = df_stats.count()
 
-        pattern_A = ('stationary', 'stationary', 'synchronous', 'synchronous')
-        pattern_B = ('stationary', 'stationary', 'synchronous', 'following')
-        pattern_C = ('synchronous', 'stationary', 'synchronous', 'synchronous')
-        pattern_D = ('synchronous', 'stationary', 'synchronous', 'following')
-        pattern_E = ('stationary', 'synchronous', 'synchronous', 'following')
-        pattern_F = ('synchronous', 'synchronous', 'synchronous', 'synchronous')
+        for pattern_letter in ['A', 'B', 'C', 'D', 'E', 'F']:
+            df = df_stats[df_stats['Pattern'] == pattern_letter]
+            cnt = df.count()
+            print(f"Pattern {pattern_letter}: {cnt/cnt_total}")
+            for muscle_key in ['Act_Torso', 'Act_CA', 'Act_CL', 'Act_IA', 'Act_IL']:
+                muscle_mean = df[muscle_key].mean()
+                print(f"Pattern {pattern_letter}, {muscle_key}: {muscle_mean}")
 
-        print(f"Cnt A: {cnt[pattern_A]/total_cnt}")
-        print(f"Cnt B: {cnt[pattern_B]/total_cnt}")
-        print(f"Cnt C: {cnt[pattern_C]/total_cnt}")
-        print(f"Cnt D: {cnt[pattern_D]/total_cnt}")
-        print(f"Cnt E: {cnt[pattern_E]/total_cnt}")
-        print(f"Cnt F: {cnt[pattern_F]/total_cnt}")
-        print(f"Total: {total_cnt}")
 
 
 
