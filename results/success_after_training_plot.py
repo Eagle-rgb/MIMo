@@ -85,13 +85,13 @@ if __name__ == '__main__':
         data['Not Successful'].append(cnt_10)
         data['Ambigious'].append(cnt_other)
 
-    fig, ax = plt.subplots(figsize=(2.5,2.5))
+    fig, ax = plt.subplots(figsize=icdlplot.figsize(0.25))
     bottom = np.zeros(len(data['Ambigious']))
     width = 0.5
 
     colors = (
-        icdlplot.PLT_COLORS[0]
-        icdlplot.PLT_COLORS[2]
+        icdlplot.PLT_COLORS[0],
+        icdlplot.PLT_COLORS[2],
         icdlplot.PLT_COLORS[1]
     )
 

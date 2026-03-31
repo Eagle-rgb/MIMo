@@ -17,3 +17,8 @@ PLT_COLORS = ["#99ff99",
     "#9f9f9f",
     "#0FEFEB",
     "#DCEB12"]
+
+def figsize(fac):
+    w = 3.5
+    h = 3.5
+    return (w * fac, h * fac)
