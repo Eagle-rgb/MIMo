@@ -14,8 +14,11 @@ from utils import make_env
 from collect_observation_util import collect_run_statistics_all
 import icdlplot
 
-def load_successful_age_statistic_df(age):
-    data = pd.read_csv(f'statistics_age{age}.csv', index_col=['Run', 'Episode'])
+def load_successful_age_statistic_df(age, haltung='supine'):
+    file = f'statistics_age{age}.csv'
+    if haltung == 'prone':
+        file = f'statistics_prone_age{age}.csv'
+    data = pd.read_csv(file, index_col=['Run', 'Episode'])
     successful_df = data[data['Success'] == True]
     return successful_df
 
@@ -37,14 +40,18 @@ if __name__ == '__main__':
     parser.add_argument('--side_lying', action='store_true',
                         help="Measure time until sidelying instead of until reaching " \
                         "full roll over.")
+    parser.add_argument('--haltung', choices=['prone', 'supine'], default='supine')
     args = parser.parse_args()
     age = args.age
     if not age:
         age = 9
     ages = [1, 3, 6, 9]
     dates = ['26-03-09', '26-03-09', '26-03-10', '26-03-07']
-    haltung = 'supine'
+    haltung = args.haltung
     suffixes = ['age1', 'age3', 'age6', 'age9']
+
+    if haltung == 'prone':
+        dates = ['26-03-10', '26-03-10', '26-03-10', '26-03-10']
 
     if age not in ages:
         raise ValueError
@@ -55,13 +62,16 @@ if __name__ == '__main__':
         env = make_env(age=age)
 
         data = collect_run_statistics_all(env, dates[age_idx], haltung, suffixes[age_idx])
-        data.to_csv(f'statistics_age{age}.csv')
+        if haltung == 'supine':
+            data.to_csv(f'statistics_age{age}.csv')
+        else:
+            data.to_csv(f'statistics_prone_age{age}.csv')
 
     elif not args.load_all_ages:
         if args.side_lying:
-            data = load_successful_age_statistic_df(age)['Time_SideLying']
+            data = load_successful_age_statistic_df(age, haltung)['Time_SideLying']
         else:
-            data = load_successful_age_statistic_df(age)['Time']
+            data = load_successful_age_statistic_df(age, haltung)['Time']
         print(f"Age {age} ---------------------")
         print_min_max_avg_median(data)
 

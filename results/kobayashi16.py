@@ -300,9 +300,9 @@ def analysis_kobayashi(df_60hz_butter: pd.DataFrame, thresh=100.0, T_H=250.0):
     
     """
     # Get the torso speeds, normalize them to [0, 1] and fit to a sigmoid using log. regression.
-    torso = df_episode['TR']
+    torso = df_60hz_butter['TR']
 
-    T_TR, V_TR, torso_sigmoid = get_time_and_velocity_maximum_sigmoid_velocity(df_episode, 'TR')
+    T_TR, V_TR, torso_sigmoid = get_time_and_velocity_maximum_sigmoid_velocity(df_60hz_butter, 'TR')
 
     # Verify that R-squared value is > 0.6
     r2 = r2_score(torso, torso_sigmoid)
@@ -311,12 +311,12 @@ def analysis_kobayashi(df_60hz_butter: pd.DataFrame, thresh=100.0, T_H=250.0):
         return None
     
     # Calculate T_CA and T_CL.
-    T_CA, V_CA, _ = get_time_and_velocity_maximum_sigmoid_velocity(df_episode, 'CA')
-    T_CL, V_CL, _ = get_time_and_velocity_maximum_sigmoid_velocity(df_episode, 'CL')
+    T_CA, V_CA, _ = get_time_and_velocity_maximum_sigmoid_velocity(df_60hz_butter, 'CA')
+    T_CL, V_CL, _ = get_time_and_velocity_maximum_sigmoid_velocity(df_60hz_butter, 'CL')
 
     # Pattern Classification.
     # Copy so we can use it later to fit nonstationary ipsilateral limb displacement to sigmoid.
-    df_velocities = calculate_velocities_df(df_episode)
+    df_velocities = calculate_velocities_df(df_60hz_butter)
     #normalize_velocities_to_torso(df_episode)
 
     #df_episode.plot()
@@ -334,7 +334,7 @@ def analysis_kobayashi(df_60hz_butter: pd.DataFrame, thresh=100.0, T_H=250.0):
     # T_TR_Left, T_TR_Right, T_H = get_kobayashi_left_right_T_TR_interval(T_TR, df_episode)
     T_TR_Left = T_TR - T_H
     T_TR_Right = T_TR + T_H
-    duration_mimo = df_episode.index.max() # ms
+    duration_mimo = df_60hz_butter.index.max() # ms
     if T_TR_Left < 0: T_TR_Left = 0
     if T_TR_Right > duration_mimo: T_TR_Right = duration_mimo
     df_mean = calculate_average_velocity(df_ipsilateral, T_TR_Left, T_TR_Right)
@@ -351,10 +351,10 @@ def analysis_kobayashi(df_60hz_butter: pd.DataFrame, thresh=100.0, T_H=250.0):
     direction_il = 'stationary'
     direction_ia = 'stationary'
     if not stationary_ia:
-        T_IA, V_IA, _ = get_time_and_velocity_maximum_sigmoid_velocity(df_episode, 'IA')
+        T_IA, V_IA, _ = get_time_and_velocity_maximum_sigmoid_velocity(df_60hz_butter, 'IA')
         direction_ia = 'forward' if V_IA > 0 else 'backward'
     if not stationary_il:
-        T_IL, V_IL, _ = get_time_and_velocity_maximum_sigmoid_velocity(df_episode, 'IL')
+        T_IL, V_IL, _ = get_time_and_velocity_maximum_sigmoid_velocity(df_60hz_butter, 'IL')
         direction_il = 'forward' if V_IL > 0 else 'backward'
 
     # Calculate timing of moving limbs (leading, synchronous, following)
