@@ -59,7 +59,7 @@ if __name__ == '__main__':
     age_idx = ages.index(age)
 
     if not args.load_data:
-        env = make_env(age=age)
+        env = make_env(age=age, haltung=haltung)
 
         data = collect_run_statistics_all(env, dates[age_idx], haltung, suffixes[age_idx])
         if haltung == 'supine':
