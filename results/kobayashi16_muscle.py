@@ -77,7 +77,9 @@ def reorient_rollover(data):
     """
     if is_roll_to_left(data):
         # good!
+        #print("is roll to left")
         return
+    #print("is roll to right")
     data.iloc[:, :] *= -1
 
 def fit_normalized_to_sigmoid(data):
@@ -226,9 +228,9 @@ def calculate_max_sigmoid_velocity(beta_0, beta_1, timestep_ms):
     velocity_mm_msec = beta_1 * 0.5**2.0
     return velocity_mm_msec * 1000.0
 
-def get_time_and_velocity_maximum_sigmoid_velocity(df_displacement, key):
+def get_time_and_velocity_maximum_sigmoid_velocity(df_displacement_, key):
     """ Returns T_{key} and V_{key} and reconstruction. """
-    reconstructed_values, (beta_0, beta_1), _ = fit_normalized_to_sigmoid(df_displacement[key])
+    reconstructed_values, (beta_0, beta_1), _ = fit_normalized_to_sigmoid(df_displacement_[key])
     T = -beta_0 / beta_1
     V = calculate_max_sigmoid_velocity(beta_0, beta_1, timestep_ms=10.0)
     return T, V, reconstructed_values
@@ -308,9 +310,8 @@ def analysis_kobayashi(df_60hz_butter: pd.DataFrame, thresh=100.0, T_H=250.0):
     
     """
     # Get the torso speeds, normalize them to [0, 1] and fit to a sigmoid using log. regression.
-    torso = df_episode['TR']
-
-    T_TR, V_TR, torso_sigmoid = get_time_and_velocity_maximum_sigmoid_velocity(df_episode, 'TR')
+    torso = df_60hz_butter['TR']
+    T_TR, V_TR, torso_sigmoid = get_time_and_velocity_maximum_sigmoid_velocity(df_60hz_butter, 'TR')
 
     # Verify that R-squared value is > 0.6
     r2 = r2_score(torso, torso_sigmoid)
@@ -319,12 +320,12 @@ def analysis_kobayashi(df_60hz_butter: pd.DataFrame, thresh=100.0, T_H=250.0):
         return None
     
     # Calculate T_CA and T_CL.
-    T_CA, V_CA, _ = get_time_and_velocity_maximum_sigmoid_velocity(df_episode, 'CA')
-    T_CL, V_CL, _ = get_time_and_velocity_maximum_sigmoid_velocity(df_episode, 'CL')
+    T_CA, V_CA, _ = get_time_and_velocity_maximum_sigmoid_velocity(df_60hz_butter, 'CA')
+    T_CL, V_CL, _ = get_time_and_velocity_maximum_sigmoid_velocity(df_60hz_butter, 'CL')
 
     # Pattern Classification.
     # Copy so we can use it later to fit nonstationary ipsilateral limb displacement to sigmoid.
-    df_velocities = calculate_velocities_df(df_episode)
+    df_velocities = calculate_velocities_df(df_60hz_butter)
     #normalize_velocities_to_torso(df_episode)
 
     #df_episode.plot()
@@ -342,7 +343,7 @@ def analysis_kobayashi(df_60hz_butter: pd.DataFrame, thresh=100.0, T_H=250.0):
     # T_TR_Left, T_TR_Right, T_H = get_kobayashi_left_right_T_TR_interval(T_TR, df_episode)
     T_TR_Left = T_TR - T_H
     T_TR_Right = T_TR + T_H
-    duration_mimo = df_episode.index.max() # ms
+    duration_mimo = df_60hz_butter.index.max() # ms
     if T_TR_Left < 0: T_TR_Left = 0
     if T_TR_Right > duration_mimo: T_TR_Right = duration_mimo
     df_mean = calculate_average_velocity(df_ipsilateral, T_TR_Left, T_TR_Right)
@@ -359,10 +360,10 @@ def analysis_kobayashi(df_60hz_butter: pd.DataFrame, thresh=100.0, T_H=250.0):
     direction_il = 'stationary'
     direction_ia = 'stationary'
     if not stationary_ia:
-        T_IA, V_IA, _ = get_time_and_velocity_maximum_sigmoid_velocity(df_episode, 'IA')
+        T_IA, V_IA, _ = get_time_and_velocity_maximum_sigmoid_velocity(df_60hz_butter, 'IA')
         direction_ia = 'forward' if V_IA > 0 else 'backward'
     if not stationary_il:
-        T_IL, V_IL, _ = get_time_and_velocity_maximum_sigmoid_velocity(df_episode, 'IL')
+        T_IL, V_IL, _ = get_time_and_velocity_maximum_sigmoid_velocity(df_60hz_butter, 'IL')
         direction_il = 'forward' if V_IL > 0 else 'backward'
 
     # Calculate timing of moving limbs (leading, synchronous, following)
@@ -482,7 +483,7 @@ if __name__ == '__main__':
 
     elif args.load_data:
         # df = pd.read_csv('kobayashidata.csv', index_col=['Run', 'Time'])
-        df = pd.read_csv(f'kobayashidataact_age{args.age}.csv', index_col=['Run', 'Episode', 'Time'])
+        df = pd.read_csv(f'kobayashidataact_ind_model_2_age{args.age}.csv', index_col=['Run', 'Episode', 'Time'])
 
     else:
         raise ValueError
@@ -513,8 +514,7 @@ if __name__ == '__main__':
                 continue
 
             df_episode = relabel_right_left_limbs_in_rolling_direction(df_episode)
-            df_displacement = df_episode[['TR', 'CA', 'CL', 'IA', 'IL']]
-            print(df_displacement)
+            df_displacement = df_episode.drop(['Act_Torso', 'Act_IA', 'Act_IL', 'Act_CA', 'Act_CL', 'Act_Hip'], axis=1)
             reorient_rollover(df_displacement)
 
             # Kobayashi uses 60Hz, Siegel uses 100Hz. Our data is already at 100Hz, so for Siegel,
@@ -627,21 +627,38 @@ if __name__ == '__main__':
                 entry[keys[3]]
             )
 
-            if tup_pattern not in patterns:
-                stats_list[i]['Pattern'] = 'N'
+            pattern_letter = 'N'
+            if tup_pattern in patterns:
+                idx = patterns.index(tup_pattern)
+                if idx == 0:
+                    pattern_letter = 'A'
+                elif idx == 1:
+                    pattern_letter = 'B'
+                elif idx == 2:
+                    pattern_letter = 'C'
+                elif idx == 3:
+                    pattern_letter = 'D'
+                elif idx == 4:
+                    pattern_letter = 'E'
+                elif idx == 5:
+                    pattern_letter = 'F'
 
-            stats_list[i]['Pattern'] = 'A' + patterns.index(tup_pattern)
+            stats_list[i]['Pattern'] = pattern_letter
 
         df_stats = pd.DataFrame(stats_list)
-        cnt_total = df_stats.count()
+        df_stats[['Run', 'Episode', 'Pattern']].to_csv('df_stats.csv')
+        cnt_total = df_stats['Pattern'].count()
 
         for pattern_letter in ['A', 'B', 'C', 'D', 'E', 'F']:
             df = df_stats[df_stats['Pattern'] == pattern_letter]
-            cnt = df.count()
+            cnt = df['Pattern'].count()
             print(f"Pattern {pattern_letter}: {cnt/cnt_total}")
             for muscle_key in ['Act_Torso', 'Act_CA', 'Act_CL', 'Act_IA', 'Act_IL']:
                 muscle_mean = df[muscle_key].mean()
                 print(f"Pattern {pattern_letter}, {muscle_key}: {muscle_mean}")
+
+            min_episode = df['Episode'].min()
+            print(f"Pattern {pattern_letter} occurs in episode {min_episode}")
 
 
 

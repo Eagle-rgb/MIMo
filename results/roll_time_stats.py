@@ -79,7 +79,7 @@ if __name__ == '__main__':
         df_all = []
         time_col = 'Time' if not args.side_lying else 'Time_SideLying'
         for age in ages:
-            df = load_successful_age_statistic_df(age)
+            df = load_successful_age_statistic_df(age, haltung=haltung)
             print(f"Age {age}")
             if args.side_lying:
                 print_min_max_avg_median(df[time_col])
@@ -132,7 +132,10 @@ if __name__ == '__main__':
         
 
         plt.tight_layout()
-        plt.savefig(f'mimo_speed_plot_{'lateral' if args.side_lying else 'full'}.pdf',
+        save_file = f'mimo_speed_plot_{'lateral' if args.side_lying else 'full'}.pdf'
+        if haltung == 'prone':
+            save_file = f'mimo_speed_plot_prone_{'lateral' if args.side_lying else 'full'}.pdf'
+        plt.savefig(save_file,
                 dpi=300,
                 bbox_inches='tight',
                 format='pdf')

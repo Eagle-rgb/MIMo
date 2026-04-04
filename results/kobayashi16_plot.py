@@ -7,6 +7,11 @@ older infants as 'means_black'.
 import matplotlib.pyplot as plt
 import numpy as np
 import icdlplot
+from pathlib import Path
+
+script_dir = Path(__file__).parent
+output_dir = script_dir.parent / "icdl26" / "velocity"
+output_dir.mkdir(parents=True, exist_ok=True)
 
 if __name__ == '__main__':
     # --- Daten vorbereiten ---
@@ -21,6 +26,16 @@ if __name__ == '__main__':
     std_err_age3 = [1.69, 1.81, 2.04]
     std_err_age6 = [1.36, 1.67, 1.81]
     std_err_age9 = [1.36, 1.49, 1.41]
+
+    np.save(output_dir / "categories.npy", categories)
+    np.save(output_dir / "means_age1.npy", means_age1)
+    np.save(output_dir / "std_age1.npy", std_err_age1)
+    np.save(output_dir / "means_age3.npy", means_age3)
+    np.save(output_dir / "std_age3.npy", std_err_age3)
+    np.save(output_dir / "means_age6.npy", means_age6)
+    np.save(output_dir / "std_age6.npy", std_err_age6)
+    np.save(output_dir / "means_age9.npy", means_age9)
+    np.save(output_dir / "std_age9.npy", std_err_age9)
 
     # Positionen der Balken auf der x-Achse
     x = np.arange(len(categories))
