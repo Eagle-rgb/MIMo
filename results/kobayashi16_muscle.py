@@ -483,7 +483,7 @@ if __name__ == '__main__':
 
     elif args.load_data:
         # df = pd.read_csv('kobayashidata.csv', index_col=['Run', 'Time'])
-        df = pd.read_csv(f'kobayashidataact_ind_model_2_age{args.age}.csv', index_col=['Run', 'Episode', 'Time'])
+        df = pd.read_csv(f'kobayashidataact_age{args.age}.csv', index_col=['Run', 'Episode', 'Time'])
 
     else:
         raise ValueError
@@ -535,7 +535,7 @@ if __name__ == '__main__':
                 continue
 
             entry_stats['Run'] = run
-            entry_stats['Episode'] = episode
+            entry_stats['Episode'] = episode[0]
 
             for act_key in ['Act_Torso', 'Act_IA', 'Act_IL', 'Act_CA', 'Act_CL']:
                 entry_stats[act_key] = df_episode[act_key].mean()
