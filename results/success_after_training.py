@@ -22,15 +22,16 @@ if __name__ == '__main__':
                     help="Enable or disable transferlearning.")
     parser.add_argument('--transferlearning_age', type=int, required=False, default=9,
                     help="Specify age for transferlearning.")
+    parser.add_argument('--haltung', required=True, choices=['supine', 'prone'])
     args = parser.parse_args()
     age = args.age
 
     if args.transfer_learning:
-        env = make_env(args.transferlearning_age, pen_fac=args.pen_fac)
+        env = make_env(args.transferlearning_age, pen_fac=args.pen_fac, starting_position=args.haltung)
     else:
-        env = make_env(age, pen_fac=args.pen_fac)
+        env = make_env(age, pen_fac=args.pen_fac, starting_position=args.haltung)
 
-    data = collect_run_statistics_all(env, date=args.date, pos='supine', suffix=args.suffix, n_episodes=40, n_success_episodes=-1)
+    data = collect_run_statistics_all(env, date=args.date, pos=args.haltung, suffix=args.suffix, n_episodes=40, n_success_episodes=-1)
 
     # Drop not-needed columns
     print(data.keys())
@@ -51,7 +52,7 @@ if __name__ == '__main__':
     entries_df = pd.DataFrame(entries).set_index(['Run'])
 
     if args.transfer_learning:
-        entries_df.to_csv(f'{args.date}_{'supine'}_{args.suffix}_' +\
+        entries_df.to_csv(f'{args.date}_{args.haltung}_{args.suffix}_' +\
                           f'transferlearning_age{args.transferlearning_age}_test_success_rate.csv')
     else:
-        entries_df.to_csv(f'{args.date}_{'supine'}_{args.suffix}_test_success_rate.csv')
+        entries_df.to_csv(f'{args.date}_{args.haltung}_{args.suffix}_test_success_rate.csv')

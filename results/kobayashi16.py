@@ -449,12 +449,16 @@ if __name__ == '__main__':
                         help="Speed threshold to use in Kobayashi Analysis to classify stationary limbs. Default: 100mm/sec.")
     parser.add_argument('--range', type=int, default=250,
                         help="Range around T_TR to use for classifying stationary limbs. Default 250ms.")
+    parser.add_argument('--transfer_learning', action='store_true', default=False,
+                        help="Enable or disable transferlearning.")
+    parser.add_argument('--transferlearning_age', type=int, required=False, default=9,
+                        help="Specify age for transferlearning.")
     
     args = parser.parse_args()
 
     if args.collect_data:
         if args.age == 6:
-            model_date = '26-03-10'
+            model_date = '26-05-18'  # new model with corrected model file.
             model_suffix = 'age6'
         elif args.age == 9:
             model_date = '26-03-07'
@@ -466,15 +470,25 @@ if __name__ == '__main__':
             model_date = '26-03-09'
             model_suffix = 'age1'
 
-        env = make_env(args.age)
+        if args.transfer_learning:
+            age = args.transferlearning_age
+        else:
+            age = args.age
+        env = make_env(age)
         
         df = collect_kobayashi_displacements_all(env, model_date, 'supine', model_suffix)
         if args.save_data:
-            df.to_csv(f'kobayashidata_age{args.age}.csv')
+            if args.transfer_learning:
+                df.to_csv(f'kobayashidata_age{args.age}_transferlearning_age{args.transferlearning_age}.csv')
+            else:
+                df.to_csv(f'kobayashidata_age{args.age}.csv')
 
     elif args.load_data:
         # df = pd.read_csv('kobayashidata.csv', index_col=['Run', 'Time'])
-        df = pd.read_csv(f'kobayashidata_age{args.age}.csv', index_col=['Run', 'Episode', 'Time'])
+        if args.transfer_learning:
+            df = pd.read_csv(f'kobayashidata_age{args.age}_transferlearning_age{args.transferlearning_age}.csv', index_col=['Run', 'Episode', 'Time'])
+        else:
+            df = pd.read_csv(f'kobayashidata_age{args.age}.csv', index_col=['Run', 'Episode', 'Time'])
 
     else:
         raise ValueError
@@ -589,8 +603,15 @@ if __name__ == '__main__':
         analysis_until = '45'
     elif args.until == 'full':
         analyiss_until = 'full'
-    df_stats.to_csv(
-        f'kobayashiresults/{date_today}_{analysis_type}_thresh_{args.thresh}_range_{args.range}_until_{analysis_until}_age{args.age}.csv')
+
+    path = f'kobayashiresults/{date_today}_{analysis_type}_thresh_{args.thresh}_range_' +\
+            f'{args.range}_until_{analysis_until}_age{args.age}.csv'
+
+    if args.transfer_learning:
+        path = f'kobayashiresults/{date_today}_{analysis_type}_thresh_{args.thresh}_range_' +\
+            f'{args.range}_until_{analysis_until}_age{args.age}_transferlearning_age{args.transferlearning_age}.csv'
+
+    df_stats.to_csv(path)
     
     # A, B, C, D, E, F classification
     if not args.siegel:
@@ -619,9 +640,15 @@ if __name__ == '__main__':
             }
             df_patterns.append(entry)
 
+        path = f'kobayashiresults/{date_today}_patterns_thresh_{args.thresh}_range_' +\
+            f'{args.range}_until_{analysis_until}_age{args.age}.csv'
+
+        if args.transfer_learning:
+            path = f'kobayashiresults/{date_today}_patterns_thresh_{args.thresh}_range_' +\
+                f'{args.range}_until_{analysis_until}_age{args.age}_transferlearning_age{args.transferlearning_age}.csv'
+            
         df_patterns = pd.DataFrame(df_patterns)
-        df_patterns.to_csv(
-            f'kobayashiresults/{date_today}_patterns_thresh_{args.thresh}_range_{args.range}_until_{analysis_until}_age{args.age}.csv')
+        df_patterns.to_csv(path)
 
         pattern_A = ('stationary', 'stationary', 'synchronous', 'synchronous')
         pattern_B = ('stationary', 'stationary', 'synchronous', 'following')
