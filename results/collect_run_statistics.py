@@ -35,7 +35,14 @@ if __name__ == '__main__':
     parser.add_argument('--transferlearning_age', choices=[1,3,6,9], type=int, required=False)
     args = parser.parse_args()
 
-    if args.transfer_learning:
+    transfer_learning = args.transfer_learning
+    transferlearning_age = args.transferlearning_age
+
+    # If transferlearning age is the same as the source age, then turn off transferlearning.
+    if transferlearning_age == args.age:
+        transfer_learning = False
+
+    if transfer_learning:
         output_path_csv = f'{args.date}_{args.haltung}_{args.suffix}_transferlearning_age{args.transferlearning_age}_statistics.csv'
     else:
         output_path_csv = f'{args.date}_{args.haltung}_{args.suffix}_statistics.csv'
@@ -57,7 +64,7 @@ if __name__ == '__main__':
         else:
             durations = successful_df['Time']
 
-        if args.transfer_learning:
+        if transfer_learning:
             np.save(f'duration_{args.duration_until}_{args.haltung}_{args.suffix}_transferlearning_age{args.transferlearning_age}.npy')
         else:
             np.save(f'duration_{args.duration_until}_{args.haltung}_{args.suffix}.npy')
