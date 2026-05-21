@@ -40,7 +40,7 @@ if __name__ == '__main__':
     if (args.age_act is not None) ^ (args.age_body is not None):
         raise ValueError("Cross-Embodiment Evaluation: Only one age parameter supplied. Please supply both.")
 
-    cross_embodiment_evaluation = args.age_act is not None and args.age_act != args.age and args.age_body != args.age
+    cross_embodiment_evaluation = args.age_act is not None and (args.age_act != args.age or args.age_body != args.age)
 
     if cross_embodiment_evaluation:
         output_path_csv = f'{args.date}_{args.haltung}_{args.suffix}_cee_act{args.age_act}_body{args.body_act}_statistics.csv'
