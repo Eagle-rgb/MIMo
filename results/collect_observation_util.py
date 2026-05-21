@@ -452,7 +452,7 @@ def collect_kobayashi_displacements_all(env, date, pos, suffix, with_actuations=
     df = pd.concat(data)
     return df
 
-def collect_run_statistics(env, model, n_episodes, n_success_episodes=-1):
+def collect_run_statistics(env, model, n_episodes, n_success_episodes=-1, verbose=True):
     """ Lets the (trained) model 'model' play in the environment 'env' for a total of 'n_episodes'.
     If 'n_success_episodes > 0' is specified, finishes after reaching 'n_success_episodes' many
     successful episodes. In case the model does not reach 'n_success_episodes' after 'n_episodes'
@@ -472,10 +472,11 @@ def collect_run_statistics(env, model, n_episodes, n_success_episodes=-1):
     data = []
 
     for episode in range(n_episodes):
-        if n_success_episodes <= 0:
-            print(f"Playing episode {episode+1} of {n_episodes}")
-        else:
-            print(f"Playing episode {episode+1} of {n_episodes}. Currently, {cnt_success} of {n_success_episodes} successful episodes.")
+        if verbose:
+            if n_success_episodes <= 0:
+                print(f"Playing episode {episode+1} of {n_episodes}")
+            else:
+                print(f"Playing episode {episode+1} of {n_episodes}. Currently, {cnt_success} of {n_success_episodes} successful episodes.")
 
         done = False
         obs, _ = env.reset()
@@ -525,12 +526,15 @@ def collect_run_statistics(env, model, n_episodes, n_success_episodes=-1):
     
     return pd.DataFrame(data)
 
-def collect_run_statistics_all(env, date, pos, suffix, n_episodes=40, n_success_episodes=10):
+def collect_run_statistics_all(env, date, pos, suffix, n_episodes=40, n_success_episodes=10, verbose_mode='all'):
     """ Searches for all models matching 'date', starting position 'pos' and suffix 'suffix'.
     Loads all runs of these models and plays 'collect_run_statistics' on them for
     'n_episodes' (default: 40) many episodes with success condition 'n_success_episodes'
     (default: 10). Set 'n_success_episodes=-1' if you just want to let the models play
-    for 'n_episodes' without worrying them having to reach a number of successful episodes. """
+    for 'n_episodes' without worrying them having to reach a number of successful episodes.
+    
+    Specify 'verbosity' using 'verbose_mode', which can be either of 'all', 'simple' or 'none'.
+    """
     data = []
 
     # Pattern of model folder: <date>_<startingposition>_<suffix>_run_<i>
@@ -553,10 +557,15 @@ def collect_run_statistics_all(env, date, pos, suffix, n_episodes=40, n_success_
 
         model_file = os.path.join(os.path.abspath(root), "model_1.zip")
         model = RL.load(model_file, env)
-        run_stats = collect_run_statistics(env, model, n_episodes=n_episodes, n_success_episodes=n_success_episodes)
+        run_stats = collect_run_statistics(env, model, n_episodes=n_episodes, n_success_episodes=n_success_episodes, verbose=verbose_mode=='all')
         if run_stats is None:
-            print(f"Run {run_num} did not reach {n_success_episodes} successful episodes in {n_episodes} tries. Skipping...")
+            if verbose_mode == 'all' or verbose_mode == 'simple':
+                print(f"Run {run_num} did not reach {n_success_episodes} successful episodes in {n_episodes} tries. Skipping...")
             continue
+        if verbose_mode == 'all' or verbose_mode == 'simple':
+            _n_episode = run_stats['Episode'].count()
+            _n_success = (run_stats['Success'] == True).count()
+            print(f"Run {run_num} completed. Total episodes: {_n_episode}. Successful episodes: {_n_success}.")
         run_stats['Run'] = run_num
         run_stats = run_stats.set_index(['Run', 'Episode'])
         data.append(run_stats)

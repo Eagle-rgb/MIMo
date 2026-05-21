@@ -44,6 +44,7 @@ for ((i=0; i<num_ages; i++)); do
 			"--age_act=${AGES[i]}" \
 			"--age_body=${AGES[j]}" &
 done
+done
 
 # Wait until all ssh commands finished, i.e. all MIMo simulations are finished. Then, plot the results.
 wait
