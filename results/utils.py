@@ -3,7 +3,7 @@ from mimoActuation.actuation import SpringDamperModel
 import gymnasium as gym
 from mimoEnv.utils import load_model_yaml
 
-def make_env(age, starting_position='supine', pen_fac=0.02):
+def make_env(age_act, age_body, starting_position='supine', pen_fac=0.02):
     """ Creates and returns the roll over env. """
     env = gym.make("MIMoRollOver-v0", actuation_model=SpringDamperModel,
         starting_position=starting_position,
@@ -16,7 +16,8 @@ def make_env(age, starting_position='supine', pen_fac=0.02):
         goal_function='cos',
         achieved_goal_in_observation=False,
         pbrs=True,
-        age=age,
+        age_act=age_act,
+        age_body=age_body,
         #proprio_params=PROPRIOCEPTION_PARAMS_ONLY_QPOS,
         isr=False)
     

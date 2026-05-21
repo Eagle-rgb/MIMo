@@ -31,6 +31,8 @@ from mimoEnv.utils import get_minimal_z_coordinate
 from gymnasium import spaces
 from PIL import Image
 
+AGES = [1, 3, 6, 9]
+
 ROLL_OVER_XML = os.path.join(SCENE_DIRECTORY, "roll_over_prone_scene.xml")
 """ Path to the roll over scene.
 
@@ -84,7 +86,8 @@ class MIMoRollOverEnv(MIMoEnv):
     def __init__(self,
                  initial_qpos=None,
                  frame_skip=2,
-                 age=9,
+                 age_body=9,
+                 age_act=9,
                  proprio_params=DEFAULT_PROPRIOCEPTION_PARAMS,
                  touch_params=TOUCH_PARAMS,
                  vision_params=None,
@@ -138,12 +141,15 @@ class MIMoRollOverEnv(MIMoEnv):
         # appropriate age scene. So we manually specify the scene location.
         # This is necessary because the parallel RBI runs have problems deleting and creating the temporary
         # scenes at the same time.
-        if age == 18:  # default
-            model_path = os.path.join(SCENE_DIRECTORY, "roll_over_prone_scene.xml")
-        elif age in [0, 1, 3, 6, 7, 8, 9]:
-            model_path = os.path.join(SCENE_DIRECTORY, f"roll_over_prone_scene_{age}_mo.xml")
+        #if age == 18:  # default
+        #    model_path = os.path.join(SCENE_DIRECTORY, "roll_over_prone_scene.xml")
+        if age_act in AGES and age_body in AGES:
+            model_path = os.path.join(SCENE_DIRECTORY,
+                "roll_over",
+                "prone",
+                f"scene_act_{age_act}_body_{age_body}.xml")
         else:
-            raise ValueError("Allowed ages: 18, 9, 8, 7, 6, 3, 1, 0.")
+            raise ValueError("Allowed ages: 1, 3, 6, 9")
 
         self.intrinsic_goals_created = False
         self.goal_function=goal_function

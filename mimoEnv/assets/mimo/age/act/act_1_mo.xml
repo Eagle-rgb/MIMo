@@ -1,0 +1,57 @@
+<mujocoinclude>
+  <actuator>
+    <motor class="mimo" name="act:hip_bend" joint="robot:hip_bend1" gear="4.792849908097783" forcerange="-1 .765" user=".8574 32.93 22.97" />
+    <motor class="mimo" name="act:hip_twist" joint="robot:hip_rot1" gear="1.6444277094891258" forcerange="-1 1" user="1.699 8.136 8.136" />
+    <motor class="mimo" name="act:hip_lean" joint="robot:hip_lean1" gear="3.2843253150953613" forcerange="-1 1" user="1.278 1.264 1.264" />
+
+    <motor class="mimo" name="act:chest_twist" joint="robot:chest_rot" gear="0.1630837397840455" forcerange="-1 1" user="1.699 8.136 8.136" />
+    <motor class="mimo" name="act:chest_lean" joint="robot:chest_lean" gear="0.326167479568091" forcerange="-1 1" user="1.278 1.264 1.264" />
+
+    <motor class="mimo" name="act:head_swivel" joint="robot:head_swivel" gear="1.0051784555238277" forcerange="-1 1" user=".6665 24.87 24.87" />
+    <motor class="mimo" name="act:head_tilt" joint="robot:head_tilt" gear="1.8428271684603503" forcerange="-1 .55" user=".9338 31.39 16.86" />
+    <motor class="mimo" name="act:head_tilt_side" joint="robot:head_tilt_side" gear="1.0051784555238277" forcerange="-1 1" user="1.068 15.69 15.69" />
+
+    <motor class="mimo" name="act:left_eye_horizontal" joint="robot:left_eye_horizontal" gear="0.003015535366571483" forcerange="-1 1" user="5.110 .03025 .03025" />
+    <motor class="mimo" name="act:left_eye_vertical" joint="robot:left_eye_vertical" gear="0.003015535366571483" forcerange="-1 1" user="6.179 .02619 .02771" />
+    <motor class="mimo" name="act:left_eye_torsional" joint="robot:left_eye_torsional" gear="0.0020662001585767566" forcerange="-1 1" user="25.03 .003686 .003686" />
+    <motor class="mimo" name="act:right_eye_horizontal" joint="robot:right_eye_horizontal" gear="0.003015535366571483" forcerange="-1 1" user="5.110 .03025 .03025" />
+    <motor class="mimo" name="act:right_eye_vertical" joint="robot:right_eye_vertical" gear="0.003015535366571483" forcerange="-1 1" user="6.179 .02619 .02771" />
+    <motor class="mimo" name="act:right_eye_torsional" joint="robot:right_eye_torsional" gear="0.0020662001585767566" forcerange="-1 1" user="25.03 .003686 .003686" />
+
+    <motor class="mimo" name="act:right_shoulder_horizontal" joint="robot:right_shoulder_horizontal" gear="0.8428609627943823" forcerange="-1 1" user="1.811 18.80 15.30" />
+    <motor class="mimo" name="act:right_shoulder_abduction" joint="robot:right_shoulder_ad_ab" gear="1.873024361765294" forcerange="-.6875 1" user=".8793 44.17 69.23" />
+    <motor class="mimo" name="act:right_shoulder_internal" joint="robot:right_shoulder_rotation" gear="1.1706402261033086" forcerange="-1 .64" user="1.498 25.09 17.10" />
+    <motor class="mimo" name="act:right_elbow" joint="robot:right_elbow" gear="1.755558656111056" forcerange="-1 .83" user="1.566 35.43 27.04" />
+    <motor class="mimo" name="act:right_wrist_rotation" joint="robot:right_hand1" gear="0.29698396926039833" forcerange="-1 1" user="1.513 7.842 7.842" />
+    <motor class="mimo" name="act:right_wrist_flexion" joint="robot:right_hand2" gear="0.5260858884041343" forcerange="-1 .57" user="1.455 13.66 7.874" />
+    <motor class="mimo" name="act:right_wrist_ulnar" joint="robot:right_hand3" gear="0.4030496725676834" forcerange="-.87 1" user="2.254 5.155 6.021" />
+    <motor class="mimo" name="act:right_fingers" joint="robot:right_fingers" gear="0.29274134112810696" forcerange="-1 .33" user="3.019 6.854 2.551" />
+    
+    <motor class="mimo" name="act:left_shoulder_horizontal" joint="robot:left_shoulder_horizontal" gear="0.8428609627943823" forcerange="-1 1" user="1.811 18.80 15.30" />
+    <motor class="mimo" name="act:left_shoulder_abduction" joint="robot:left_shoulder_ad_ab" gear="1.873024361765294" forcerange="-.6875 1" user=".8793 44.17 69.23" />
+    <motor class="mimo" name="act:left_shoulder_internal" joint="robot:left_shoulder_rotation" gear="1.1706402261033086" forcerange="-1 .64" user="1.498 25.09 17.10" />
+    <motor class="mimo" name="act:left_elbow" joint="robot:left_elbow" gear="1.755558656111056" forcerange="-1 .83" user="1.566 35.43 27.04" />
+    <motor class="mimo" name="act:left_wrist_rotation" joint="robot:left_hand1" gear="0.29698396926039833" forcerange="-1 1" user="1.513 7.842 7.842" />
+    <motor class="mimo" name="act:left_wrist_flexion" joint="robot:left_hand2" gear="0.5260858884041343" forcerange="-1 .57" user="1.455 13.66 7.874" />
+    <motor class="mimo" name="act:left_wrist_ulnar" joint="robot:left_hand3" gear="0.4030496725676834" forcerange="-.87 1" user="2.254 5.155 6.021" />
+    <motor class="mimo" name="act:left_fingers" joint="robot:left_fingers" gear="0.29274134112810696" forcerange="-1 .33" user="3.019 6.854 2.551" />
+    
+    <motor class="mimo" name="act:right_hip_flex" joint="robot:right_hip1" gear="2.938787965593561" forcerange="-1 1" user="1.083 71.25 92.49" />
+    <motor class="mimo" name="act:right_hip_abduction" joint="robot:right_hip2" gear="2.292254613162978" forcerange="-1 1" user="1.488 24.81 29.20" />
+    <motor class="mimo" name="act:right_hip_rotation" joint="robot:right_hip3" gear="1.3004136747751507" forcerange="-.75 1" user="1.860 12.32 15.78" />
+    <motor class="mimo" name="act:right_knee" joint="robot:right_knee" gear="4.119053990913367" forcerange="-.65 1" user="1.450 63.16 89.27" />
+    <motor class="mimo" name="act:right_foot_flexion" joint="robot:right_foot1" gear="1.4039955411734266" forcerange="-1 .5" user="1.430 21.34 11.87" />
+    <motor class="mimo" name="act:right_foot_inversion" joint="robot:right_foot2" gear="0.43085577453999335" forcerange="-.91 1" user="1.988 4.184 4.645" />
+    <motor class="mimo" name="act:right_foot_rotation" joint="robot:right_foot3" gear="0.44571287021378625" forcerange="-1 1" user="2.688 3.868 3.625" />
+    <motor class="mimo" name="act:right_toes" joint="robot:right_toes" gear="0.12257103930879122" forcerange="-1 .3" user="1.290 2.947 .8440" />
+
+    <motor class="mimo" name="act:left_hip_flex" joint="robot:left_hip1" gear="2.938787965593561" forcerange="-1 1" user="1.083 71.25 92.49" />
+    <motor class="mimo" name="act:left_hip_abduction" joint="robot:left_hip2" gear="2.292254613162978" forcerange="-1 1" user="1.488 24.81 29.20" />
+    <motor class="mimo" name="act:left_hip_rotation" joint="robot:left_hip3" gear="1.3004136747751507" forcerange="-.75 1" user="1.860 12.32 15.78" />
+    <motor class="mimo" name="act:left_knee" joint="robot:left_knee" gear="4.119053990913367" forcerange="-.65 1" user="1.450 63.16 89.27" />
+    <motor class="mimo" name="act:left_foot_flexion" joint="robot:left_foot1" gear="1.4039955411734266" forcerange="-1 .5" user="1.430 21.34 11.87" />
+    <motor class="mimo" name="act:left_foot_inversion" joint="robot:left_foot2" gear="0.43085577453999335" forcerange="-.91 1" user="1.988 4.184 4.645" />
+    <motor class="mimo" name="act:left_foot_rotation" joint="robot:left_foot3" gear="0.44571287021378625" forcerange="-1 1" user="2.688 3.868 3.625" />
+    <motor class="mimo" name="act:left_toes" joint="robot:left_toes" gear="0.12257103930879122" forcerange="-1 .3" user="1.290 2.947 .8440" />
+  </actuator>
+</mujocoinclude>

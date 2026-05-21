@@ -14,57 +14,45 @@ from utils import make_env
 from collect_observation_util import collect_run_statistics_all
 import icdlplot
 
+from mimoEnv.envs.roll_over import AGES
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--date', type=str, required=True)
     parser.add_argument('--suffix', type=str, required=True)
     parser.add_argument('--haltung', type=str, choices=['supine', 'prone'], required=True)
-    parser.add_argument('--age', type=int, choices=[1,3,6,9], required=True)
+    parser.add_argument('--age', type=int, choices=AGES, required=True,
+                        help="The age of the loaded model.")
     parser.add_argument('--pen_fac', type=float, required=False, default=0.02)
-    parser.add_argument('--to_npy_run_duration', action='store_true', required=False,
-                        help="This option takes an existing **_statistics.csv file in the " \
-                        "current folder ('.'), cuts it to only containing the run durations, " \
-                        "and converts it into a .npy file. Saves the .npy file in the current folder.")
     parser.add_argument('--duration_until', choices=['lateral', 'full'], required=False,
                         default='lateral', help="This option selects up to which goal we want to measure " \
                         "duration. If 'lateral' is selected (the default), we nonetheless only consider " \
                         "episodes that achieved a full goal, i.e. this option does not affect which " \
                         "samples we choose.")
-    parser.add_argument('--transfer_learning', action='store_true', required=True, default=False,
-                        help="Test model using different embodiment in a zero-shot setting.")
-    parser.add_argument('--transferlearning_age', choices=[1,3,6,9], type=int, required=False)
+    parser.add_argument('--age_act', type=int, choices=AGES, required=False,
+                        help="The age of actuators used for evaluation.")
+    parser.add_argument('--age_body', type=int, choices=AGES, required=False,
+                    help="The age of the body used for evaluation.")
     args = parser.parse_args()
 
-    transfer_learning = args.transfer_learning
-    transferlearning_age = args.transferlearning_age
+    # If either of cross-embodiment actuator age or body age is supplied, both must be
+    # supplied. Else it is unclear what age to use for body / actuators.
+    if (args.age_act is not None) ^ (args.age_body is not None):
+        raise ValueError("Cross-Embodiment Evaluation: Only one age parameter supplied. Please supply both.")
 
-    # If transferlearning age is the same as the source age, then turn off transferlearning.
-    if transferlearning_age == args.age:
-        transfer_learning = False
+    cross_embodiment_evaluation = args.age_act is not None and args.age_act != args.age and args.age_body != args.age
 
-    if transfer_learning:
-        output_path_csv = f'{args.date}_{args.haltung}_{args.suffix}_transferlearning_age{args.transferlearning_age}_statistics.csv'
+    if cross_embodiment_evaluation:
+        output_path_csv = f'{args.date}_{args.haltung}_{args.suffix}_cee_act{args.age_act}_body{args.body_act}_statistics.csv'
     else:
         output_path_csv = f'{args.date}_{args.haltung}_{args.suffix}_statistics.csv'
 
-    if not args.to_npy_run_duration:
-        age = args.age if not args.transfer_learning else args.transferlearning_age
-        env = make_env(age=age, starting_position=args.haltung, pen_fac=args.pen_fac)
-        data = collect_run_statistics_all(env, args.date, args.haltung, args.suffix)
-        data.to_csv(output_path_csv)
-
-    else:
-        # Load existing .csv data.
-        data = pd.read_csv(output_path_csv, index_col=['Run', 'Episode'])
-        # Reduce to only successful episodes.
-        successful_df = data[data['Success'] == True]
-        # Get durations until goal, i.e. lateral or full roll.
-        if args.duration_until == 'lateral':
-            durations = successful_df['Time_SideLying']
-        else:
-            durations = successful_df['Time']
-
-        if transfer_learning:
-            np.save(f'duration_{args.duration_until}_{args.haltung}_{args.suffix}_transferlearning_age{args.transferlearning_age}.npy')
-        else:
-            np.save(f'duration_{args.duration_until}_{args.haltung}_{args.suffix}.npy')
+    age_act = args.age_act
+    age_body = args.age_body
+    if age_act is None:
+        age_act = args.age
+    if age_body is None:
+        age_body = args.age
+    env = make_env(age_act=age_act, age_body=age_body, starting_position=args.haltung, pen_fac=args.pen_fac)
+    data = collect_run_statistics_all(env, args.date, args.haltung, args.suffix)
+    data.to_csv(output_path_csv)

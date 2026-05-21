@@ -1,0 +1,203 @@
+<mujoco model="MIMo">
+
+    <compiler inertiafromgeom="true" angle="degree"/>
+    <option timestep="0.005" iterations="50" tolerance="1e-10" solver="Newton" jacobian="dense" cone="elliptic" impratio="1.0"/>
+    <size nconmax="1000" njmax="5000" nstack="10000000" nuser_cam="3"/>
+
+    <visual>
+        <map force="0.1" zfar="30" znear="0.005"/>
+        <rgba haze="0.15 0.25 0.35 1"/>
+        <quality shadowsize="4096"/>
+        <global offwidth="800" offheight="800"/>
+    </visual>
+
+    <asset>
+
+        <texture type="skybox" builtin="gradient" rgb1="0.3 0.5 0.7" rgb2="0 0 0" width="512" height="512"/>
+
+        <texture name="texplane" type="2d" builtin="checker" rgb1=".2 .3 .4" rgb2=".1 0.15 0.2" width="512" height="512" mark="cross" markrgb=".8 .8 .8"/>
+        <material name="matplane" reflectance="0.3" texture="texplane" texrepeat="1 1" texuniform="true"/>
+
+        <material name="orange" rgba="0.9 0.4 0 1" specular=".2" shininess=".8"/>
+
+    </asset>
+
+
+	
+	<size nuser_actuator="3" />
+
+	<default>
+		<default class="mimo">
+        	<joint limited="true" damping=".1" stiffness=".1" armature="0.001" solimplimit="0.98 0.99 0.001 .5 1" solreflimit="0.02 1" />
+        	<geom condim="3" material="skin" friction="1 0.005 0.0002" solimp="0.95 0.99 0.001 0.5 1" solref="0.005 1" />
+        	<motor ctrlrange="-1 1" ctrllimited="true" forcelimited="true" />
+		</default>
+    </default>
+
+  <include file="scene_texture_incl.xml" />
+	
+	
+	<contact>
+		<pair geom1="lb" geom2="ub1" condim="1" />
+		<exclude body1="left_eye" body2="upper_body" />
+		<exclude body1="right_eye" body2="upper_body" />
+	</contact>
+	
+	<tendon>
+		<fixed class="mimo" name="hip_bend" limited="true" range="-.01 .01">
+			<joint joint="robot:hip_bend1" coef="1" />
+			<joint joint="robot:hip_bend2" coef="-1" />
+		</fixed>
+		<fixed class="mimo" name="hip_rotation" limited="true" range="-.01 .01">
+			<joint joint="robot:hip_rot1" coef="1" />
+			<joint joint="robot:hip_rot2" coef="-1" />
+		</fixed>
+		<fixed class="mimo" name="hip_lean" limited="true" range="-.01 .01">
+			<joint joint="robot:hip_lean1" coef="1" />
+			<joint joint="robot:hip_lean2" coef="-.5" />
+		</fixed>
+		<fixed class="mimo" name="head_limits1" limited="true" range="-2.1 2.1">
+			<joint joint="robot:head_swivel" coef="1" />
+			<joint joint="robot:head_tilt_side" coef="1" />
+		</fixed>
+		<fixed class="mimo" name="head_limits2" limited="true" range="-2.1 2.1">
+			<joint joint="robot:head_tilt" coef="1" />
+			<joint joint="robot:head_tilt_side" coef="1" />
+		</fixed>
+		<fixed class="mimo" name="head_limits3" limited="true" range="-2.1 2.1">
+			<joint joint="robot:head_swivel" coef="1" />
+			<joint joint="robot:head_tilt" coef="1" />
+		</fixed>
+		<fixed class="mimo" name="head_limits1_sym" limited="true" range="-2.1 2.1">
+			<joint joint="robot:head_swivel" coef="1" />
+			<joint joint="robot:head_tilt_side" coef="-1" />
+		</fixed>
+		<fixed class="mimo" name="head_limits2_sym" limited="true" range="-2.1 2.1">
+			<joint joint="robot:head_tilt" coef="1" />
+			<joint joint="robot:head_tilt_side" coef="-1" />
+		</fixed>
+		<fixed class="mimo" name="head_limits3_sym" limited="true" range="-2.1 2.1">
+			<joint joint="robot:head_swivel" coef="1" />
+			<joint joint="robot:head_tilt" coef="-1" />
+		</fixed>
+	</tendon>
+	
+	<sensor>
+		<accelerometer name="vestibular_acc" site="vestibular" />
+		<gyro name="vestibular_gyro" site="vestibular" />
+		
+		<torque name="proprio:neck" site="torque_neck" />
+		<torque name="proprio:left_eye" site="torque_left_eye" />
+		<torque name="proprio:right_eye" site="torque_right_eye" />
+		
+		<torque name="proprio:chest" site="torque_chest" />
+		<torque name="proprio:trunk_upper" site="torque_ub" />
+		<torque name="proprio:trunk_lower" site="torque_lb" />
+		
+		<torque name="proprio:right_shoulder" site="torque_right_shoulder" />
+		<torque name="proprio:right_elbow" site="torque_right_elbow" />
+		<torque name="proprio:right_wrist" site="torque_right_wrist" />
+		<torque name="proprio:right_fingers" site="torque_right_fingers" />
+		
+		<torque name="proprio:left_shoulder" site="torque_left_shoulder" />
+		<torque name="proprio:left_elbow" site="torque_left_elbow" />
+		<torque name="proprio:left_wrist" site="torque_left_wrist" />
+		<torque name="proprio:left_fingers" site="torque_left_fingers" />
+		
+		<torque name="proprio:right_hip" site="torque_right_hip" />
+		<torque name="proprio:right_knee" site="torque_right_knee" />
+		<torque name="proprio:right_ankle" site="torque_right_ankle" />
+		<torque name="proprio:right_toes" site="torque_right_toes" />
+		
+		<torque name="proprio:left_hip" site="torque_left_hip" />
+		<torque name="proprio:left_knee" site="torque_left_knee" />
+		<torque name="proprio:left_ankle" site="torque_left_ankle" />
+		<torque name="proprio:left_toes" site="torque_left_toes" />
+
+		<framelinvel name="kobayashi:left_wrist" objtype="site" objname="KOBAYASHI_LWrist" />
+		<framelinvel name="kobayashi:right_wrist" objtype="site" objname="KOBAYASHI_RWrist" />
+		<framelinvel name="kobayashi:left_ankle" objtype="site" objname="KOBAYASHI_LAnkle" />
+		<framelinvel name="kobayashi:right_ankle" objtype="site" objname="KOBAYASHI_RAnkle" />
+		<framelinvel name="kobayashi:torso" objtype="site" objname="KOBAYASHI_Torso" />
+	</sensor>
+
+  <include file="../../mimo/age/act/act_6_mo.xml" />
+
+	<equality> 
+		<joint name="robot:hip_lean1" joint1="robot:hip_lean1" active="false" polycoef="0 1 0 0 0" />
+		<joint name="robot:hip_rot1" joint1="robot:hip_rot1" active="false" polycoef="0 1 0 0 0" />
+		<joint name="robot:hip_bend1" joint1="robot:hip_bend1" active="false" polycoef="0 1 0 0 0" />
+		<joint name="robot:hip_lean2" joint1="robot:hip_lean2" active="false" polycoef="0 1 0 0 0" />
+		<joint name="robot:hip_rot2" joint1="robot:hip_rot2" active="false" polycoef="0 1 0 0 0" />
+		<joint name="robot:hip_bend2" joint1="robot:hip_bend2" active="false" polycoef="0 1 0 0 0" />
+		<joint name="robot:head_swivel" joint1="robot:head_swivel" active="false" polycoef="0 1 0 0 0" />
+		<joint name="robot:head_tilt" joint1="robot:head_tilt" active="false" polycoef="0 1 0 0 0" />
+		<joint name="robot:head_tilt_side" joint1="robot:head_tilt_side" active="false" polycoef="0 1 0 0 0" />
+		<joint name="robot:left_eye_horizontal" joint1="robot:left_eye_horizontal" active="false" polycoef="0 1 0 0 0" />
+		<joint name="robot:left_eye_vertical" joint1="robot:left_eye_vertical" active="false" polycoef="0 1 0 0 0" />
+		<joint name="robot:left_eye_torsional" joint1="robot:left_eye_torsional" active="false" polycoef="0 1 0 0 0" />
+		<joint name="robot:right_eye_horizontal" joint1="robot:right_eye_horizontal" active="false" polycoef="0 1 0 0 0" />
+		<joint name="robot:right_eye_vertical" joint1="robot:right_eye_vertical" active="false" polycoef="0 1 0 0 0" />
+		<joint name="robot:right_eye_torsional" joint1="robot:right_eye_torsional" active="false" polycoef="0 1 0 0 0" />
+		<joint name="robot:right_shoulder_horizontal" joint1="robot:right_shoulder_horizontal" active="false" polycoef="0 1 0 0 0" />
+		<joint name="robot:right_shoulder_ad_ab" joint1="robot:right_shoulder_ad_ab" active="false" polycoef="0 1 0 0 0" />
+		<joint name="robot:right_shoulder_rotation" joint1="robot:right_shoulder_rotation" active="false" polycoef="0 1 0 0 0" />
+		<joint name="robot:right_elbow" joint1="robot:right_elbow" active="false" polycoef="0 1 0 0 0" />
+		<joint name="robot:right_hand1" joint1="robot:right_hand1" active="false" polycoef="0 1 0 0 0" />
+		<joint name="robot:right_hand2" joint1="robot:right_hand2" active="false" polycoef="0 1 0 0 0" />
+		<joint name="robot:right_hand3" joint1="robot:right_hand3" active="false" polycoef="0 1 0 0 0" />
+		<joint name="robot:right_fingers" joint1="robot:right_fingers" active="false" polycoef="0 1 0 0 0" />
+		<joint name="robot:left_shoulder_horizontal" joint1="robot:left_shoulder_horizontal" active="false" polycoef="0 1 0 0 0" />
+		<joint name="robot:left_shoulder_ad_ab" joint1="robot:left_shoulder_ad_ab" active="false" polycoef="0 1 0 0 0" />
+		<joint name="robot:left_shoulder_rotation" joint1="robot:left_shoulder_rotation" active="false" polycoef="0 1 0 0 0" />
+		<joint name="robot:left_elbow" joint1="robot:left_elbow" active="false" polycoef="0 1 0 0 0" />
+		<joint name="robot:left_hand1" joint1="robot:left_hand1" active="false" polycoef="0 1 0 0 0" />
+		<joint name="robot:left_hand2" joint1="robot:left_hand2" active="false" polycoef="0 1 0 0 0" />
+		<joint name="robot:left_hand3" joint1="robot:left_hand3" active="false" polycoef="0 1 0 0 0" />
+		<joint name="robot:left_fingers" joint1="robot:left_fingers" active="false" polycoef="0 1 0 0 0" />
+		<joint name="robot:right_hip1" joint1="robot:right_hip1" active="false" polycoef="0 1 0 0 0" />
+		<joint name="robot:right_hip2" joint1="robot:right_hip2" active="false" polycoef="0 1 0 0 0" />
+		<joint name="robot:right_hip3" joint1="robot:right_hip3" active="false" polycoef="0 1 0 0 0" />
+		<joint name="robot:right_knee" joint1="robot:right_knee" active="false" polycoef="0 1 0 0 0" />
+		<joint name="robot:right_foot1" joint1="robot:right_foot1" active="false" polycoef="0 1 0 0 0" />
+		<joint name="robot:right_foot2" joint1="robot:right_foot2" active="false" polycoef="0 1 0 0 0" />
+		<joint name="robot:right_foot3" joint1="robot:right_foot3" active="false" polycoef="0 1 0 0 0" />
+		<joint name="robot:right_toes" joint1="robot:right_toes" active="false" polycoef="0 1 0 0 0" />
+		<joint name="robot:left_hip1" joint1="robot:left_hip1" active="false" polycoef="0 1 0 0 0" />
+		<joint name="robot:left_hip2" joint1="robot:left_hip2" active="false" polycoef="0 1 0 0 0" />
+		<joint name="robot:left_hip3" joint1="robot:left_hip3" active="false" polycoef="0 1 0 0 0" />
+		<joint name="robot:left_knee" joint1="robot:left_knee" active="false" polycoef="0 1 0 0 0" />
+		<joint name="robot:left_foot1" joint1="robot:left_foot1" active="false" polycoef="0 1 0 0 0" />
+		<joint name="robot:left_foot2" joint1="robot:left_foot2" active="false" polycoef="0 1 0 0 0" />
+		<joint name="robot:left_foot3" joint1="robot:left_foot3" active="false" polycoef="0 1 0 0 0" />
+		<joint name="robot:left_toes" joint1="robot:left_toes" active="false" polycoef="0 1 0 0 0" />
+	</equality>
+	
+
+
+    <equality>
+        <weld body1="left_eye" body2="head"/>
+        <weld body1="right_eye" body2="head"/>
+    </equality>
+
+    <worldbody>
+
+        <geom name="floor" pos="0 0 0" size="0 0 .25" type="plane" material="matplane" condim="3"/>
+
+        <light directional="false" diffuse=".4 .4 .4" specular="0 0 0" pos="0 0 10" dir="0 0 -1" castshadow="false"/>
+        <light mode="targetbodycom" target="upper_body" directional="false" diffuse=".75 .75 .75" specular="0.3 0.3 0.3" pos="3 0 5" dir="0 0 -1"/>
+
+        <body name="mimo_location" pos="0 0 0.35" euler="0 90 0">
+            <freejoint name="mimo_location"/>
+						<include file="../../mimo/age/body/body_3_mo.xml" />
+        </body>
+
+        <camera name="corner" pos="3 -3 3" fovy="20" mode="targetbody" target="mimo_location"/>
+        <camera name="top" pos="0 0 1.4" euler="0 0 -90" mode="fixed"/>
+        <camera name="side1" pos="2 0 .5" euler="90 90 0" mode="fixed"/>
+        <camera name="side2" pos="0 2 .5" euler="90 180 0" mode="fixed"/>
+        <camera name="closeup" pos="0.25 -0.25 1" mode="targetbody" target="mimo_location"/>
+
+    </worldbody>
+
+</mujoco>

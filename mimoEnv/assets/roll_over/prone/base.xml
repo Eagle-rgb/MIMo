@@ -1,0 +1,52 @@
+<mujoco model="MIMo">
+
+    <compiler inertiafromgeom="true" angle="degree"/>
+    <option timestep="0.005" iterations="50" tolerance="1e-10" solver="Newton" jacobian="dense" cone="elliptic" impratio="1.0"/>
+    <size nconmax="1000" njmax="5000" nstack="10000000" nuser_cam="3"/>
+
+    <visual>
+        <map force="0.1" zfar="30" znear="0.005"/>
+        <rgba haze="0.15 0.25 0.35 1"/>
+        <quality shadowsize="4096"/>
+        <global offwidth="800" offheight="800"/>
+    </visual>
+
+    <asset>
+
+        <texture type="skybox" builtin="gradient" rgb1="0.3 0.5 0.7" rgb2="0 0 0" width="512" height="512"/>
+
+        <texture name="texplane" type="2d" builtin="checker" rgb1=".2 .3 .4" rgb2=".1 0.15 0.2" width="512" height="512" mark="cross" markrgb=".8 .8 .8"/>
+        <material name="matplane" reflectance="0.3" texture="texplane" texrepeat="1 1" texuniform="true"/>
+
+        <material name="orange" rgba="0.9 0.4 0 1" specular=".2" shininess=".8"/>
+
+    </asset>
+
+    <include file="../../mimo/MIMo_meta.xml"></include>
+
+    <equality>
+        <weld body1="left_eye" body2="head"/>
+        <weld body1="right_eye" body2="head"/>
+    </equality>
+
+    <worldbody>
+
+        <geom name="floor" pos="0 0 0" size="0 0 .25" type="plane" material="matplane" condim="3"/>
+
+        <light directional="false" diffuse=".4 .4 .4" specular="0 0 0" pos="0 0 10" dir="0 0 -1" castshadow="false"/>
+        <light mode="targetbodycom" target="upper_body" directional="false" diffuse=".75 .75 .75" specular="0.3 0.3 0.3" pos="3 0 5" dir="0 0 -1"/>
+
+        <body name="mimo_location" pos="0 0 0.35" euler="0 90 0">
+            <freejoint name="mimo_location"/>
+            <include file="../../mimo/MIMo_model.xml"></include>
+        </body>
+
+        <camera name="corner" pos="3 -3 3" fovy="20" mode="targetbody" target="mimo_location"/>
+        <camera name="top" pos="0 0 1.4" euler="0 0 -90" mode="fixed"/>
+        <camera name="side1" pos="2 0 .5" euler="90 90 0" mode="fixed"/>
+        <camera name="side2" pos="0 2 .5" euler="90 180 0" mode="fixed"/>
+        <camera name="closeup" pos="0.25 -0.25 1" mode="targetbody" target="mimo_location"/>
+
+    </worldbody>
+
+</mujoco>

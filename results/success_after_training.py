@@ -12,24 +12,39 @@ from utils import make_env
 
 from collect_observation_util import collect_run_statistics_all
 
+from mimoEnv.envs.roll_over import AGES
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--age', choices=[1,3,6,9], type=int, required=True)
+    parser.add_argument('--age', choices=AGES, type=int, required=True)
     parser.add_argument('--date', type=str, required=True)
     parser.add_argument('--suffix', type=str, required=True)
     parser.add_argument('--pen_fac', type=float, default=0.02, required=False)
-    parser.add_argument('--transfer_learning', action='store_true', default=False,
-                    help="Enable or disable transferlearning.")
-    parser.add_argument('--transferlearning_age', type=int, required=False, default=9,
-                    help="Specify age for transferlearning.")
     parser.add_argument('--haltung', required=True, choices=['supine', 'prone'])
+    parser.add_argument('--age_act', type=int, choices=AGES, required=False,
+                        help="The age of actuators used for evaluation.")
+    parser.add_argument('--age_body', type=int, choices=AGES, required=False,
+                    help="The age of the body used for evaluation.")
+    
     args = parser.parse_args()
     age = args.age
 
-    if args.transfer_learning:
-        env = make_env(args.transferlearning_age, pen_fac=args.pen_fac, starting_position=args.haltung)
-    else:
-        env = make_env(age, pen_fac=args.pen_fac, starting_position=args.haltung)
+    # If either of cross-embodiment actuator age or body age is supplied, both must be
+    # supplied. Else it is unclear what age to use for body / actuators.
+    if (args.age_act is not None) ^ (args.age_body is not None):
+        raise ValueError("Cross-Embodiment Evaluation: Only one age parameter supplied. Please supply both.")
+    
+    cross_embodiment_evaluation = args.age_act is not None and args.age_act != args.age and args.age_body != args.age
+
+    age_act = args.age_act
+    age_body = args.age_body
+
+    if age_act is None:
+        age_act = age
+    if age_body is None:
+        age_body = age
+
+    env = make_env(age_act=age_act, age_body=age_body, pen_fac=args.pen_fac, starting_position=args.haltung)
 
     data = collect_run_statistics_all(env, date=args.date, pos=args.haltung, suffix=args.suffix, n_episodes=40, n_success_episodes=-1)
 
@@ -51,8 +66,8 @@ if __name__ == '__main__':
 
     entries_df = pd.DataFrame(entries).set_index(['Run'])
 
-    if args.transfer_learning:
+    if cross_embodiment_evaluation:
         entries_df.to_csv(f'{args.date}_{args.haltung}_{args.suffix}_' +\
-                          f'transferlearning_age{args.transferlearning_age}_test_success_rate.csv')
+                          f'cee_act{args.age_act}_body{args.body_act}_test_success_rate.csv')
     else:
         entries_df.to_csv(f'{args.date}_{args.haltung}_{args.suffix}_test_success_rate.csv')

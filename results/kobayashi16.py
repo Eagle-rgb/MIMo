@@ -474,7 +474,7 @@ if __name__ == '__main__':
             age = args.transferlearning_age
         else:
             age = args.age
-        env = make_env(age)
+        env = make_env(age_act=age, age_body=age)
         
         df = collect_kobayashi_displacements_all(env, model_date, 'supine', model_suffix)
         if args.save_data:

@@ -33,7 +33,7 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     if not args.load_data:
-        env = make_env(age=9)
+        env = make_env(age_body=9, age_act=9)
         #data = collect_run_statistics_all(env, '26-03-07', 'supine', 'age9')
         data = collect_run_statistics_all(env, '26-03-11', 'supine', 'random_rot_45')
         data.to_csv('statistics.csv')

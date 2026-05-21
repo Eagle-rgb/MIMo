@@ -9,7 +9,6 @@ import pandas as pd
 import os
 from mimoEnv.envs.mimo_env import SCENE_DIRECTORY
 import seaborn as sns
-from utils import make_env
 
 from collect_observation_util import collect_run_statistics_all
 import icdlplot
