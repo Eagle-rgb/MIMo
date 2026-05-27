@@ -51,6 +51,9 @@ class ActuationModel:
         self.env = env
         self.actuators = actuators
         self.n_actuators = self.actuators.shape[0]
+        self.initialize()
+
+    def initialize(self):
         self.action_space = self.get_action_space()
 
     def get_action_space(self):
@@ -122,6 +125,9 @@ class SpringDamperModel(ActuationModel):
     def __init__(self, env, actuators):
         super().__init__(env, actuators)
         # self.control_input = None
+        
+    def initialize(self):
+        super().initialize()
         self.max_torque = self.env.model.actuator_gear[self.actuators, 0]
 
     def get_action_space(self):

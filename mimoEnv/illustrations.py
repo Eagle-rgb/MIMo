@@ -44,6 +44,9 @@ import numpy as np
 
 from mimoEnv.envs.roll_over import TOUCH_PARAMS as ROLL_OVER_TOUCH_PARAMS
 from mimoEnv.envs.roll_over_callback import RollOverCallback
+from mimoEnv.envs.morphological_curriculum import make_curriculum_callback
+from mimoEnv.envs.isr_callback import ISRCallback
+from stable_baselines3.common.callbacks import CallbackList
 
 from mimoEnv.utils import load_model_yaml
 
@@ -166,7 +169,7 @@ def test(wrapped_env, save_dir, model=None, render_video=False, render_frames=Fa
 
     wrapped_env.reset()
 
-def train(model, train_for, save_every, save_dir, isr, save_intermediate=False):
+def train(model, train_for, save_every, save_dir, isr, argparse_args, save_intermediate=False):
     """ Training function of a model.
 
     If 'isr' is active, then trains the model for 75% with 'isr' enabled and the remaining last 25%
@@ -183,7 +186,17 @@ def train(model, train_for, save_every, save_dir, isr, save_intermediate=False):
     """ 
     counter = 0
     train_for_total = train_for
-    callback = RollOverCallback(save_intermediate=save_intermediate, save_dir=save_dir)
+    callback_logger = RollOverCallback(save_intermediate=save_intermediate, save_dir=save_dir)
+    callback_morph = make_curriculum_callback(argparse_args)
+
+    callbacks = [callback_logger]
+
+    if isr:
+        callbacks.append(ISRCallback(train_for_total))
+
+    if callback_morph:
+        callbacks.append(callback_morph)
+
     while train_for > 0:
         counter += 1
 
@@ -196,38 +209,9 @@ def train(model, train_for, save_every, save_dir, isr, save_intermediate=False):
         # How many training steps will remain after this training iteration.
         train_for = train_for - train_for_iter
 
-        # After this episode, we would exceed 75% training. Split up this
-        # training run into two: Train until reaching exactly 75% training,
-        # turn off isr in the environment and then train the remaining
-        # steps we specified with 'train_for_iter'.
-        train_for_75_thresh = train_for_total // 4
-        if isr and train_for_cpy > train_for_75_thresh and train_for <= train_for_75_thresh:
-            train_for_until_reaching_75 = train_for_cpy - train_for_75_thresh
-            print("I will reach 75% ISR training threshold after this training iteration. " \
-            f"Splitting up this iteration in first {train_for_until_reaching_75} steps and then " \
-            "disabling isr.")
-            model.learn(total_timesteps=train_for_until_reaching_75,
-                        reset_num_timesteps=False,
-                        callback=callback)
-
-            print("Disabling isr...")
-
-            # model.get_env().isr=False does not seem to work. Probably an issue with all the many
-            # wrappers in stable_baselines3. This way however seems to work.
-            for env in model.get_env().envs:
-                env.unwrapped.isr=False
-
-            # And now train the remaining timesteps.
-            if train_for_until_reaching_75 < train_for_iter:
-                print(f"Training remaining {train_for_iter-train_for_until_reaching_75} timesteps.")
-                model.learn(total_timesteps=train_for_iter-train_for_until_reaching_75,
-                            reset_num_timesteps=False,
-                            callback=callback)
-
-        else:
-            model.learn(total_timesteps=train_for_iter,
-                        reset_num_timesteps=False,
-                        callback=callback)
+        model.learn(total_timesteps=train_for_iter,
+                    reset_num_timesteps=False,
+                    callback=callbacks)
 
         model.save(os.path.join(save_dir, "model_" + str(counter)))
 
@@ -395,6 +379,16 @@ An example is '251206_prone_linear_1e6_test'
                         help="MIMo's age in months. Default: 18.")
     parser.add_argument('--save_intermediate', action='store_true', help="Save intermediate model at reaching " \
                         "90% side lying success rate.")
+    parser.add_argument('--curriculum', type=str,
+                        choices=['growth', 'inverse', 'stochastic', 'none'],
+                        default='none',
+                        help="Curriculum-Strategy: growth=1M->9M, " \
+                            "inverse=9M->1M, stochastic=random, "
+                            "none=Baseline")
+    parser.add_argument('--curriculum_stochastic_interval', type=int,
+                        default=20_000,
+                        help="Steps between embodiment change in the " \
+                        "stochastic curriculum (default: 20000)")
     
     # Parse yaml if we specified '--load_model'.
     args, remaining_argv = parser.parse_known_args()
@@ -501,10 +495,9 @@ An example is '251206_prone_linear_1e6_test'
         print(f"Saving to save_dir {save_dir}.")
 
     # wrapped_env = None
-    render_height = 720 if render_actuations else 480
-
     # Set render size to 480, because babybench used this render size
     # and we copy-pasted the utils from there.
+    render_height = 720 if render_actuations else 480
 
     # 15.12.2025 Added 'done_active=True' to allow environment termination
     # when we reached a goal state.
@@ -528,7 +521,8 @@ An example is '251206_prone_linear_1e6_test'
             freeze_leg=freeze_leg,
             freeze_arm=freeze_arm,
             success_at_side_lying=side_lying,
-            age=age)
+            age_physio=age,
+            age_morph=age)
         # if log_actuations:
         #     wrapped_env = MIMoRollOverWrapper(env, log_file=os.path.join(save_dir,"actuation_log.csv"))
         # else:
@@ -596,7 +590,13 @@ An example is '251206_prone_linear_1e6_test'
     if train_for > 0:
         if model is None:
             raise RuntimeError("Model not defined. Please provide an algorithm name.")
-        train(model=model, save_dir=save_dir, train_for=train_for, save_every=save_every, isr=isr, save_intermediate=save_intermediate)
+        train(model=model,
+              save_dir=save_dir,
+              train_for=train_for,
+              save_every=save_every,
+              isr=isr,
+              argparse_args=args,
+              save_intermediate=save_intermediate)
 
     if should_test:
         # Note here we do not check for 'model is None', because we allow it. If in testing the model is

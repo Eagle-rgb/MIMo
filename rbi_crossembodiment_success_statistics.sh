@@ -41,8 +41,8 @@ for ((i=0; i<num_ages; i++)); do
 			"--age=${MODEL_AGE}" \
 			"--suffix=${MODEL_SUFFIX}" \
 			"--haltung=${HALTUNG}" \
-			"--age_act=${AGES[i]}" \
-			"--age_body=${AGES[j]}" &
+			"--age_physio=${AGES[i]}" \
+			"--age_morph=${AGES[j]}" &
 done
 done
 

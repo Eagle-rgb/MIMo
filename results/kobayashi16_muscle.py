@@ -475,7 +475,7 @@ if __name__ == '__main__':
             model_date = '26-03-09'
             model_suffix = 'age1'
 
-        env = make_env(age_act=args.age, age_body=args.age)
+        env = make_env(age_physio=args.age, age_morph=args.age)
         
         df = collect_kobayashi_displacements_all(env, model_date, 'supine', model_suffix, with_actuations=True)
         if args.save_data:

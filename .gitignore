@@ -31,3 +31,5 @@ age_comparison_prone.sh
 age_comparison_supine.sh
 icdl26
 *.npy
+pdf
+csv

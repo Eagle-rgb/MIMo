@@ -392,11 +392,14 @@ class MIMoEnv(MujocoEnv, utils.EzPickle):
         if age is not None:
             delete_growth_scene(model_path)
 
-        self._env_setup()
+        self.initialize()
 
+    def initialize(self):
+        """ Called upon construction and when hot-swapping embodiments. """
+        self.actuation_model.initialize()
+        self._env_setup()
         self._set_observation_space()
         self.goal = self.sample_goal()
-
         self.observations = []
         
     def _initialize_simulation(self,):

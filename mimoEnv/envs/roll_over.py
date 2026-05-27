@@ -86,8 +86,8 @@ class MIMoRollOverEnv(MIMoEnv):
     def __init__(self,
                  initial_qpos=None,
                  frame_skip=2,
-                 age_body=9,
-                 age_act=9,
+                 age_morph=9,
+                 age_physio=9,
                  proprio_params=DEFAULT_PROPRIOCEPTION_PARAMS,
                  touch_params=TOUCH_PARAMS,
                  vision_params=None,
@@ -143,11 +143,11 @@ class MIMoRollOverEnv(MIMoEnv):
         # scenes at the same time.
         #if age == 18:  # default
         #    model_path = os.path.join(SCENE_DIRECTORY, "roll_over_prone_scene.xml")
-        if age_act in AGES and age_body in AGES:
+        if age_physio in AGES and age_morph in AGES:
             model_path = os.path.join(SCENE_DIRECTORY,
                 "roll_over",
                 "prone",
-                f"scene_act_{age_act}_body_{age_body}.xml")
+                f"scene_act_{age_physio}_body_{age_morph}.xml")
         else:
             raise ValueError("Allowed ages: 1, 3, 6, 9")
 
@@ -204,14 +204,28 @@ class MIMoRollOverEnv(MIMoEnv):
             print("Creating prone and supine intrinsic goals.")
             self.create_prone_and_supine_intrinsic_goal()
         self.intrinsic_goals_created = True
+        self.fix_top_camera_rotation_supine()
 
-        # For 'supine' starting position, rotate 'top' camera 180°, because else MIMo's head is at the bottom of the screen.
-        # 1. Kamera-ID finden
+    def fix_top_camera_rotation_supine(self):
+        """ For 'supine' starting position, rotate 'top' camera 180°, because else MIMo's head is at the bottom of the screen. """
         if self.starting_position == 'supine':
             cam_top_id = self.model.camera('top').id
             quat = np.zeros(4)
             mujoco.mju_euler2Quat(quat, [0.0, 0.0, 0.0], 'xyz')
             self.model.cam_quat[cam_top_id] = quat
+
+    def set_embodiment(self, morph_age, physio_age):
+        """ Sets the embodiment to the MuJoCo .xml file that fits to the
+        morphological age 'morph_age' and physiological age 'pyhsio_age'. """
+        xml_path = f"mimoEnv/assets/roll_over/prone/scene_act_{physio_age}_body_{morph_age}.xml"
+        self.model = mujoco.MjModel.from_xml_path(xml_path)
+        self.data = mujoco.MjData(self.model)
+        self.fix_top_camera_rotation_supine()
+
+        self.initialize()
+        mujoco.mj_resetData(self.model, self.data)
+        mujoco.mj_forward(self.model, self.data)
+        self.reset()
 
     def create_prone_and_supine_intrinsic_goal(self):
         # Once for the current starting position and once for the opposite starting
@@ -247,6 +261,9 @@ class MIMoRollOverEnv(MIMoEnv):
 
                 self.supine_intrinsic_goal = obs.copy()
                 self.starting_position = 'prone'
+
+    def disable_isr(self):
+        self.isr = False
 
     def is_success(self, achieved_goal, desired_goal):
         """ Did we reach our goal rotation.
