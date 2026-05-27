@@ -644,7 +644,7 @@ class MIMoRollOverEnv(MIMoEnv):
         return -np.linalg.norm(concat_desired_goal - concat_scaled_achieved_goal)
     
     def reset(self, seed=None, options=None):
-        obs, info = super().reset(seed, options)
+        obs, info = super().reset(seed=seed, options=options)
         info['chest_deg'] = self.get_achieved_rotation_degrees('chest')
         info['hip_deg'] = self.get_achieved_rotation_degrees('hip')
         achieved_goal = self.get_achieved_goal_cos()
