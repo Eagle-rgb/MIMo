@@ -642,7 +642,16 @@ class MIMoRollOverEnv(MIMoEnv):
         concat_desired_goal = np.concatenate([self.goal[key] * self.intrinsic_goal_w[key] for key in sorted(self.goal.keys())])
 
         return -np.linalg.norm(concat_desired_goal - concat_scaled_achieved_goal)
-
+    
+    def reset(self):
+        obs, info = super().reset()
+        info['chest_deg'] = self.get_achieved_rotation_degrees('chest')
+        info['hip_deg'] = self.get_achieved_rotation_degrees('hip')
+        achieved_goal = self.get_achieved_goal_cos()
+        info['side_lying'] = 1.0 if achieved_goal >= 0.5 else 0.0
+        info['45_deg'] = 1.0 if achieved_goal >= 0.25 else 0.0
+        return obs, info
+    
     def step(self, action):
         """ Run one timestep of the environment's dynamics.
 
