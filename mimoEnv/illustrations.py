@@ -375,20 +375,19 @@ An example is '251206_prone_linear_1e6_test'
     parser.add_argument('--render_frames', default=False, action='store_true', required=False,
                         help="Renders many frames - including the final image of the episode in testing - "
                         " and saves them as 'frame_{1-5}.png'.")
-    parser.add_argument('--age', default=18, required=False, type=int,
-                        help="MIMo's age in months. Default: 18.")
+    parser.add_argument('--age', default=9, required=False, type=int,
+                        help="MIMo's age in months. Default: 9.")
     parser.add_argument('--save_intermediate', action='store_true', help="Save intermediate model at reaching " \
                         "90% side lying success rate.")
-    parser.add_argument('--curriculum', type=str,
+    parser.add_argument('--mgc', type=str,
                         choices=['growth', 'inverse', 'stochastic', 'none'],
                         default='none',
-                        help="Curriculum-Strategy: growth=1M->9M, " \
-                            "inverse=9M->1M, stochastic=random, "
-                            "none=Baseline")
-    parser.add_argument('--curriculum_stochastic_interval', type=int,
+                        help="Morphological Growth Curriculum-Strategy: growth=1M->9M, " \
+                            "inverse=9M->1M, stochastic=random, none=Baseline")
+    parser.add_argument('--mgc_stochastic_interval', type=int,
                         default=20_000,
                         help="Steps between embodiment change in the " \
-                        "stochastic curriculum (default: 20000)")
+                        "stochastic mgc (default: 20000)")
     
     # Parse yaml if we specified '--load_model'.
     args, remaining_argv = parser.parse_known_args()

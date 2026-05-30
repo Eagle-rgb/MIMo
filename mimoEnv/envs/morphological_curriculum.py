@@ -64,10 +64,10 @@ class StochasticAgeCurriculum(_MorphologicalCurriculumBase):
 
 
 def make_curriculum_callback(args) -> _MorphologicalCurriculumBase | None:
-    if args.curriculum == "growth":
+    if args.mgc == "growth":
         return MorphologicalGrowthCurriculum(phase_steps=250_000)
-    elif args.curriculum == "inverse":
+    elif args.mgc == "inverse":
         return InverseMorphologicalCurriculum(phase_steps=250_000)
-    elif args.curriculum == "stochastic":
-        return StochasticAgeCurriculum(interval=args.curriculum_stochastic_interval)
+    elif args.mgc == "stochastic":
+        return StochasticAgeCurriculum(interval=args.mgc_stochastic_interval)
     return None  # Baseline: no Callback

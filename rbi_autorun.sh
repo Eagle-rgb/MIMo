@@ -34,15 +34,16 @@ for i in $(seq 0 $((NUMBER_OF_RUNS-1))); do
 		"python mimoEnv/illustrations.py" \
 		"--train_for=1000000" \
 		"--save_every=1000000" \
-		"--roll_over_starting_position=prone" \
+		"--roll_over_starting_position=supine" \
 		"--algorithm=PPO" \
 		"--pen_factor=0.02" \
 		"--roll_over_model_path_auto" \
 		"--goal_achievement_function=cos" \
 		"--save_model=${MODEL_NAME}_run_$((i))" \
 		"--pbrs" \
-		"--age=6" \
+		"--age=1" \
 		"--pbrs_w=100" \
+		"--mgc=stochastic" \
 		"--lr=0.0003" &
 done
 
