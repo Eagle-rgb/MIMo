@@ -7,12 +7,12 @@ import argparse
 from tb_plot_utils import load_tensorboard_runs, load_model_hyperparams, interpolate_runs_to_dict
 from sklearn.linear_model import LinearRegression
 import pandas as pd
+from utils import DATE_FORMAT, valid_date
 
 # --- Konfiguration ---
 BASE_DIR = "."
 TAGS_TO_LOAD = ["rollout/ep_rew_mean", "rollout/success_rate", "rollout/side_lying_success_rate"]
 N_POINTS = 500  # Auflösung der X-Achse
-DATE_FORMAT = r'%y-%m-%d'
 
 def normalize(values):
     """ Normalizes 'data' and returns it together with the normalization
@@ -163,12 +163,6 @@ def plot_data(data: pd.DataFrame, labels: list[str]):
     plt.xlabel('Steps')
     plt.grid(True, linestyle='--', alpha=0.5)
     plt.show()
-
-def valid_date(s: str) -> datetime:
-    try:
-        return datetime.strptime(s, DATE_FORMAT)
-    except ValueError:
-        raise argparse.ArgumentTypeError(f"not a valid date: {s!r}")
 
 # --- Start ---
 if __name__ == "__main__":

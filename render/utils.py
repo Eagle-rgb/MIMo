@@ -8,6 +8,7 @@ import yaml
 from skimage.transform import resize
 import trimesh
 import mimoEnv.utils as env_utils
+from PIL import Image
 import sys
 # from babybench.build_xml import build
 
@@ -57,6 +58,22 @@ def render_top_down(data, renderer, top_down_camera):
     renderer.update_scene(data, camera=top_down_camera)
     pixels = renderer.render()
     return pixels
+
+def render_top_down_and_save(env, starting_position, save_dir, name):
+    """ Renders the current environment and saves it as '.pdf' file
+    with filename 'name'.
+    
+    Creates a one-time use renderer and camera. Requires 'starting_position'
+    to correctly orient the top-down camera. """
+    if name[-4:] != ".pdf":
+        name += ".pdf"
+
+    renderer = create_renderer(env.model)
+    cam = create_top_down_camera(starting_position)
+
+    save_name = os.path.join(save_dir, name)
+    frame = render_top_down(env.data, renderer, cam)
+    Image.fromarray(frame).save(save_name)
 
 def render(env, camera="corner"):
     img = env.mujoco_renderer.render(render_mode="rgb_array", camera_name=camera)

@@ -2,6 +2,16 @@ import mimoEnv
 from mimoActuation.actuation import SpringDamperModel
 import gymnasium as gym
 from mimoEnv.utils import load_model_yaml
+from datetime import datetime
+import argparse
+
+DATE_FORMAT = r'%y-%m-%d'
+
+def valid_date(s: str) -> datetime:
+    try:
+        return datetime.strptime(s, DATE_FORMAT)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"not a valid date: {s!r}")
 
 def make_env(age_physio, age_morph, starting_position='supine', pen_fac=0.02):
     """ Creates and returns the roll over env. """

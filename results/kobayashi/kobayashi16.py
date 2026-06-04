@@ -3,18 +3,31 @@ Docstring for results.kobayashi16
 
 Plot velocities of joints used for measurement in Kobayashi 2016 during one episode.
 """
-from collect_observation_util import collect_kobayashi_displacements_all
+from results.collect_observation_util import collect_kobayashi_displacements_all
 import argparse
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from sklearn.linear_model import LinearRegression
 from sklearn.metrics import r2_score
-from signal_utils import resample_df_to_60hz, smooth_x_butterworth
+from results.signal_utils import resample_df_to_60hz, smooth_x_butterworth
 from scipy.interpolate import interp1d
 from collections import Counter
 import datetime
-from utils import make_env
+from results.utils import make_env
+
+SUPPORT_PATTERNS = [
+    'Two Stationary',
+    'Stationary IA',
+    'Stationary IA - IL moving backward',
+    'Stationary IL',
+    'Stationary IL - IA moving backward',
+    'No stationary'
+]
+
+MOVEMENT_PATTERNS = [
+    'A', 'B', 'C', 'D', 'E', 'F', 'R'
+]
 
 def is_roll_to_left(data):
     """ Returns 'True' if the data shows a roll to the left side. Else,
@@ -391,68 +404,55 @@ def analysis_kobayashi(df_60hz_butter: pd.DataFrame, thresh=100.0, T_H=250.0):
 
     return entry_stats
 
-def classify_abcdef(entry_stats):
-    stationary_ia = entry_stats['Stationary_IA']
-    stationary_il = entry_stats['Stationary_IL']
-    timing_ia = entry_stats['Timing_IA']
-    timing_il = entry_stats['Timing_IL']
-    timing_ca = entry_stats['Timing_CA']
-    timing_cl = entry_stats['Timing_CL']
-
-    if stationary_ia and stationary_il:
-        # A or B or else?
-        if timing_ca == 'synchronous' and timing_cl == 'synchronous':
-            return 'A'
-        elif timing_ca =='synchronous' and timing_cl == 'following':
-            return 'B'
-        else:
-            return 'O'
+def classify_support(df):
+    ia_stat = df['Stationary_IA']
+    il_stat = df['Stationary_IL']
+    ia_dir = df['Direction_IA']
+    il_dir = df['Direction_IL']
     
-    if stationary_ia and not stationary_il:
-        # C or D or else?
-        if timing_ca == 'synchronous' and \
-            timing_cl == 'synchronous' and \
-            timing_il == 'synchronous':
-            return 'C'
-        elif timing_ca == 'synchronous' and \
-            timing_cl == 'following' and \
-            timing_il == 'synchronous':
-            return 'D'
-        else:
-            return 'O'
-        
-    if stationary_il and not stationary_ia:
-        # E?
-        if timing_ca == 'synchronous' and \
-            timing_ia == 'synchronous' and \
-            timing_cl == 'following':
-            return 'E'
-        else:
-            return 'O'
-        
-    # F
-    return 'F'
+    if ia_stat and il_stat:
+        return SUPPORT_PATTERNS[0]
+    elif ia_stat and not il_stat:
+        return SUPPORT_PATTERNS[2] if il_dir == 'backward' else SUPPORT_PATTERNS[1]
+    elif il_stat and not ia_stat:
+        return SUPPORT_PATTERNS[4] if ia_dir == 'backward' else SUPPORT_PATTERNS[3]
+    else:
+        return SUPPORT_PATTERNS[5]
+    
+def classify_movement(df):
+    ia_s, il_s = df['Stationary_IA'], df['Stationary_IL']
+    t_ia, t_il, t_ca, t_cl = df['Timing_IA'], df['Timing_IL'], df['Timing_CA'], df['Timing_CL']
+    # Logik wie oben besprochen...
+    if ia_s and il_s and t_ca == 'synchronous' and t_cl == 'synchronous': return MOVEMENT_PATTERNS[0]
+    if ia_s and il_s and t_ca == 'synchronous' and t_cl == 'following': return MOVEMENT_PATTERNS[1]
+    if ia_s and not il_s and t_il == 'synchronous' and t_ca == 'synchronous' and t_cl == 'synchronous': return MOVEMENT_PATTERNS[2]
+    if ia_s and not il_s and t_il == 'synchronous' and t_ca == 'synchronous' and t_cl == 'following': return MOVEMENT_PATTERNS[3]
+    if il_s and not ia_s and t_ia == 'synchronous' and t_ca == 'synchronous' and t_cl == 'following': return MOVEMENT_PATTERNS[4]
+    if not ia_s and not il_s: return MOVEMENT_PATTERNS[5]
+    return MOVEMENT_PATTERNS[6]
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--collect_data', required=False, action='store_true')
     parser.add_argument('--save_data', required=False, action='store_true', default=False,
                         help="Saves collected dataframe of '--load_model' as 'data.csv'.")
-    parser.add_argument('--load_data', required=False, action='store_true', default=False,
-                        help="Loads data 'data.csv'.")
+    parser.add_argument('--load_data', required=False, type=str,
+                        help="Load the specified .csv file and perform Kobayashi classification on it.")
     parser.add_argument('--plot_displacement', action='store_true')
     parser.add_argument('--age', choices=[1,3,6,9], type=int, help="Infant Age. Choices: 1, 3, 6, 9", required=True)
     parser.add_argument('--siegel', action='store_true')
     parser.add_argument('--until', type=str, default="side_lying",
                         choices=["side_lying", "45", "full"], help="Roll milestone to analyze until.")
-    parser.add_argument('--thresh', type=int, default=100,
-                        help="Speed threshold to use in Kobayashi Analysis to classify stationary limbs. Default: 100mm/sec.")
-    parser.add_argument('--range', type=int, default=250,
-                        help="Range around T_TR to use for classifying stationary limbs. Default 250ms.")
+    parser.add_argument('--thresh', type=int, default=300,
+                        help="Speed threshold to use in Kobayashi Analysis to classify stationary limbs. Default: 300mm/sec.")
+    parser.add_argument('--range', type=int, default=83,
+                        help="Range around T_TR to use for classifying stationary limbs. Default 83ms.")
     parser.add_argument('--transfer_learning', action='store_true', default=False,
                         help="Enable or disable transferlearning.")
     parser.add_argument('--transferlearning_age', type=int, required=False, default=9,
                         help="Specify age for transferlearning.")
+    parser.add_argument('--save_full_report', type=str, required=False,
+                        help="Saves the full pattern report under this .csv name.")
     
     args = parser.parse_args()
 
@@ -483,15 +483,14 @@ if __name__ == '__main__':
             else:
                 df.to_csv(f'kobayashidata_age{args.age}.csv')
 
-    elif args.load_data:
+        quit()
+
+    if args.load_data is not None:
         # df = pd.read_csv('kobayashidata.csv', index_col=['Run', 'Time'])
-        if args.transfer_learning:
-            df = pd.read_csv(f'kobayashidata_age{args.age}_transferlearning_age{args.transferlearning_age}.csv', index_col=['Run', 'Episode', 'Time'])
-        else:
-            df = pd.read_csv(f'kobayashidata_age{args.age}.csv', index_col=['Run', 'Episode', 'Time'])
+        df = pd.read_csv(args.load_data, index_col=['Run', 'Episode', 'Time'])
 
     else:
-        raise ValueError
+        raise ValueError("Neither --collect_data or --load_data specified...")
     
     groupby_run = df.groupby('Run')
 
@@ -505,6 +504,7 @@ if __name__ == '__main__':
 
     for run, df_run in groupby_run:
         for episode, df_episode in df_run.groupby(['Episode']):
+            episode = episode[0]
             # Crop DataFrame to the section relevant for our analysis. This is either until
             # side lying or until reaching 45°.
             milestone = None
@@ -544,6 +544,8 @@ if __name__ == '__main__':
             stats_list.append(entry_stats)
 
     df_stats = pd.DataFrame(stats_list)
+    df_stats['Support_Pattern'] = df_stats.apply(classify_support, axis=1)
+    df_stats['Movement_Pattern'] = df_stats.apply(classify_movement, axis=1)
 
     if not args.siegel:
         V_TR_mean = df_stats['V_TR'].mean()
@@ -562,37 +564,13 @@ if __name__ == '__main__':
 
         print(f"T_H mean: {df_stats['T_H'].mean()}")
 
-    n_pattern = {
-        'Two Stationary': 0,
-        'Stationary IA': 0,
-        'Stationary IA - IL moving backward': 0,
-        'Stationary IL': 0,
-        'Stationary IL - IA moving backward': 0,
-        'No Stationary': 0,
-    }
+    df_patterns = df_stats[['Run', 'Episode', 'Support_Pattern', 'Movement_Pattern']]
 
-    for entry in stats_list:
-        stationary_ia = entry['Stationary_IA']
-        stationary_il = entry['Stationary_IL']
-        direction_ia = entry['Direction_IA']
-        direction_il = entry['Direction_IL']
+    if args.save_full_report is not None:
+        df_patterns.to_csv(args.save_full_report)
 
-        if stationary_ia and stationary_il:
-            n_pattern['Two Stationary'] += 1
-        elif stationary_ia and not stationary_il:
-            if direction_il == 'forward':
-                n_pattern['Stationary IA'] += 1
-            else:
-                n_pattern['Stationary IA - IL moving backward'] += 1
-        elif stationary_il and not stationary_ia:
-            if direction_ia == 'forward':
-                n_pattern['Stationary IL'] += 1
-            else:
-                n_pattern['Stationary IL - IA moving backward'] += 1
-        else:
-            n_pattern['No Stationary'] += 1
-
-    print(n_pattern)
+    quit()
+        
 
     # print(df_stats)
     date_today = datetime.datetime.today().strftime('%y-%m-%d')
@@ -604,14 +582,15 @@ if __name__ == '__main__':
     elif args.until == 'full':
         analyiss_until = 'full'
 
-    path = f'kobayashiresults/{date_today}_{analysis_type}_thresh_{args.thresh}_range_' +\
-            f'{args.range}_until_{analysis_until}_age{args.age}.csv'
+    if args.save_dir is not None:
+        path = f'{args.save_dir}/{date_today}_{analysis_type}_thresh_{args.thresh}_range_' +\
+                f'{args.range}_until_{analysis_until}_age{args.age}.csv'
 
-    if args.transfer_learning:
-        path = f'kobayashiresults/{date_today}_{analysis_type}_thresh_{args.thresh}_range_' +\
-            f'{args.range}_until_{analysis_until}_age{args.age}_transferlearning_age{args.transferlearning_age}.csv'
+        if args.transfer_learning:
+            path = f'{args.save_dir}/{date_today}_{analysis_type}_thresh_{args.thresh}_range_' +\
+                f'{args.range}_until_{analysis_until}_age{args.age}_transferlearning_age{args.transferlearning_age}.csv'
 
-    df_stats.to_csv(path)
+        df_stats.to_csv(path)
     
     # A, B, C, D, E, F classification
     if not args.siegel:
@@ -640,15 +619,16 @@ if __name__ == '__main__':
             }
             df_patterns.append(entry)
 
-        path = f'kobayashiresults/{date_today}_patterns_thresh_{args.thresh}_range_' +\
-            f'{args.range}_until_{analysis_until}_age{args.age}.csv'
+        if args.save_dir is not None:
+            path = f'{args.save_dir}/{date_today}_patterns_thresh_{args.thresh}_range_' +\
+                f'{args.range}_until_{analysis_until}_age{args.age}.csv'
 
-        if args.transfer_learning:
-            path = f'kobayashiresults/{date_today}_patterns_thresh_{args.thresh}_range_' +\
-                f'{args.range}_until_{analysis_until}_age{args.age}_transferlearning_age{args.transferlearning_age}.csv'
-            
-        df_patterns = pd.DataFrame(df_patterns)
-        df_patterns.to_csv(path)
+            if args.transfer_learning:
+                path = f'{args.save_dir}/{date_today}_patterns_thresh_{args.thresh}_range_' +\
+                    f'{args.range}_until_{analysis_until}_age{args.age}_transferlearning_age{args.transferlearning_age}.csv'
+                
+            df_patterns = pd.DataFrame(df_patterns)
+            df_patterns.to_csv(path)
 
         pattern_A = ('stationary', 'stationary', 'synchronous', 'synchronous')
         pattern_B = ('stationary', 'stationary', 'synchronous', 'following')

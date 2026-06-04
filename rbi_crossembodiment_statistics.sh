@@ -6,17 +6,16 @@
 # * the date of the model
 # * the posture ('haltung'): prone / supine
 
-if [ $# -ne 5 ] 
+if [ $# -ne 4 ] 
 	then
-		echo "Error. Provide rbi username, age, suffix, date and posture"
+		echo "Error. Provide rbi username, suffix, date and posture"
 		return
 fi
 
 USERNAME=$1
-MODEL_AGE=$2
-MODEL_SUFFIX=$3
-MODEL_DATE=$4
-HALTUNG=$5
+MODEL_SUFFIX=$2
+MODEL_DATE=$3
+HALTUNG=$4
 
 HOSTPREFIXES=("adrastos" "alkmene" "ajax" "anaxo" "achilles" "axylos" "aktor"
 	"admeta" "amata" "agylla" "adamas" "arabia" "adonis" "aither" "apate"
@@ -35,11 +34,10 @@ for ((i=0; i<${#AGES[@]}; i++)); do
 		"cd MIMo && " \
 		"python results/collect_run_statistics.py" \
 		"--date=${MODEL_DATE}" \
-		"--age=${MODEL_AGE}" \
 		"--suffix=${MODEL_SUFFIX}" \
 		"--haltung=${HALTUNG}" \
-		"--transfer_learning" \
-		"--transferlearning_age=${AGES[i]}" &
+		"--age_physio=${AGES[i]}" \
+		"--age_morph=${AGES[i]}" &
 done
 
 # Wait until all ssh commands finished, i.e. all MIMo simulations are finished. Then, plot the results.

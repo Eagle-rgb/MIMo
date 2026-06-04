@@ -6,17 +6,16 @@
 # * the date of the model
 # * the posture ('haltung'): prone / supine
 
-if [ $# -ne 5 ] 
+if [ $# -ne 4 ] 
 	then
-		echo "Error. Provide rbi username, age, suffix, date and posture"
+		echo "Error. Provide rbi username, suffix, date and posture"
 		return
 fi
 
 USERNAME=$1
-MODEL_AGE=$2
-MODEL_SUFFIX=$3
-MODEL_DATE=$4
-HALTUNG=$5
+MODEL_SUFFIX=$2
+MODEL_DATE=$3
+HALTUNG=$4
 
 HOSTPREFIXES=("adrastos" "alkmene" "ajax" "anaxo" "achilles" "axylos" "aktor"
 	"admeta" "amata" "agylla" "adamas" "arabia" "adonis" "aither" "apate"
@@ -38,7 +37,6 @@ for ((i=0; i<num_ages; i++)); do
 			"cd MIMo && " \
 			"python results/success_after_training.py" \
 			"--date=${MODEL_DATE}" \
-			"--age=${MODEL_AGE}" \
 			"--suffix=${MODEL_SUFFIX}" \
 			"--haltung=${HALTUNG}" \
 			"--age_physio=${AGES[i]}" \

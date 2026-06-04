@@ -34,7 +34,7 @@ for i in $(seq 0 $((NUMBER_OF_RUNS-1))); do
 		"python mimoEnv/illustrations.py" \
 		"--train_for=1000000" \
 		"--save_every=1000000" \
-		"--roll_over_starting_position=supine" \
+		"--roll_over_starting_position=prone" \
 		"--algorithm=PPO" \
 		"--pen_factor=0.02" \
 		"--roll_over_model_path_auto" \
@@ -49,6 +49,9 @@ done
 
 # Wait until all ssh commands finished, i.e. all MIMo simulations are finished. Then, plot the results.
 wait
+
+echo "Finished"
+return 1
 
 # Create gemini plots.
 ssh -l ${USERNAME} "adrastos.rbi.cs.uni-frankfurt.de" "conda activate mimo" "&&"\

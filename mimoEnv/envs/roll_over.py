@@ -174,6 +174,11 @@ class MIMoRollOverEnv(MIMoEnv):
         if self.alternating_starting_position:
             self.starting_position='prone'  # start in 'prone' starting position and alternate from there.
 
+        # DISS. Set this variable to a np.array of shape qpos[7:].shape to set a fixed
+        # initial state randomization. If this variable is 'None', the initial rotation
+        # is sampled uniformly between [-0.1, +0.1].
+        self.deterministic_initial_state_sampling = None
+
         super().__init__(model_path=model_path,
                          initial_qpos=initial_qpos,
                          frame_skip=frame_skip,
@@ -226,6 +231,10 @@ class MIMoRollOverEnv(MIMoEnv):
         mujoco.mj_resetData(self.model, self.data)
         mujoco.mj_forward(self.model, self.data)
         self.reset()
+
+        # This was here for testing that MGC curriculum would actually grow MIMo. I checked
+        # this by rendering after 'set_embodiment' and checking that the body has grown.
+        # render_top_down_and_save(self, self.starting_position, '/home/leon/MIMo', f'test_embodiment_age{morph_age}')
 
     def create_prone_and_supine_intrinsic_goal(self):
         # Once for the current starting position and once for the opposite starting
@@ -342,10 +351,15 @@ class MIMoRollOverEnv(MIMoEnv):
         # qpos[0:3] describe the location of MIMo, qPos[3:7] describe the quaternion
         # rotation.
 
-        # Set initial positions stochastically.
-        random = self.np_random.uniform(
-            low=-0.01, high=0.01, size=len(qpos[7:])
-        )
+        # DISS. Fix initial randomization or sample random initial offset.
+        if self.deterministic_initial_state_sampling is not None:
+            random = self.deterministic_initial_state_sampling
+        else:
+            # Set initial positions stochastically.
+            random = self.np_random.uniform(
+                low=-0.01, high=0.01, size=len(qpos[7:])
+            )
+
         qpos[7:] = qpos[7:] + random
 
         # Set initial rotation.

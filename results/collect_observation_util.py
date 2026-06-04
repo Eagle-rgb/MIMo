@@ -12,7 +12,7 @@ import mujoco
 from PIL import Image
 import os
 import re
-from utils import make_env
+from results.utils import make_env
 
 OBS_VESTI_KEYS = ["accelerometer_x", "accelerometer_y", "accelerometer_z", 
                   "gyro_x", "gyro_y", "gyro_z"]
@@ -244,7 +244,7 @@ def get_actuator_index(env, act):
         return i
     return -1
 
-def collect_kobayashi_site_y_displacement_series(env, model, n_tries=10, with_actuations=True):
+def collect_kobayashi_site_y_displacement_series(env, model, n_tries=10, with_actuations=True, diss=None):
     """ Lets the (trained) model 'model' play in the environment 'env'
     for a total of 'n_tries' episodes. Records the y displacement of each site defined
     as kobayashi site. Collects in total a number of (n_steps + 1)
@@ -252,6 +252,9 @@ def collect_kobayashi_site_y_displacement_series(env, model, n_tries=10, with_ac
     we record one set of value before each step, but also after the final
     step. Only records successful episodes. Tries in total 'n_tries' and if
     after that, no successful episode was done, returns 'None'.
+
+    Specify diss as np.array of shape (n_tries, qpos[7:].shape[0]) to enable deterministic
+    initial state sampling.
 
     Very important distinction: This function records the RELATIVE displacement
     of each site, i.e. the displacement relative to the coordinate the site
@@ -363,6 +366,10 @@ def collect_kobayashi_site_y_displacement_series(env, model, n_tries=10, with_ac
         print(f"Doing try {n_try+1}")
         # List of dictionaries - ordered by steps in the environment.
         data = []
+
+        if diss is not None:
+            env.deterministic_initial_state_sampling = diss
+
         obs, _ = env.reset()
         reference_coords = get_site_absolute_displacements()
         done = False
@@ -415,41 +422,66 @@ def collect_kobayashi_site_y_displacement_series(env, model, n_tries=10, with_ac
     else:
         return None
 
-def collect_kobayashi_displacements_all(env, date, pos, suffix, with_actuations=False):
+def collect_kobayashi_displacements_all(env, date, pos, suffix, n_tries=10,
+                                        with_actuations=False, diss=None, run_num=None, model_dir=None):
     """ Searches for all models matching 'date', starting position 'pos' and suffix 'suffix'.
-    Loads all runs of these models and plays 'collect_kobayashi_site_y_displacement_series' on them for 1 episode. """
+    Loads all runs of these models and plays 'collect_kobayashi_site_y_displacement_series' on them for 1 episode.
+    
+    Parameters:
+        - env: The MIMoRollOverEnv instance
+        - date: The date of the model to load
+        - pos: The starting position ('supine' or 'prone')
+        - suffix: The suffix of the model to load
+        - n_tries: Number of tries for each loaded model to perform rolling.
+        - with_actuations: Include muscle actuations per step in the output statistic csv file
+        - diss: Enabled deterministic initial state sampling. Provide np.array of shape
+            (n_tries, qpos[7:].shape)
+        - run_num: Only collect data for a specific run. If 'run_num=None', all runs are considered.
+        - model_dir: The root directory to start searching for files.
+    """
     data = []
 
     # Pattern of model folder: <date>_<startingposition>_<suffix>_run_<i>
     pattern = re.compile(r'(\d{2}-\d{2}-\d{2})_([a-z]+)_([a-z0-9_-]+)_run_(\d+)')
 
-    for root, dirs, files in os.walk('.'):
+    if model_dir is None:
+        model_dir = '.'
+
+    for root, dirs, files in os.walk(model_dir):
         # root: Current folder on walk
         # dirs: Directories in 'root'
         # files: Files in 'root'
         root_name = os.path.basename(root)
         match = pattern.search(root_name)
         if not match: continue
-        _date, haltung, _suffix, run_num = match.groups()
+        _date, haltung, _suffix, _run_num = match.groups()
 
         if _date != date: continue
         if haltung != pos: continue
         if _suffix != suffix: continue
+        if run_num is not None and _run_num != str(run_num): continue
 
-        print(f"Found run {run_num}!")
+        print(f"Found run {_run_num}!")
 
         model_file = os.path.join(os.path.abspath(root), "model_1.zip")
         model = RL.load(model_file, env)
-        n_tries = 10
-        df = collect_kobayashi_site_y_displacement_series(env, model, n_tries=n_tries, with_actuations=with_actuations)
+        df = collect_kobayashi_site_y_displacement_series(env, model, n_tries=n_tries,
+                                                          with_actuations=with_actuations,
+                                                          diss=diss)
         if df is None:
-            print(f"Run {run_num} had no successfull episodes in {n_tries} tries. Skipping...")
+            print(f"Run {_run_num} had no successfull episodes in {n_tries} tries. Skipping...")
             continue
-        df['Run'] = run_num
+        df['Run'] = _run_num
         df = df.set_index(['Run', 'Episode', 'Time'])
         data.append(df)
 
-    df = pd.concat(data)
+    if len(data) > 1:
+        df = pd.concat(data)
+    elif len(data) == 1:
+        df = data[0]
+    else:
+        raise ValueError(f"No data found in directory {model_dir}")
+    
     return df
 
 def collect_run_statistics(env, model, n_episodes, n_success_episodes=-1, verbose=True):
