@@ -108,7 +108,7 @@ def test(wrapped_env, save_dir, model=None, render_video=False, render_frames=Fa
             print("No model, taking random actions")
             action = wrapped_env.action_space.sample()
         else:
-            action, _ = model.predict(obs)
+            action, _ = model.predict(obs, determinstic=True)
 
         obs, _, done, trunc, info = wrapped_env.step(action)
         n_steps += 1
@@ -199,12 +199,9 @@ def train(model, train_for, save_every, save_dir, isr, argparse_args, save_inter
 
     while train_for > 0:
         counter += 1
-
-        # How much we need to train going into this training iteration.
-        train_for_cpy = train_for
-
+        
         # How many steps we should take in this training iteration
-        train_for_iter = min(train_for_cpy, save_every)
+        train_for_iter = min(train_for, save_every)
 
         # How many training steps will remain after this training iteration.
         train_for = train_for - train_for_iter

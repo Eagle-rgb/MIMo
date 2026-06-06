@@ -9,11 +9,11 @@ import matplotlib.pyplot as plt
 from datetime import datetime
 import argparse
 from tb_plot_utils import load_tensorboard_runs, load_model_hyperparams, interpolate_runs_to_dict
+from utils import DATE_FORMAT, valid_date
 
 # --- Konfiguration ---
 BASE_DIR = "."
 N_POINTS = 500  # Auflösung der X-Achse
-DATE_FORMAT = r'%y-%m-%d'
 
 def create_side_lying_comparison_plot(plot_dir, date_full, date_side, suffix_full, suffix_side):
     """ Creates a dual comparison plot for a single model.
@@ -90,12 +90,6 @@ def create_side_lying_comparison_plot(plot_dir, date_full, date_side, suffix_ful
     plt.savefig(save_path, dpi=200)
     plt.close()
     print(f"Erfolg: {filename} gespeichert.")
-
-def valid_date(s: str) -> datetime:
-    try:
-        return datetime.strptime(s, DATE_FORMAT)
-    except ValueError:
-        raise argparse.ArgumentTypeError(f"not a valid date: {s!r}")
 
 # --- Start ---
 if __name__ == "__main__":

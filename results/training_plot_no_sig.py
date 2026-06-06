@@ -8,12 +8,12 @@ from tb_plot_utils import load_tensorboard_runs, load_model_hyperparams, interpo
 from sklearn.linear_model import LinearRegression
 import pandas as pd
 import icdlplot
+from utils import DATE_FORMAT, valid_date
 
 # --- Konfiguration ---
 BASE_DIR = "."
 TAGS_TO_LOAD = ["rollout/ep_rew_mean", "rollout/success_rate", "rollout/side_lying_success_rate"]
 N_POINTS = 500  # Auflösung der X-Achse
-DATE_FORMAT = r'%y-%m-%d'
 
 def get_model_training_data_aggregated(dates, suffixes, haltungen, tags, xmax):
     """ Expects 'dates', 'suffixes', 'haltungen' and 'tags' of
@@ -98,12 +98,6 @@ def plot_data(data, labels: list[str], max_x: int, save_file: str, append_num_ru
                 dpi=300,
                 bbox_inches='tight',
                 format='pdf')
-        
-def valid_date(s: str) -> datetime:
-    try:
-        return datetime.strptime(s, DATE_FORMAT)
-    except ValueError:
-        raise argparse.ArgumentTypeError(f"not a valid date: {s!r}")
 
 # --- Start ---
 if __name__ == "__main__":

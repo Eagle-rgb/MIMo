@@ -4,6 +4,7 @@ import matplotlib.pyplot as plt
 from datetime import datetime
 import argparse
 from tb_plot_utils import load_tensorboard_runs, load_model_hyperparams, interpolate_runs_to_dict
+from utils import DATE_FORMAT, valid_date
 
 # --- Konfiguration ---
 BASE_DIR = "."
@@ -13,7 +14,6 @@ TAGS_TO_LOAD = ["rollout/ep_rew_mean",
                 "rollout/ep_end_chest_deg_mean",
                 "rollout/side_lying_success_rate"]
 N_POINTS = 500  # Auflösung der X-Achse
-DATE_FORMAT = r'%y-%m-%d'
 
 def create_dual_comparison_plots_single_model(df, plot_dir, date, suffix):
     """ Creates a dual comparison plot for a single model.
@@ -159,12 +159,6 @@ def create_dual_comparison_plots_single_model(df, plot_dir, date, suffix):
 #             plt.savefig(os.path.join(plot_dir, filename), dpi=200)
 #             plt.close()
 #             print(f"Erfolg: {filename} gespeichert.")
-
-def valid_date(s: str) -> datetime:
-    try:
-        return datetime.strptime(s, DATE_FORMAT)
-    except ValueError:
-        raise argparse.ArgumentTypeError(f"not a valid date: {s!r}")
 
 # --- Start ---
 if __name__ == "__main__":

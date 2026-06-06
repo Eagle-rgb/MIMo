@@ -7,12 +7,12 @@ from tbparse import SummaryReader
 import argparse
 from datetime import datetime
 from tb_plot_utils import load_tensorboard_runs, load_model_hyperparams, interpolate_runs_to_dict
+from utils import DATE_FORMAT, valid_date
 
 # --- Konfiguration ---
 BASE_DIR = "."  # Das Hauptverzeichnis, in dem Ihre Ordner liegen
 TAGS_TO_LOAD = ["rollout/ep_rew_mean", "rollout/success_rate"]
 OUTPUT_CSV = "rl_comparison_data.csv"
-DATE_FORMAT = r'%y-%m-%d'
 
 # --- 2. Datenaggregieren und Plotten ---
 def create_and_save_individual_plots(df, plot_dir, date, suffixes, ind_runs):
@@ -122,13 +122,6 @@ def create_and_save_individual_plots(df, plot_dir, date, suffixes, ind_runs):
             plot_count += 1
             
     print(f"\n✅ {plot_count} Plots wurden erfolgreich im Ordner '{plot_dir}' gespeichert.")
-
-# --- Hauptausführung ---
-def valid_date(s: str) -> datetime:
-    try:
-        return datetime.strptime(s, DATE_FORMAT)
-    except ValueError:
-        raise argparse.ArgumentTypeError(f"not a valid date: {s!r}")
 
 if __name__ == "__main__":
     # 0. Argumente laden. Zeit und Modelsuffix.

@@ -161,7 +161,7 @@ def collect_observations(env, model, n_episodes, save_file=None, pca=None, rende
         potential_dict = { "potential": env.get_potential() }
 
         while not done:
-            action, _ = model.predict(obs)
+            action, _ = model.predict(obs, deterministic=True)
 
             if render:
                 imgs.append(env.mujoco_renderer.render(render_mode='rgb_array'))
@@ -368,7 +368,7 @@ def collect_kobayashi_site_y_displacement_series(env, model, n_tries=10, with_ac
         data = []
 
         if diss is not None:
-            env.deterministic_initial_state_sampling = diss
+            env.deterministic_initial_state_sampling = diss[n_try]
 
         obs, _ = env.reset()
         reference_coords = get_site_absolute_displacements()
@@ -389,7 +389,7 @@ def collect_kobayashi_site_y_displacement_series(env, model, n_tries=10, with_ac
         data.append(entry)
         
         while not done:
-            action, _ = model.predict(obs)
+            action, _ = model.predict(obs, deterministic=True)
             obs, reward, truncated, terminated, info = env.step(action)
 
             side_lying_reached = side_lying_reached or (info['side_lying'] == 1.0)
@@ -517,7 +517,7 @@ def collect_run_statistics(env, model, n_episodes, n_success_episodes=-1, verbos
         side_lying_reached = False
 
         while not done:
-            action, _ = model.predict(obs)
+            action, _ = model.predict(obs, deterministic=True)
             obs, _, success, failure, info = env.step(action)
 
             done = success or failure

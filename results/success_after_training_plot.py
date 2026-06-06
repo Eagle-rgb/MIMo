@@ -5,13 +5,7 @@ import numpy as np
 import seaborn as sns
 import matplotlib.pyplot as plt
 import icdlplot
-DATE_FORMAT = r'%y-%m-%d'
-
-def valid_date(s: str) -> datetime:
-    try:
-        return datetime.strptime(s, DATE_FORMAT)
-    except ValueError:
-        raise argparse.ArgumentTypeError(f"not a valid date: {s!r}")
+from utils import DATE_FORMAT, valid_date
 
 if __name__ == '__main__':
     max_models = 8

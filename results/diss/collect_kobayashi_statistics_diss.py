@@ -36,7 +36,17 @@ if __name__ == '__main__':
     initial_offsets = np.random.uniform(low=-0.1, high=0.1,
                 size=(num_test_cases, qpos_shape))
     np.save(f'{args.save_dir}/initial_offsets.npy', initial_offsets)
+    initial_qpos = np.zeros((num_test_cases, qpos_shape))
+
+    print("Generating initial qpos...")
+    for i in range(len(initial_offsets)):
+        env.deterministic_initial_state_sampling = initial_offsets[i]
+        env.reset()
+        initial_qpos[i] = env.data.qpos[7:]
+
+    np.save(f'{args.save_dir}/initial_qpos.npy', initial_qpos)
     
+    print("Collecting episode data...")
     df = collect_kobayashi_displacements_all(env=env, date=date, pos=haltung, suffix=args.suffix,
                                              n_tries=num_test_cases, diss=initial_offsets,
                                              run_num=args.run, model_dir=args.model_dir)

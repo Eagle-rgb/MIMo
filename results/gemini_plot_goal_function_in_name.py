@@ -6,12 +6,12 @@ import matplotlib.pyplot as plt
 from tbparse import SummaryReader
 import argparse
 from datetime import datetime
+from utils import DATE_FORMAT, valid_date
 
 # --- Konfiguration ---
 BASE_DIR = "."  # Das Hauptverzeichnis, in dem Ihre Ordner liegen
 TAGS_TO_LOAD = ["rollout/ep_rew_mean", "rollout/success_rate"]
 OUTPUT_CSV = "rl_comparison_data.csv"
-DATE_FORMAT = r'%y-%m-%d'
 
 # --- 1. Daten laden und zusammenführen ---
 
@@ -159,13 +159,6 @@ def create_and_save_individual_plots(df, plot_dir, date, suffix):
             plot_count += 1
             
     print(f"\n✅ {plot_count} Plots wurden erfolgreich im Ordner '{plot_dir}' gespeichert.")
-
-# --- Hauptausführung ---
-def valid_date(s: str) -> datetime:
-    try:
-        return datetime.strptime(s, DATE_FORMAT)
-    except ValueError:
-        raise argparse.ArgumentTypeError(f"not a valid date: {s!r}")
 
 if __name__ == "__main__":
     # 0. Argumente laden. Zeit und Modelsuffix.

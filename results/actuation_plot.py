@@ -118,7 +118,7 @@ def collect_actuations(env, model, n_episodes=1):
         time_from_onset_ms.append(env.data.time * 1000.0)  # 'env.data.time' is in sec
 
         while not done:
-            action, _ = model.predict(obs)
+            action, _ = model.predict(obs, deterministic=True)
             obs, _, truncated, terminated, _ = env.step(action)
             data.append(collect_actuations())
             time_from_onset_ms.append(env.data.time * 1000.0)  # 'env.data.time' is in sec

@@ -453,6 +453,8 @@ if __name__ == '__main__':
                         help="Specify age for transferlearning.")
     parser.add_argument('--save_full_report', type=str, required=False,
                         help="Saves the full pattern report under this .csv name.")
+    parser.add_argument('--model_dir', type=str, required=False, default='.',
+                        help="Any parent directory to start searching for model.")
     
     args = parser.parse_args()
 
@@ -476,7 +478,7 @@ if __name__ == '__main__':
             age = args.age
         env = make_env(age_physio=age, age_morph=age)
         
-        df = collect_kobayashi_displacements_all(env, model_date, 'supine', model_suffix)
+        df = collect_kobayashi_displacements_all(env, model_date, 'supine', model_suffix, model_dir=args.model_dir)
         if args.save_data:
             if args.transfer_learning:
                 df.to_csv(f'kobayashidata_age{args.age}_transferlearning_age{args.transferlearning_age}.csv')
