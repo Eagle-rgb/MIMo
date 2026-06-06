@@ -29,6 +29,10 @@ MOVEMENT_PATTERNS = [
     'A', 'B', 'C', 'D', 'E', 'F', 'R'
 ]
 
+PATTERN_COLORS = [
+    "tab:blue", "tab:orange", "tab:yellow", "tab:red", "tab:blue", "tab:brown", "tab:purple"
+]
+
 def is_roll_to_left(data):
     """ Returns 'True' if the data shows a roll to the left side. Else,
     it returns 'False'. This is determined on the last displacement value
@@ -434,6 +438,11 @@ def classify_movement(df):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--collect_data', required=False, action='store_true')
+    parser.add_argument('--num_episodes', required=False, default=10, type=int,
+                        help="Number of episodes to let each model play in the environment. This " \
+                        "is not the number of episodes taken into account for kobayashi analysis. " \
+                        "For kobayashi analysis, only the successful episodes out of the 'num_episodes' " \
+                        "performed episodes is taken. Default: 10")
     parser.add_argument('--save_data', required=False, action='store_true', default=False,
                         help="Saves collected dataframe of '--load_model' as 'data.csv'.")
     parser.add_argument('--load_data', required=False, type=str,
@@ -478,7 +487,7 @@ if __name__ == '__main__':
             age = args.age
         env = make_env(age_physio=age, age_morph=age)
         
-        df = collect_kobayashi_displacements_all(env, model_date, 'supine', model_suffix, model_dir=args.model_dir)
+        df = collect_kobayashi_displacements_all(env, model_date, 'supine', model_suffix, model_dir=args.model_dir, n_tries=args.num_episodes)
         if args.save_data:
             if args.transfer_learning:
                 df.to_csv(f'kobayashidata_age{args.age}_transferlearning_age{args.transferlearning_age}.csv')

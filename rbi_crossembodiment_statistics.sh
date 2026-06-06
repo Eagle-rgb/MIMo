@@ -24,8 +24,9 @@ HOSTPREFIXES=("adrastos" "alkmene" "ajax" "anaxo" "achilles" "axylos" "aktor"
 today=$(date +%y-%m-%d)
 
 AGES=( 1 3 6 9 )
+num_ages=${#AGES[@]}
 
-for ((i=0; i<${#AGES[@]}; i++)); do
+for ((i=0; i<num_ages; i++)); do
 	HOSTNAME="${HOSTPREFIXES[i]}"".rbi.cs.uni-frankfurt.de"
 	echo "Playing MIMo on host $HOSTNAME"
 	# Putting '--save_every' as same value as '--train_for' saves only the very last model.
