@@ -464,6 +464,8 @@ if __name__ == '__main__':
                         help="Saves the full pattern report under this .csv name.")
     parser.add_argument('--model_dir', type=str, required=False, default='.',
                         help="Any parent directory to start searching for model.")
+    parser.add_argument('--save_velocities_npy', type=str, required=False,
+                        help="Saves normalized mean and std velocities of TR, CA and CL to .npy.")
     
     args = parser.parse_args()
 
@@ -574,6 +576,10 @@ if __name__ == '__main__':
         print(f"V_CL_std: {V_CL_std}")
 
         print(f"T_H mean: {df_stats['T_H'].mean()}")
+
+        if args.save_velocities_npy is not None:
+            means_stds = np.array([V_TR_mean, V_CA_mean, V_CL_mean, V_TR_std, V_CA_std, V_CL_std])
+            np.save(args.save_velocities_npy, means_stds)
 
     df_patterns = df_stats[['Run', 'Episode', 'Support_Pattern', 'Movement_Pattern']]
 
