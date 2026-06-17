@@ -959,7 +959,17 @@ def load_model_yaml(load_model):
     try:
         with open(os.path.join(folder, 'data.yml'), 'r') as file:
             print(f"Loading yaml from model '{load_model}'.")
-            return yaml.safe_load(file)
+            yaml_data =  yaml.safe_load(file)
+
+            # 17.06.2026 Previously, we only had parameter 'age'. Setting that parameter should
+            # set actuation age and body age. We perform this adaption here.
+            if 'age' in yaml_data:
+                age = yaml_data['age']
+                del yaml_data['age']
+                yaml_data['morph_age'] = age
+                yaml_data['physio_age'] = age
+
+            return yaml_data
     except Exception:
         print(f"Could not load yaml data to model '{load_model}'.")
         return None

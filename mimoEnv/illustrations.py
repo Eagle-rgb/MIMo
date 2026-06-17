@@ -372,9 +372,10 @@ An example is '251206_prone_linear_1e6_test'
     parser.add_argument('--render_frames', default=False, action='store_true', required=False,
                         help="Renders many frames - including the final image of the episode in testing - "
                         " and saves them as 'frame_{1-5}.png'.")
-    parser.add_argument('--age', default=9, required=False, type=int,
-                        help="MIMo's age in months. Default: 9.")
-                        
+    parser.add_argument('--morph_age', default=9, required=False, type=int,
+                        help="MIMo's morphological (body) age in months. Default: 9.")
+    parser.add_argument('--physio_age', default=9, required=False, type=int,
+                        help="MIMo's phyisological (actuation) age in months. Default: 9.")
     parser.add_argument('--save_intermediate', action='store_true', help="Save intermediate model at reaching " \
                         "90% side lying success rate.")
     parser.add_argument('--mgc', type=str,
@@ -425,7 +426,8 @@ An example is '251206_prone_linear_1e6_test'
     freeze_leg = args.freeze_leg
     side_lying = args.side_lying
     render_frames = args.render_frames
-    age = args.age
+    morph_age = args.morph_age
+    physio_age = args.physio_age
     save_intermediate = args.save_intermediate
 
     print(f"pen_factor: {pen_factor}")
@@ -518,8 +520,8 @@ An example is '251206_prone_linear_1e6_test'
             freeze_leg=freeze_leg,
             freeze_arm=freeze_arm,
             success_at_side_lying=side_lying,
-            age_physio=age,
-            age_morph=age)
+            age_physio=physio_age,
+            age_morph=morph_age)
         # if log_actuations:
         #     wrapped_env = MIMoRollOverWrapper(env, log_file=os.path.join(save_dir,"actuation_log.csv"))
         # else:
@@ -578,7 +580,8 @@ An example is '251206_prone_linear_1e6_test'
         'freeze_leg': freeze_leg,
         'freeze_arm': freeze_arm,
         'side_lying': side_lying,
-        'age': age,
+        'physio_age': physio_age,
+        'morph_age': morph_age,
         'headfree': True  # this is just a reminder for me that all models going forward can freely move their head.
     }
     with open(f'{save_dir}/data.yml', 'w') as outfile:

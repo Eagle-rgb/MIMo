@@ -32,7 +32,8 @@ for i in $(seq 0 5); do
 		"--goal_achievement_function=cos" \
 		"--save_model=${MODEL_NAME}_run_${i}" \
 		"--pbrs" \
-		"--age=9" \
+		"--morph_age=9" \
+		"--physio_age=9" \
 		"--pbrs_w=100" \
 		"--lr=0.0002" &
 done
