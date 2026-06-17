@@ -374,6 +374,7 @@ An example is '251206_prone_linear_1e6_test'
                         " and saves them as 'frame_{1-5}.png'.")
     parser.add_argument('--age', default=9, required=False, type=int,
                         help="MIMo's age in months. Default: 9.")
+                        
     parser.add_argument('--save_intermediate', action='store_true', help="Save intermediate model at reaching " \
                         "90% side lying success rate.")
     parser.add_argument('--mgc', type=str,

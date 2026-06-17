@@ -15,6 +15,9 @@ if __name__ == '__main__':
     p = np.load(args.npy_1)
     q = np.load(args.npy_2)
 
+    print(f"Sum p: {sum(p)}")
+    print(f"Sum q: {sum(q)}")
+
     print(f"JS(P || Q): {(distance.jensenshannon(p, q) ** 2.0 * 100.0):.2f}%")
 
 

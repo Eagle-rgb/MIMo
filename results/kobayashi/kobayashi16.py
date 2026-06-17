@@ -477,7 +477,7 @@ if __name__ == '__main__':
             model_date = '26-03-07'
             model_suffix = 'age9'
         elif args.age == 3:
-            model_date = '26-03-10'
+            model_date = '26-03-09'
             model_suffix = 'age3'
         elif args.age == 1:
             model_date = '26-03-09'

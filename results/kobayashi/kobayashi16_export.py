@@ -7,7 +7,7 @@ from io import BytesIO
 import argparse
 from kobayashi16 import SUPPORT_PATTERNS, MOVEMENT_PATTERNS
 
-def pdf_report(df):
+def pdf_report(df, out_name):
     SUPPORT_COLORS = {
         "Two Stationary": "#4CAF50",                     # Grün
         "Stationary IA": "#2196F3",                     # Blau
@@ -166,9 +166,9 @@ def pdf_report(df):
     """
 
     # PDF erstellen
-    HTML(string=html_content).write_pdf('finaler_bericht.pdf')
+    HTML(string=html_content).write_pdf(out_name)
 
-def export_npy(df: pd.DataFrame):
+def export_npy(df: pd.DataFrame, support_out_name, movement_out_name):
     support_patterns = np.zeros(6)
     movement_patterns = np.zeros(6)
 
@@ -197,8 +197,8 @@ def export_npy(df: pd.DataFrame):
 
     print("Exporting .npy files 'support.npy' and 'movement.npy'.")
 
-    np.save('support.npy', support_patterns)
-    np.save('movement.npy', movement_patterns)
+    np.save(support_out_name, support_patterns)
+    np.save(movement_out_name, movement_patterns)
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
@@ -210,15 +210,31 @@ if __name__ == '__main__':
                         help="Export support and movement patterns to .npy files " \
                         "support.npy and movement.npy. " \
                         "Movement patterns are normalized to sum up to 100%.")
+    parser.add_argument('--run_num', required=False, type=int,
+                        help="Specifies a run number for individual run analysis. If this " \
+                        "is not specified, all runs are considered. If specified, the export " \
+                        "filenames contain the run number.")
     args = parser.parse_args()
 
     # CSV Export
     df = pd.read_csv(args.load_csv)
 
+    if args.run_num is not None:
+        df = df[df['Run'] == args.run_num]
+
     if args.pdf_report:
-        pdf_report(df)
+        out_name = 'finaler_bericht.pdf'
+        if args.run_num is not None:
+            out_name = f'finaler_bericht_run_{args.run_num}.pdf'
+        pdf_report(df, out_name)
 
     if args.npy:
-        export_npy(df)
+        support_out_name = 'support.npy'
+        movement_out_name = 'movement.npy'
+
+        if args.run_num is not None:
+            support_out_name = f'support_run_{args.run_num}.npy'
+            movement_out_name = f'movement_run_{args.run_num}.npy'
+        export_npy(df, support_out_name, movement_out_name)
 
     
