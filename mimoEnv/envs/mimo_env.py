@@ -25,7 +25,6 @@ import mimoEnv.utils as mimo_utils
 from mimoActuation.actuation_pc1 import SpringDamperModel_PC1
 from mimoActuation.actuation_stationary_limbs import SpringDamperModel_Stationary_Limbs
 
-
 SCENE_DIRECTORY = os.path.abspath(os.path.join(__file__, "..", "..", "assets"))
 """ Path to the scene directory.
 
@@ -376,10 +375,10 @@ class MIMoEnv(MujocoEnv, utils.EzPickle):
 
         self._initial_qpos = initial_qpos
 
-        model_path = adjust_mimo_to_age(age, model_path, custom_measurements) if age is not None else model_path
+        self.model_path = adjust_mimo_to_age(age, model_path, custom_measurements) if age is not None else model_path
 
         # Load XML and initialize everything
-        super().__init__(model_path,
+        super().__init__(self.model_path,
                          frame_skip,
                          observation_space=None,
                          render_mode=render_mode,
@@ -390,7 +389,7 @@ class MIMoEnv(MujocoEnv, utils.EzPickle):
                          default_camera_config=default_camera_config)
 
         if age is not None:
-            delete_growth_scene(model_path)
+            delete_growth_scene(self.model_path)
 
         self.initialize()
 
@@ -404,6 +403,17 @@ class MIMoEnv(MujocoEnv, utils.EzPickle):
         
     def _initialize_simulation(self,):
         super()._initialize_simulation()
+
+        from importlib.metadata import version
+        GYMNASIUM_MAJOR_VERSION = int(version('gymnasium')[0])
+        print(f"Using gymnasium major version {GYMNASIUM_MAJOR_VERSION}.")
+
+        # In gymnasium version 1.3.0, we must initialize model and data like this and
+        # _initialize_simulation expects us to return them as a tuple. I perform
+        # this check by just checking for major version >= 1
+        if GYMNASIUM_MAJOR_VERSION > 0:
+            self.model = mujoco.MjModel.from_xml_path(self.model_path)
+            self.data = mujoco.MjData(self.model)
 
         fps = int(np.round(1 / self.dt))
         self.metadata = {
@@ -429,6 +439,9 @@ class MIMoEnv(MujocoEnv, utils.EzPickle):
             self.actuation_model = SpringDamperModel_PC1(self, self.mimo_actuators, self.pca)
         else:
             self.actuation_model = self.actuation_model(self, self.mimo_actuators)
+
+        if GYMNASIUM_MAJOR_VERSION > 0:
+            return self.model, self.data
 
     @property
     def n_actuators(self):
