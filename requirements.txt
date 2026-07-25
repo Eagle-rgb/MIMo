@@ -9,9 +9,8 @@ cachetools==5.5.1
 CacheToolsUtils==6.0
 networkx==3.2.1
 rtree==1.3.0
-mujoco==3.3.0
-gymnasium==0.2.8
-stable-baselines3==2.3.2
+gymnasium[mujoco]==1.0.0
+stable-baselines3==2.5.0
 opencv-python-headless==4.11.0.86
 torch==2.6.0
 scikit-image==0.24.0
