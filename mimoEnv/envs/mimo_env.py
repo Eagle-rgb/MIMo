@@ -411,9 +411,9 @@ class MIMoEnv(MujocoEnv, utils.EzPickle):
         # In gymnasium version 1.3.0, we must initialize model and data like this and
         # _initialize_simulation expects us to return them as a tuple. I perform
         # this check by just checking for major version >= 1
-        if GYMNASIUM_MAJOR_VERSION > 0:
-            self.model = mujoco.MjModel.from_xml_path(self.model_path)
-            self.data = mujoco.MjData(self.model)
+        #if GYMNASIUM_MAJOR_VERSION > 0:
+        self.model = mujoco.MjModel.from_xml_path(self.model_path)
+        self.data = mujoco.MjData(self.model)
 
         fps = int(np.round(1 / self.dt))
         self.metadata = {
@@ -440,8 +440,8 @@ class MIMoEnv(MujocoEnv, utils.EzPickle):
         else:
             self.actuation_model = self.actuation_model(self, self.mimo_actuators)
 
-        if GYMNASIUM_MAJOR_VERSION > 0:
-            return self.model, self.data
+        # if GYMNASIUM_MAJOR_VERSION > 0:
+        return self.model, self.data
 
     @property
     def n_actuators(self):
