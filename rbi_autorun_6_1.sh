@@ -27,7 +27,7 @@ for i in $(seq 0 5); do
 		"--save_every=1000000" \
 		"--roll_over_starting_position=supine" \
 		"--algorithm=PPO" \
-		"--pen_factor=0.01" \
+		"--pen_factor=0.02" \
 		"--roll_over_model_path_auto" \
 		"--goal_achievement_function=cos" \
 		"--save_model=${MODEL_NAME}_run_${i}" \
@@ -35,19 +35,11 @@ for i in $(seq 0 5); do
 		"--morph_age=9" \
 		"--physio_age=9" \
 		"--pbrs_w=100" \
+		"--obs_noise=0.1" \
 		"--lr=0.0002" &
 done
 
 # Wait until all ssh commands finished, i.e. all MIMo simulations are finished. Then, plot the results.
 wait
-
-# Create gemini plots.
-ssh -l ${USERNAME} "adrastos.rbi.cs.uni-frankfurt.de" "conda activate mimo" "&&"\
-	"cd MIMo" "&&" \
-	"python" "results/tb_plot_2.py" "--date=${today}" "--suffix=${MODEL_NAME}"
-
-# Copy gemini plots to our local machine.
-# Gemini plot files always have the same prefix: yy-mm-dd_<model sufix>_****.png
-scp "${USERNAME}@adrastos.rbi.cs.uni-frankfurt.de:~/MIMo/png/${today}_${MODEL_NAME}_*" "."
 
 

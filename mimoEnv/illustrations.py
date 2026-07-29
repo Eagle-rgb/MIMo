@@ -53,6 +53,8 @@ from mimoEnv.utils import load_model_yaml
 from PIL import Image
 import mujoco
 
+from mimoEnv.envs.gaussiannoiseobswrapper import GaussianNoiseObsWrapper
+
 def test(wrapped_env, save_dir, model=None, render_video=False, render_frames=False, render_actuations=False, roll_over_starting_position='prone'):
     """ Tests the model for one episode.
 
@@ -387,6 +389,10 @@ An example is '251206_prone_linear_1e6_test'
                         default=20_000,
                         help="Steps between embodiment change in the " \
                         "stochastic mgc (default: 20000)")
+    parser.add_argument('--obs_noise', type=float,
+                        default=0.0,
+                        help="Introduces observation noise. Adds a normal distribution with stddev " \
+                        "'obs_noise' and mean 0 on top of the observation.")
     
     # Parse yaml if we specified '--load_model'.
     args, remaining_argv = parser.parse_known_args()
@@ -533,6 +539,12 @@ An example is '251206_prone_linear_1e6_test'
         
     obs, _ = env.reset()
 
+    # Wrap in noisy observation wrapper (optional).
+    # Target keys are all keys except for 'achieved_goal' and 'desired_goal', because we do not want to add noise to those.
+    if args.obs_noise > 0.0:
+        env = GaussianNoiseObsWrapper(env, noise_std=args.obs_noise,
+                                      target_keys=[key for key in obs.keys() if key not in ['achieved_goal', 'desired_goal']])
+
     if observation_normalization:
         mean_dict, std_dict = load_observation_normalization_dict(obs)
         if mean_dict:
@@ -582,7 +594,8 @@ An example is '251206_prone_linear_1e6_test'
         'side_lying': side_lying,
         'physio_age': physio_age,
         'morph_age': morph_age,
-        'headfree': True  # this is just a reminder for me that all models going forward can freely move their head.
+        'headfree': True,  # this is just a reminder for me that all models going forward can freely move their head.
+        'obs_noise': args.obs_noise,
     }
     with open(f'{save_dir}/data.yml', 'w') as outfile:
         yaml.dump(yaml_data, outfile, default_flow_style=False)
