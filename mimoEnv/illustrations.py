@@ -55,7 +55,9 @@ import mujoco
 
 from mimoEnv.envs.gaussiannoiseobswrapper import GaussianNoiseObsWrapper
 
-def test(wrapped_env, save_dir, model=None, render_video=False, render_frames=False, render_actuations=False, roll_over_starting_position='prone'):
+def test(wrapped_env, save_dir, model=None, render_video=False, render_frames=False, render_actuations=False, roll_over_starting_position='prone',
+         action_noise='white', action_sigma=0.3, action_seq_len=None, action_noise_seed=0,
+         action_beta=1.0):
     """ Tests the model for one episode.
 
     Args:
@@ -74,8 +76,36 @@ def test(wrapped_env, save_dir, model=None, render_video=False, render_frames=Fa
     trunc=False
     im_counter = 0
     # Disable isr for testing.
-    for env in model.get_env().envs:
-        env.unwrapped.isr=False
+    # 08.08.2026 Guarded against 'model is None'. main() explicitly allows a
+    # None model ("we just take random actions"), but this loop dereferenced it
+    # unconditionally, so that path raised AttributeError and had in fact never
+    # run. Without a model there is no VecEnv, so reach the env directly.
+    if model is not None:
+        for env in model.get_env().envs:
+            env.unwrapped.isr=False
+    else:
+        wrapped_env.unwrapped.isr=False
+
+    # 08.08.2026 Action noise for the random-action rollout, so that the videos
+    # show the same exploration distribution the H1 buffers are collected with
+    # (mimoComposer/h1_latent_probe.py). White = the original
+    # action_space.sample(); pink = 1/f colored noise (Eberhard et al. 2023).
+    #
+    # NB pink is clipped into the action range, and at large sigma that clip is
+    # not cosmetic: at sigma=1.0 about a third of the samples saturate, which
+    # distorts the 1/f spectrum. Sigma is therefore not the effective amplitude
+    # -- measure the clipped signal, do not infer it from the flag.
+    noise_sampler = None
+    if action_noise in ('pink', 'colored'):
+        from pink import ColoredActionNoise
+        seq_len = action_seq_len or wrapped_env.spec.max_episode_steps or 500
+        beta = 1.0 if action_noise == 'pink' else action_beta
+        noise_sampler = ColoredActionNoise(beta=beta, sigma=action_sigma,
+                                           action_dim=wrapped_env.action_space.shape[0],
+                                           seq_len=seq_len,
+                                           rng=np.random.default_rng(action_noise_seed))
+        noise_sampler.reset()
+        print(f"Using colored action noise (beta={beta}, sigma={action_sigma}, seq_len={seq_len})")
 
     print("Testing model...")
 
@@ -94,7 +124,9 @@ def test(wrapped_env, save_dir, model=None, render_video=False, render_frames=Fa
         if render_actuations:
             return evaluation_img(wrapped_env, up='actuations')
         else:
-            return wrapped_env.mujoco_renderer.render(render_mode="rgb_array")
+            # 08.08.2026 '.unwrapped': gym.make returns a TimeLimit wrapper, so
+            # mujoco_renderer is not reachable on the top-level object.
+            return wrapped_env.unwrapped.mujoco_renderer.render(render_mode="rgb_array")
         
     def save_image(name):
         save_name=os.path.join(save_dir, f'{name}.pdf')
@@ -107,10 +139,18 @@ def test(wrapped_env, save_dir, model=None, render_video=False, render_frames=Fa
 
     while not done and not trunc:
         if model is None:
-            print("No model, taking random actions")
-            action = wrapped_env.action_space.sample()
+            if noise_sampler is None:
+                action = wrapped_env.action_space.sample()
+            else:
+                action = np.clip(noise_sampler(),
+                                 wrapped_env.action_space.low,
+                                 wrapped_env.action_space.high)
         else:
-            action, _ = model.predict(obs, determinstic=True)
+            # 08.08.2026 Was 'determinstic=True' (typo). SB3 2.5.0 rejects the
+            # unknown kwarg with TypeError, so --test crashed for every loaded
+            # model, not just here. Commit e599f62 ("Changed policy execution
+            # to 'deterministic' when not training") shows the intent.
+            action, _ = model.predict(obs, deterministic=True)
 
         obs, _, done, trunc, info = wrapped_env.step(action)
         n_steps += 1
@@ -309,6 +349,29 @@ def main():
                         help='Name of model to save')
     parser.add_argument('--render_video', action='store_true',
                         help='Renders a video for each episode during the test run.')
+    parser.add_argument('--random_actions', action='store_true',
+                        help='Test with random actions instead of a policy. Needed because '
+                             '--algorithm defaults to PPO, so without --load_model the script '
+                             'builds a fresh UNTRAINED PPO rather than passing model=None, and '
+                             "test()'s random-action branch was unreachable from the CLI.")
+    parser.add_argument('--action_beta', default=1.0, type=float,
+                        help='Colored-noise exponent: 0 white, 1 pink, 2 red/brownian. Only '
+                             'used with --action_noise=colored.')
+    parser.add_argument('--action_noise', default='white', choices=['white', 'pink', 'colored'],
+                        help='Action sampler for random-action test rollouts (--test without '
+                             '--load_model). "white" = action_space.sample(); "pink" = 1/f '
+                             'colored noise. Ignored when a model is loaded. Not stored in '
+                             'data.yml -- it describes the invocation, not the model.')
+    parser.add_argument('--action_sigma', default=0.3, type=float,
+                        help='Noise scale for --action_noise=pink. NB uniform[-1,1] has std '
+                             '0.577, so 0.3 is weaker than white and 1.0 saturates the clip.')
+    parser.add_argument('--action_seq_len', default=None, type=int,
+                        help='Pink noise correlation length. Defaults to the environment '
+                             'horizon (500 for roll_over).')
+    parser.add_argument('--action_noise_seed', default=0, type=int,
+                        help='Seed for the pink noise generator. Needed because '
+                             'PinkActionNoise without an explicit rng draws from a fresh '
+                             'unseeded np.random.default_rng().')
     parser.add_argument('--use_muscle', action='store_true',
                         help='Use the muscle actuation model instead of spring-damper model if provided.')
     parser.add_argument('--roll_over_starting_position', required=False,
@@ -393,6 +456,8 @@ An example is '251206_prone_linear_1e6_test'
                         default=0.0,
                         help="Introduces observation noise. Adds a normal distribution with stddev " \
                         "'obs_noise' and mean 0 on top of the observation.")
+    parser.add_argument('--no_proprio', action='store_true',
+                        help="Entirely removes proprioception observation.")
     
     # Parse yaml if we specified '--load_model'.
     args, remaining_argv = parser.parse_known_args()
@@ -454,7 +519,10 @@ An example is '251206_prone_linear_1e6_test'
         print("Warning! Some limbs are frozen.")
 
     if proprio_only_qpos:
-        print("Warning! Only using qpos in proprioception obseration.")
+        print("Warning! Only using qpos in proprioception observation.")
+
+    if args.no_proprio:
+        print("Warning! Training without proprioception observation!")
 
     actuation_model = MuscleModel if use_muscle else SpringDamperModel
 
@@ -507,6 +575,12 @@ An example is '251206_prone_linear_1e6_test'
     # 15.12.2025 Added 'done_active=True' to allow environment termination
     # when we reached a goal state.
     if env_name == 'roll_over':
+        proprio_params = DEFAULT_PROPRIOCEPTION_PARAMS
+        if proprio_only_qpos:
+            proprio_params = PROPRIOCEPTION_PARAMS_ONLY_QPOS
+        if args.no_proprio:
+            proprio_params = None
+
         env = gym.make(env_names[env_name], actuation_model=actuation_model,
             starting_position=roll_over_starting_position,
             goal_function=roll_over_goal_function,
@@ -518,7 +592,7 @@ An example is '251206_prone_linear_1e6_test'
             render_mode='rgb_array',
             touch_params=ROLL_OVER_TOUCH_PARAMS if touch else None,
             achieved_goal_in_observation=achieved_goal_in_observation,
-            proprio_params=DEFAULT_PROPRIOCEPTION_PARAMS if not proprio_only_qpos else PROPRIOCEPTION_PARAMS_ONLY_QPOS,
+            proprio_params=proprio_params,
             pbrs_w=pbrs_w,
             pen_factor=pen_factor,
             intrinsic_goal=intrinsic_goal,
@@ -616,11 +690,16 @@ An example is '251206_prone_linear_1e6_test'
         # 'None', we just take random actions.
         test(env,
              save_dir,
-             model=model,
+             model=None if args.random_actions else model,
              render_video=render,
              render_frames=render_frames,
              render_actuations=render_actuations,
-             roll_over_starting_position=roll_over_starting_position)
+             roll_over_starting_position=roll_over_starting_position,
+             action_noise=args.action_noise,
+             action_sigma=args.action_sigma,
+             action_seq_len=args.action_seq_len,
+             action_noise_seed=args.action_noise_seed,
+             action_beta=args.action_beta)
 
     env.close()
 

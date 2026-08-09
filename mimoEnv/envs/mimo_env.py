@@ -494,12 +494,14 @@ class MIMoEnv(MujocoEnv, utils.EzPickle):
         be of shape the same as the observation and thus needs to know the space of the
         observation. This is a classical 'Henne und Ei' problem.
         """
-        obs = self.get_proprio_obs()
-        print(f"Proprioception shape: {obs.shape}.")
         # Observation spaces
-        spaces_dict = {
-            "observation": spaces.Box(-np.inf, np.inf, shape=obs.shape, dtype=np.float64)
-        }
+        if self.proprio_params is not None:
+            obs = self.get_proprio_obs()
+            print(f"Proprioception shape: {obs.shape}.")
+            spaces_dict = {
+                "observation": spaces.Box(-np.inf, np.inf, shape=obs.shape, dtype=np.float64)
+            }
+        else: spaces_dict = { }
         if self.touch:
             obs = self.get_touch_obs().ravel()
             print(f"Using touch. Touch shape: {obs.shape}.")
@@ -825,10 +827,13 @@ class MIMoEnv(MujocoEnv, utils.EzPickle):
             Dict: A dictionary containing simulation outputs with separate entries for each sensor modality.
         """
         # robot proprioception:
-        proprio_obs = self.get_proprio_obs(sparse_proprio)
-        observation_dict = {
-            "observation": proprio_obs,
-        }
+        if self.proprio_params:
+            proprio_obs = self.get_proprio_obs(sparse_proprio)
+            observation_dict = {
+                "observation": proprio_obs,
+            }
+        else:
+            observation_dict = { }
         # robot touch sensors:
         if self.touch:
             touch_obs = self.get_touch_obs().ravel()
