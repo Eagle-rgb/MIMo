@@ -147,9 +147,10 @@ class SimpleProprioception(Proprioception):
             np.ndarray: A numpy array containing the concatenation of all enabled outputs.
         """
         self.sensor_outputs = {}
+        # Is needed for 'position' and for 'limits'.
+        robot_qpos = self.env.data.qpos[self.joint_qpos].flatten()
 
         if "position" in self.output_components:
-            robot_qpos = self.env.data.qpos[self.joint_qpos].flatten()
             self.sensor_outputs["qpos"] = robot_qpos
         if "velocity" in self.output_components:
             robot_qvel = self.env.data.qvel[self.joint_qvel].flatten()

@@ -664,6 +664,7 @@ class MIMoRollOverEnv(MIMoEnv):
         achieved_goal = self.get_achieved_goal_cos()
         info['side_lying'] = 1.0 if achieved_goal >= 0.5 else 0.0
         info['45_deg'] = 1.0 if achieved_goal >= 0.25 else 0.0
+        info['ctrl_cost'] = 0
         return obs, info
     
     def step(self, action):
@@ -682,8 +683,14 @@ class MIMoRollOverEnv(MIMoEnv):
         achieved_goal = self.get_achieved_goal_cos()
         info['side_lying'] = 1.0 if achieved_goal >= 0.5 else 0.0
         info['45_deg'] = 1.0 if achieved_goal >= 0.25 else 0.0
+        info['raw_ctrl_cost'] = self.compute_raw_penalization_of_action(action)
 
         return obs, reward, terminated, truncated, info
+
+    def compute_raw_penalization_of_action(self, action):
+        """ Computes penalization (sum of squared values) of the given action without
+        the penalization factor. """
+        return np.square(action).sum()
     
     def compute_penalization(self):
         return 0 if self.nopen else self.pen_factor * np.square(self.data.ctrl).sum()

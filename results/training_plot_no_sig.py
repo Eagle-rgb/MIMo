@@ -12,7 +12,7 @@ from utils import DATE_FORMAT, valid_date
 
 # --- Konfiguration ---
 BASE_DIR = "."
-TAGS_TO_LOAD = ["rollout/ep_rew_mean", "rollout/success_rate", "rollout/side_lying_success_rate"]
+TAGS_TO_LOAD = ["rollout/ep_rew_mean", "rollout/success_rate", "rollout/side_lying_success_rate", "rollout/ctrl_cost"]
 N_POINTS = 500  # Auflösung der X-Achse
 
 def get_model_training_data_aggregated(dates, suffixes, haltungen, tags, xmax):
@@ -79,11 +79,11 @@ def plot_data(data, labels: list[str], max_x: int, save_file: str, append_num_ru
         if append_num_runs_to_label:
             label += f", {model_data['num_runs']} runs"
 
-        plt.plot(x_axis, values, label=label, color=PLT_COLORS[color_idx])
+        plt.plot(x_axis, values, label=label, color=icdlplot.PLT_COLORS[color_idx])
         # Prevent drawing over 1.0 or under 0.0 for success rate.
         std_min = np.clip(values - model_data['std'], 0.0, 1.0)
         std_max = np.clip(values + model_data['std'], 0.0, 1.0)
-        plt.fill_between(x_axis, std_min, std_max, alpha=0.15, color=PLT_COLORS[color_idx])
+        plt.fill_between(x_axis, std_min, std_max, alpha=0.15, color=icdlplot.PLT_COLORS[color_idx])
         color_idx += 1
 
     if legend_title:
@@ -116,6 +116,8 @@ if __name__ == "__main__":
     parser.add_argument('--num_runs_in_label', action='store_true', help=f"Suffix label " \
                         "with number of runs.")
     parser.add_argument('--legend_title', type=str, required=False, help="Title for legend.")
+    parser.add_argument('--tag', type=str, default="success_rate", required=False, help="Tag to load. Default: rollout/success_rate. Specify" \
+            "without the 'rollout/' prefix.")
 
     for i in range(1,max_models+1):
         parser.add_argument(f'--date{i}', required=i==1, type=valid_date, help=f"Date of the runs {i}")
@@ -156,7 +158,7 @@ if __name__ == "__main__":
         labels.append(label)
         haltungen.append(haltung)
         #tags.append("rollout/" + tag)
-        tags.append("rollout/success_rate")
+        tags.append("rollout/" + args.tag)
 
     if len(dates) == 0:
         raise ValueError("No models specified...")
