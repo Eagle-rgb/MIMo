@@ -33,3 +33,8 @@ icdl26
 *.npy
 pdf
 csv
+
+# Exclude composer for now, because it is not working.
+mimoComposer
+results/composer
+CLAUDE.md

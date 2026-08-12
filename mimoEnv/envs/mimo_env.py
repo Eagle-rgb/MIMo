@@ -171,7 +171,7 @@ DEFAULT_VESTIBULAR_PARAMS = {
 
 
 DEFAULT_PROPRIOCEPTION_PARAMS = {
-    "components": ["velocity", "torque", "limits", "actuation"],
+    "components": ["position", "velocity", "torque", "limits", "actuation"],
     "threshold": .035,
 }
 """ Default parameters for proprioception. Relative joint positions are always included.
@@ -181,7 +181,7 @@ DEFAULT_PROPRIOCEPTION_PARAMS = {
 
 
 PROPRIOCEPTION_PARAMS_ONLY_QPOS = {
-    "components": [],
+    "components": ["position"],
 }
 """ Proprioception with only qpos parameters, i.e. only relative joint positions.
 

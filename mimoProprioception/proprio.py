@@ -88,7 +88,7 @@ class SimpleProprioception(Proprioception):
     """
 
     #: Valid entries for the output components
-    VALID_COMPONENTS = ["velocity", "torque", "limits", "actuation"]
+    VALID_COMPONENTS = ["position", "velocity", "torque", "limits", "actuation"]
 
     def __init__(self, env, proprio_parameters):
         super().__init__(env, proprio_parameters)
@@ -117,7 +117,8 @@ class SimpleProprioception(Proprioception):
         #self.sensor_ids = [self.env.model.sensor(name).id for name in self.sensors]
         self.sensor_addrs = np.asarray([get_sensor_addr(self.env.model, idx) for idx in self.sensor_ids])
 
-        self.sensor_names["qpos"] = self.joint_names
+        if "position" in self.output_components:
+            self.sensor_names["qpos"] = self.joint_names
         if "velocity" in self.output_components:
             self.sensor_names["qvel"] = self.joint_names
         if "torque" in self.output_components:
@@ -146,9 +147,10 @@ class SimpleProprioception(Proprioception):
             np.ndarray: A numpy array containing the concatenation of all enabled outputs.
         """
         self.sensor_outputs = {}
-        robot_qpos = self.env.data.qpos[self.joint_qpos].flatten()
 
-        self.sensor_outputs["qpos"] = robot_qpos
+        if "position" in self.output_components:
+            robot_qpos = self.env.data.qpos[self.joint_qpos].flatten()
+            self.sensor_outputs["qpos"] = robot_qpos
         if "velocity" in self.output_components:
             robot_qvel = self.env.data.qvel[self.joint_qvel].flatten()
             self.sensor_outputs["qvel"] = robot_qvel
@@ -167,6 +169,9 @@ class SimpleProprioception(Proprioception):
 
         if "actuation" in self.output_components:
             self.sensor_outputs["actuation"] = self.env.actuation_model.observations().flatten()
+
+        if not self.sensor_outputs:
+            return np.array([])
 
         return np.concatenate([self.sensor_outputs[key] for key in sorted(self.sensor_outputs.keys())])
     

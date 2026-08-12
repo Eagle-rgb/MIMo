@@ -306,6 +306,28 @@ def load_observation_normalization_dict(obs):
     print("Successfully loaded observation normalization.")
     return mean_dict, std_dict
 
+def parse_proprio(proprio_args_string: str):
+    """ Parses proprio arguments. Returns None if invalid. Expects
+    proprio arguments of the format <arg>|<arg>|...
+    'arg' may only be 'position','velocity','torque','limits' and 'actuation'
+    and may not contain duplicates! Returns a list of proprioception parameters. """
+    separated = proprio_args_string.split('|')
+
+    # Check if each argument is valid.
+    # Check for duplicates.
+    for i in range(len(separated)):
+        item = separated[i]
+        if (item in separated[i+1:]):
+            raise ValueError("Proprio Argument " + item + " duplicate! Do not specify duplicates!")
+
+    # Check that each entry is a valid proprioception argument.
+    for item in separated:
+        if item not in ["position", "velocity", "torque", "limits", "actuation"]:
+            raise ValueError("Proprio List contains invalid argument " + item)
+
+    return separated
+
+
 def main():
     """ CLI for the demonstration environments.
 
@@ -415,8 +437,6 @@ An example is '251206_prone_linear_1e6_test'
     parser.add_argument('--touch', action='store_true', default=False,
                         help="Use touch observation")
     parser.add_argument('--achieved_goal_in_observation', action='store_true', default=False)
-    parser.add_argument('--proprio_only_qpos', action='store_true', default=False,
-                        help="Only uses 'qpos' of each joint in proprio observation.")
     parser.add_argument('--pen_factor', default=0.02, type=float, required=False,  # Previously, '--pen_fac'
                         help="Penalization factor when action penalization is active.")
     parser.add_argument('--proprio_w', default=0.01, type=float, required=False,  # Previously, 'intrinsic_goal_proprio_w'
@@ -456,8 +476,15 @@ An example is '251206_prone_linear_1e6_test'
                         default=0.0,
                         help="Introduces observation noise. Adds a normal distribution with stddev " \
                         "'obs_noise' and mean 0 on top of the observation.")
-    parser.add_argument('--no_proprio', action='store_true',
-                        help="Entirely removes proprioception observation.")
+    parser.add_argument('--proprio_config', type=str, default="position|velocity|torque|limits|actuation",
+                        help="Proprioception config. Configure which, if any, infos are included in the proprioception observation."\
+                        "The following arguments are available:\n" \
+                        "- position\n" \
+                        "- velocity\n" \
+                        "- torque\n" \
+                        "- limits\n" \
+                        "- actuation\n\n" \
+                        "Combine arguments using '|'.")
     
     # Parse yaml if we specified '--load_model'.
     args, remaining_argv = parser.parse_known_args()
@@ -490,7 +517,6 @@ An example is '251206_prone_linear_1e6_test'
     observation_normalization = args.obs_norm
     touch = args.touch
     achieved_goal_in_observation=args.achieved_goal_in_observation
-    proprio_only_qpos = args.proprio_only_qpos
     pen_factor = args.pen_factor
     intrinsic_goal = args.intrinsic_goal
     freeze_arm = args.freeze_arm
@@ -501,7 +527,10 @@ An example is '251206_prone_linear_1e6_test'
     physio_age = args.physio_age
     save_intermediate = args.save_intermediate
 
-    print(f"pen_factor: {pen_factor}")
+    proprio_params = DEFAULT_PROPRIOCEPTION_PARAMS
+
+    if len(args.proprio_config) > 0:
+        proprio_params["components"] = parse_proprio(args.proprio_config)
 
     # Weightings of different sensors in intrinsic goals. We usually weight vestibular much
     # higher (1.0 compared to 0.01) than proprioception observation.
@@ -517,12 +546,6 @@ An example is '251206_prone_linear_1e6_test'
 
     if freeze_arm or freeze_leg:
         print("Warning! Some limbs are frozen.")
-
-    if proprio_only_qpos:
-        print("Warning! Only using qpos in proprioception observation.")
-
-    if args.no_proprio:
-        print("Warning! Training without proprioception observation!")
 
     actuation_model = MuscleModel if use_muscle else SpringDamperModel
 
@@ -575,12 +598,7 @@ An example is '251206_prone_linear_1e6_test'
     # 15.12.2025 Added 'done_active=True' to allow environment termination
     # when we reached a goal state.
     if env_name == 'roll_over':
-        proprio_params = DEFAULT_PROPRIOCEPTION_PARAMS
-        if proprio_only_qpos:
-            proprio_params = PROPRIOCEPTION_PARAMS_ONLY_QPOS
-        if args.no_proprio:
-            proprio_params = None
-
+        print(f"Using proprioception parameters: " + ','.join(proprio_params["components"]))
         env = gym.make(env_names[env_name], actuation_model=actuation_model,
             starting_position=roll_over_starting_position,
             goal_function=roll_over_goal_function,
@@ -656,7 +674,6 @@ An example is '251206_prone_linear_1e6_test'
         'isr': isr,
         'algorithm': algorithm,
         'num_train': train_for,
-        'proprio_only_qpos': proprio_only_qpos,
         'obs_norm': observation_normalization,
         'touch': touch,
         'pen_factor': pen_factor,
@@ -670,6 +687,7 @@ An example is '251206_prone_linear_1e6_test'
         'morph_age': morph_age,
         'headfree': True,  # this is just a reminder for me that all models going forward can freely move their head.
         'obs_noise': args.obs_noise,
+        'proprio_params': proprio_params
     }
     with open(f'{save_dir}/data.yml', 'w') as outfile:
         yaml.dump(yaml_data, outfile, default_flow_style=False)

@@ -969,6 +969,15 @@ def load_model_yaml(load_model):
                 yaml_data['morph_age'] = age
                 yaml_data['physio_age'] = age
 
+            # Downwards-compatibility with flags 'proprio_only_qpos' and 'no_proprio'
+            if 'proprio_only_qpos' in yaml_data:
+                if yaml_data['proprio_only_qpos']:
+                    yaml_data['proprio_config'] = "position"
+
+            if 'no_proprio' in yaml_data:
+                if yaml_data['no_proprio']:
+                    yaml_data['proprio_config'] = "" 
+
             return yaml_data
     except Exception:
         print(f"Could not load yaml data to model '{load_model}'.")
