@@ -44,6 +44,7 @@ for i in $(seq 0 $((NUMBER_OF_RUNS-1))); do
 		"--morph_age=9" \
 		"--physio_age=9" \
 		"--pbrs_w=100" \
+		"--proprio_config='position|torque|velocity'" \
 		"--lr=0.0003" &
 done
 

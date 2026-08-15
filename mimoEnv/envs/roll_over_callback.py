@@ -26,6 +26,10 @@ class RollOverCallback(BaseCallback):
         self.side_lying_success = deque(maxlen=window_size)
         self.intermediate_90_saved = False
         self.raw_ctrl_cost = deque(maxlen=window_size)
+        # Highest rotation reached anywhere in the episode, as opposed to 'side_lying' below,
+        # which only looks at the final step. This is the quantity 'eval_rollover.py' reports, so
+        # logging it makes the training curve comparable to the evaluation numbers.
+        self.episode_rho_max = deque(maxlen=window_size)
 
         # Aggregated raw control cost in an episode. Is reset to 0 after each episode. Mean
         # is calculated by dividing the sum by 'self.episode_stp_cnt' - a counter of how many
@@ -63,6 +67,15 @@ class RollOverCallback(BaseCallback):
                 self.logger.record("rollout/ep_end_chest_deg_mean", np.mean(self.end_chest_deg))
                 self.logger.record("rollout/side_lying_success_rate", np.mean(self.side_lying_success))
                 self.logger.record("rollout/raw_ctrl_cost", np.mean(self.raw_ctrl_cost))
+
+                if 'episode_rho_max' in info:
+                    self.episode_rho_max.append(info['episode_rho_max'])
+                    self.logger.record("rollout/ep_rho_max_mean", np.mean(self.episode_rho_max))
+                # Upper end of the goal range actually in use. Constant without
+                # '--goal_curriculum'; with it, this curve is the curriculum itself and shows
+                # whether it advanced or stalled.
+                if not np.isnan(info.get('goal_high_effective', np.nan)):
+                    self.logger.record("rollout/goal_high_effective", info['goal_high_effective'])
 
         # Save intermediate model - if specified.
         # We need the 'len(self.side....) > 0' to prevent in the first step callbacks accessing

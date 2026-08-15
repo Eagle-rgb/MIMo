@@ -53,6 +53,13 @@ from mimoEnv.utils import load_model_yaml
 from PIL import Image
 import mujoco
 
+# Algorithms that keep a replay buffer, and therefore accept --buffer_size / --train_freq /
+# --gradient_steps and can carry a HerReplayBuffer. PPO and A2C are on-policy and take none.
+OFF_POLICY_ALGORITHMS = ('SAC', 'TD3', 'DDPG')
+
+# Episode horizon of MIMoRollOver-v0, from the TimeLimit set in mimoEnv/__init__.py.
+ROLL_OVER_EPISODE_STEPS = 500
+
 from mimoEnv.envs.gaussiannoiseobswrapper import GaussianNoiseObsWrapper
 
 def test(wrapped_env, save_dir, model=None, render_video=False, render_frames=False, render_actuations=False, roll_over_starting_position='prone',
@@ -363,8 +370,11 @@ def main():
                         help='Number of timesteps between model saves')
     parser.add_argument('--algorithm', type=str,
                         default='PPO',
-                        choices=['PPO', 'SAC', 'TD3', 'DDPG', 'A2C', 'HER'],
-                        help='RL algorithm from Stable Baselines3')
+                        choices=['PPO', 'SAC', 'TD3', 'DDPG', 'A2C'],
+                        help='RL algorithm from Stable Baselines3. NB "HER" used to be listed '
+                             'here but was never dispatched, so it raised RuntimeError. Since '
+                             'SB3 1.1 HER is not an algorithm but a replay buffer -- use '
+                             '--her together with an off-policy algorithm instead.')
     parser.add_argument('--load_model', default=False, type=str,
                         help='Name of model to load')
     parser.add_argument('--save_model', default='model', type=str,
@@ -426,6 +436,72 @@ An example is '251206_prone_linear_1e6_test'
                         help="Disable action penalty in reward function.")
     parser.add_argument('--lr', required=False, default=3e-4, type=float,
                         help="Learning rate. Default 1e-3 for PPO algorithm. Only used for PPO algorithm.")
+    parser.add_argument('--buffer_size', default=300_000, type=int,
+                        help="Replay buffer size for the off-policy algorithms (SAC/TD3/DDPG). "
+                             "Must stay well below the SB3 default of 1e6: one roll_over observation "
+                             "is 379 floats across 5 keys and the buffer holds obs AND next_obs, so "
+                             "1e6 needs 6.06 GB at float64 on a machine with ~6 GB free. The default "
+                             "300k needs 1.82 GB and holds 600 episodes of 500 steps. "
+                             "Ignored by PPO/A2C.")
+    parser.add_argument('--train_freq', default=1, type=int,
+                        help="Off-policy only: env steps between gradient updates. The SB3 default "
+                             "of 1 means one gradient step per env step, which is what makes SAC far "
+                             "slower per env step than PPO. Raise it to trade sample efficiency for "
+                             "wallclock. Ignored by PPO/A2C.")
+    parser.add_argument('--gradient_steps', default=1, type=int,
+                        help="Off-policy only: gradient steps per update. -1 means 'as many as "
+                             "--train_freq'. Ignored by PPO/A2C.")
+    parser.add_argument('--learning_starts', default=100, type=int,
+                        help="Off-policy only: env steps collected before training begins. SB3's "
+                             "SAC default is 100, but HER cannot sample until a full episode is "
+                             "in the buffer, so with --her this is raised to above the 500-step "
+                             "episode horizon unless you set it higher yourself.")
+    parser.add_argument('--her', action='store_true',
+                        help="Use Hindsight Experience Replay. Requires an off-policy "
+                             "--algorithm (SAC/TD3/DDPG) and a scalar --goal_achievement_function "
+                             "('cos' or 'angle'); the 'intrinsic' goal function has dict-valued "
+                             "goals and is not relabelable. Forces "
+                             "--achieved_goal_in_observation on, since HER needs that key.")
+    parser.add_argument('--n_sampled_goal', default=4, type=int,
+                        help="HER: virtual transitions created per real transition.")
+    parser.add_argument('--goal_selection_strategy', default='future',
+                        choices=['future', 'final', 'episode'],
+                        help="HER: where the relabelled goal comes from.")
+    parser.add_argument('--sparse_reward', action='store_true',
+                        help="Reward 0 on reaching the goal and -1 otherwise, instead of PBRS or "
+                             "distance shaping. This is the point of the HER experiments: it "
+                             "removes the hand-designed rotation shaping. The action penalty "
+                             "still applies unless --nopen.")
+    parser.add_argument('--goal_low', default=None, type=float,
+                        help="Sample the target rotation uniformly from [--goal_low, "
+                             "--goal_high] each episode instead of using a fixed target. HER "
+                             "needs goal variation, otherwise the policy never learns to "
+                             "condition on the goal. Evaluate with a fixed 0.95 regardless.")
+    parser.add_argument('--goal_high', default=None, type=float,
+                        help="Upper end of the sampled goal range. Must be given with --goal_low.")
+    parser.add_argument('--goal_curriculum', action='store_true',
+                        help="Raise the upper end of the sampled goal range along with what has "
+                             "recently been achieved, rather than sampling all of [--goal_low, "
+                             "--goal_high] from the start. HER only ever relabels onto goals that "
+                             "were actually reached, so goals above the current plateau are "
+                             "trained almost only on the original -1 transitions; a run stuck at "
+                             "rho ~ 0.6 then scores rho_max 0.09 when queried at 0.95, i.e. worse "
+                             "than ignoring the goal input altogether. Requires --goal_low/high.")
+    parser.add_argument('--goal_curriculum_window', default=50, type=int,
+                        help="How many finished episodes the curriculum averages over.")
+    parser.add_argument('--goal_curriculum_quantile', default=0.8, type=float,
+                        help="Quantile of the recent episode maxima the curriculum tracks. 0.8 "
+                             "follows the good episodes rather than the median one.")
+    parser.add_argument('--goal_curriculum_margin', default=0.1, type=float,
+                        help="How far the sampled goals may reach beyond that quantile. Also the "
+                             "width of the initial range, before any episode has finished.")
+    parser.add_argument('--no_done_active', action='store_true',
+                        help="Do not terminate the episode on success; run the full 500 steps. "
+                             "Recommended with --her: a relabelled goal is reached mid-episode "
+                             "in a trajectory that kept going, so the virtual transition is not "
+                             "marked terminal and the critic bootstraps past it. The Fetch envs "
+                             "HER was designed on never terminate either, and this module's own "
+                             "docstring describes fixed-length episodes.")
     parser.add_argument('--pbrs', action='store_true',
                         help="Use PBRS in roll_over reward shaping.")
     parser.add_argument('--pbrs_w', default=100, type=float,
@@ -526,6 +602,59 @@ An example is '251206_prone_linear_1e6_test'
     morph_age = args.morph_age
     physio_age = args.physio_age
     save_intermediate = args.save_intermediate
+    use_her = args.her
+    sparse_reward = args.sparse_reward
+    goal_low = args.goal_low
+    goal_high = args.goal_high
+    done_active = not args.no_done_active
+
+    if use_her:
+        if algorithm not in OFF_POLICY_ALGORITHMS:
+            raise ValueError(
+                f"--her needs an off-policy algorithm to attach the replay buffer to, got "
+                f"--algorithm={algorithm}. Use one of {', '.join(OFF_POLICY_ALGORITHMS)}.")
+        if roll_over_goal_function == 'intrinsic':
+            raise ValueError(
+                "--her is incompatible with --goal_achievement_function=intrinsic: those goals "
+                "are dictionaries of sensor readings, and roll_over's compute_reward keeps the "
+                "old live-state path for them, so relabelling would be a silent no-op.")
+        # HerReplayBuffer reads next_obs['achieved_goal'], so the key has to be in the
+        # observation. Forcing it here rather than erroring keeps the CLI usable.
+        if not achieved_goal_in_observation:
+            print("--her set: enabling --achieved_goal_in_observation (required by HER).")
+            achieved_goal_in_observation = True
+        if done_active:
+            print("Warning! --her without --no_done_active: episodes terminate on success, so "
+                  "relabelled transitions are not marked terminal and the critic bootstraps "
+                  "past the virtual goal.")
+        # HerReplayBuffer.sample() raises until at least one episode has finished, because it
+        # needs episode boundaries to pick a 'future' goal. The horizon here is the 500 steps
+        # from the TimeLimit in mimoEnv/__init__.py.
+        if args.learning_starts <= ROLL_OVER_EPISODE_STEPS:
+            args.learning_starts = 2 * ROLL_OVER_EPISODE_STEPS
+            print(f"--her set: raising --learning_starts to {args.learning_starts} "
+                  f"(must exceed the {ROLL_OVER_EPISODE_STEPS}-step episode horizon).")
+
+    if (goal_low is None) != (goal_high is None):
+        raise ValueError("Provide both --goal_low and --goal_high, or neither.")
+
+    if args.goal_curriculum and goal_low is None:
+        raise ValueError(
+            "--goal_curriculum needs a goal range: pass --goal_low and --goal_high. The "
+            "curriculum moves the upper end of that range, so with a fixed goal it has nothing "
+            "to do.")
+
+    if pbrs and not sparse_reward and not done_active:
+        # The PBRS potential jumps to +reward_success at the goal. That is only safe while the
+        # goal is terminal: with --no_done_active MIMo can leave the goal region again, and the
+        # shaping term then pays pbrs_w * (-reward_success), i.e. about -50000 at the defaults.
+        # Measured: potential 500.0 inside the goal, -0.01 just outside, reward -50001.0.
+        # It blows the critic up (critic_loss ~ 2.8e7 within 1000 updates).
+        raise ValueError(
+            "--pbrs with --no_done_active is unsound: the potential is discontinuous at the "
+            "goal, so leaving the goal region pays about -pbrs_w * reward_success (~-50000) and "
+            "the critic diverges. Use --pbrs with terminating episodes (drop --no_done_active), "
+            "or use --sparse_reward, which has no potential to be discontinuous.")
 
     proprio_params = DEFAULT_PROPRIOCEPTION_PARAMS
 
@@ -618,6 +747,14 @@ An example is '251206_prone_linear_1e6_test'
             freeze_leg=freeze_leg,
             freeze_arm=freeze_arm,
             success_at_side_lying=side_lying,
+            sparse_reward=sparse_reward,
+            goal_low=goal_low,
+            goal_high=goal_high,
+            goal_curriculum=args.goal_curriculum,
+            goal_curriculum_window=args.goal_curriculum_window,
+            goal_curriculum_quantile=args.goal_curriculum_quantile,
+            goal_curriculum_margin=args.goal_curriculum_margin,
+            done_active=done_active,
             age_physio=physio_age,
             age_morph=morph_age)
         # if log_actuations:
@@ -656,6 +793,39 @@ An example is '251206_prone_linear_1e6_test'
                     tensorboard_log=save_dir,
                     learning_rate=learning_rate,
                     verbose=1)
+    elif algorithm in OFF_POLICY_ALGORITHMS:
+        # Off-policy algorithms keep a replay buffer, which PPO/A2C do not. Its size must be
+        # passed explicitly: SB3 defaults to 1e6 transitions, and with this environment's
+        # 379-float Dict observation stored twice (obs + next_obs) that is 6.06 GB at float64 --
+        # more than the machine has free, so the default OOMs before training starts.
+        replay_buffer_class = None
+        replay_buffer_kwargs = None
+        if use_her:
+            from stable_baselines3 import HerReplayBuffer
+            replay_buffer_class = HerReplayBuffer
+            replay_buffer_kwargs = dict(
+                n_sampled_goal=args.n_sampled_goal,
+                goal_selection_strategy=args.goal_selection_strategy,
+                # Not optional. The roll_over reward splits into a goal-dependent success term
+                # and two goal-INDEPENDENT terms (the action penalty, and the previous achieved
+                # goal that the PBRS difference needs). Those two ride in the info dict, so if
+                # HER does not copy it, the penalty silently drops to zero in every virtual
+                # transition and PBRS cannot be recomputed at all.
+                copy_info_dict=True,
+            )
+
+        if load_model:
+            model = RL.load(load_model, env, buffer_size=args.buffer_size)
+        else:
+            model = RL("MultiInputPolicy", env,
+                    tensorboard_log=save_dir,
+                    buffer_size=args.buffer_size,
+                    train_freq=args.train_freq,
+                    gradient_steps=args.gradient_steps,
+                    learning_starts=args.learning_starts,
+                    replay_buffer_class=replay_buffer_class,
+                    replay_buffer_kwargs=replay_buffer_kwargs,
+                    verbose=1)
     else:
         if load_model:
             model = RL.load(load_model, env)
@@ -663,7 +833,7 @@ An example is '251206_prone_linear_1e6_test'
             model = RL("MultiInputPolicy", env,
                     tensorboard_log=save_dir,
                     verbose=1)
-            
+
     # Save model metadata in model.
     yaml_data = {
         'lr': learning_rate,
@@ -687,7 +857,27 @@ An example is '251206_prone_linear_1e6_test'
         'morph_age': morph_age,
         'headfree': True,  # this is just a reminder for me that all models going forward can freely move their head.
         'obs_noise': args.obs_noise,
-        'proprio_params': proprio_params
+        'proprio_params': proprio_params,
+        # Off-policy settings. Stored because they define the run: reloading a model trained with
+        # a 300k buffer under a different --buffer_size would evaluate a different experiment.
+        'buffer_size': args.buffer_size,
+        'train_freq': args.train_freq,
+        'gradient_steps': args.gradient_steps,
+        'learning_starts': args.learning_starts,
+        # HER / goal settings. These define the experiment, so they must round-trip: reloading a
+        # sparse-reward model under the default shaped reward would evaluate a different thing.
+        'her': use_her,
+        'n_sampled_goal': args.n_sampled_goal,
+        'goal_selection_strategy': args.goal_selection_strategy,
+        'sparse_reward': sparse_reward,
+        'goal_low': goal_low,
+        'goal_high': goal_high,
+        'goal_curriculum': args.goal_curriculum,
+        'goal_curriculum_window': args.goal_curriculum_window,
+        'goal_curriculum_quantile': args.goal_curriculum_quantile,
+        'goal_curriculum_margin': args.goal_curriculum_margin,
+        'no_done_active': args.no_done_active,
+        'achieved_goal_in_observation': achieved_goal_in_observation,
     }
     with open(f'{save_dir}/data.yml', 'w') as outfile:
         yaml.dump(yaml_data, outfile, default_flow_style=False)

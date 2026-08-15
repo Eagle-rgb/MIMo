@@ -24,6 +24,7 @@ the path to the scene XML is defined in :data:`ROLL_OVER_XML`.
 from mimoEnv.envs.mimo_env import MIMoEnv, SCENE_DIRECTORY, \
     DEFAULT_PROPRIOCEPTION_PARAMS, DEFAULT_VESTIBULAR_PARAMS
 from mimoActuation.actuation import SpringDamperModel
+import collections
 import mujoco
 import numpy as np
 import os
@@ -120,6 +121,25 @@ class MIMoRollOverEnv(MIMoEnv):
                  freeze_arm=False,
                  freeze_leg=False,
                  success_at_side_lying=False,
+                 # Sparse {0, -1} reward instead of PBRS/distance shaping. This is the point of
+                 # the HER experiments: it removes the hand-designed rotation shaping entirely.
+                 sparse_reward=False,
+                 # If both are set, the target rotation is sampled uniformly from
+                 # [goal_low, goal_high] on every reset instead of being fixed. Needed for HER:
+                 # with a constant desired_goal the policy never learns to condition on it, and
+                 # relabelled transitions teach goals that are never queried.
+                 goal_low=None,
+                 goal_high=None,
+                 # Move the upper end of the sampled goal range along with what has actually been
+                 # achieved recently, instead of sampling the full [goal_low, goal_high] from the
+                 # start. See ':meth:`._effective_goal_high`' for why this matters under HER.
+                 goal_curriculum=False,
+                 goal_curriculum_window=50,
+                 goal_curriculum_quantile=0.8,
+                 goal_curriculum_margin=0.1,
+                 # Terminate the episode on success. Must be False for HER -- see the note in
+                 # 'compute_reward'.
+                 done_active=True,
                  **kwargs):
 
         if starting_position not in ["prone", "supine", "alternating"]:
@@ -162,6 +182,39 @@ class MIMoRollOverEnv(MIMoEnv):
         self.pen_factor=pen_factor
         self.intrinsic_goal=intrinsic_goal
         self.success_at_side_lying=success_at_side_lying
+        self.sparse_reward=sparse_reward
+        self.goal_low=goal_low
+        self.goal_high=goal_high
+
+        if (goal_low is None) != (goal_high is None):
+            raise ValueError("Provide both 'goal_low' and 'goal_high', or neither.")
+
+        self.goal_curriculum=goal_curriculum
+        self.goal_curriculum_quantile=goal_curriculum_quantile
+        self.goal_curriculum_margin=goal_curriculum_margin
+
+        if goal_curriculum and goal_low is None:
+            raise ValueError("'goal_curriculum' needs a goal range: set 'goal_low' and "
+                             "'goal_high'. The curriculum moves the upper end of that range, so "
+                             "there is nothing for it to do with a fixed goal.")
+        if not 0.0 <= goal_curriculum_quantile <= 1.0:
+            raise ValueError("'goal_curriculum_quantile' must lie in [0, 1].")
+        if goal_curriculum_margin <= 0.0:
+            raise ValueError("'goal_curriculum_margin' must be positive: it is what keeps the "
+                             "sampled range from degenerating to a single point, and what lets "
+                             "the curriculum reach beyond what has already been achieved.")
+
+        # Highest rotation reached during the episode that is currently running, and the same
+        # quantity for the last 'goal_curriculum_window' finished episodes. Only read by
+        # '_effective_goal_high'; maintained unconditionally so the statistics are available for
+        # logging even when the curriculum is off.
+        self._episode_max_achieved = None
+        self._recent_episode_max = collections.deque(maxlen=goal_curriculum_window)
+
+        # Achieved goal at the start of the current step. Cached so that the potential-based
+        # shaping term can be recomputed from the arguments alone (it needs two consecutive
+        # states), which is what makes PBRS survive HER goal relabelling.
+        self._prev_achieved_goal = None
         # Initialize intrinsic goal weighting dict, i.e. add missing sensor keys.
         for key in ['observation', 'touch', 'vestibular']:
             if key not in intrinsic_goal_w:
@@ -190,7 +243,7 @@ class MIMoRollOverEnv(MIMoEnv):
                          vestibular_params=vestibular_params,
                          actuation_model=actuation_model,
                          goals_in_observation=True,
-                         done_active=True,
+                         done_active=done_active,
                          achieved_goal_in_observation=achieved_goal_in_observation,
                          pca=pca,
                          freeze_arm=freeze_arm,
@@ -277,24 +330,35 @@ class MIMoRollOverEnv(MIMoEnv):
     def is_success(self, achieved_goal, desired_goal):
         """ Did we reach our goal rotation.
 
-        Desired rotation is 0.95 if we want to complete the full rollover. If
-        we only want to roll to the side, we put 0.5.
+        This is a **pure** function of its arguments: it does not read the live simulation
+        state. That matters because HER relabels goals offline and recomputes the reward from
+        stored (achieved_goal, desired_goal) pairs. The previous implementation ignored both
+        arguments and read ``self.get_achieved_goal_cos()`` instead, which made every relabelled
+        transition silently keep the reward of the real transition.
+
+        The threshold used to be hardcoded (0.95, or 0.5 under 'success_at_side_lying'). It now
+        lives in the goal itself -- :meth:`.sample_goal` returns 0.5 instead of 0.95 in the
+        side-lying case -- so the behaviour is unchanged while the function becomes relabelable.
+
+        The 'intrinsic' goal function is exempt: its goals are dictionaries of sensor readings,
+        not rotations, and success there was always measured by the cosine rotation regardless of
+        the goal. That path is left as it was and is not HER-compatible.
 
         Arguments:
-            achieved_goal (float): The achieved hip rotation.
-            desired_goal (float): This target hip rotation.
+            achieved_goal (float | np.ndarray): The achieved hip/chest rotation. May be batched.
+            desired_goal (float | np.ndarray): The target rotation. May be batched.
 
         Returns:
-            bool: If the achieved hip rotation exceeds the desired rotation.
+            bool | np.ndarray: Whether the achieved rotation reaches the desired rotation.
         """
-        achieved_rotation = self.get_achieved_goal_cos()[0]
+        if self.goal_function == 'intrinsic':
+            achieved_rotation = self.get_achieved_goal_cos()[0]
+            return achieved_rotation >= (0.5 if self.success_at_side_lying else 0.95)
 
-        if self.success_at_side_lying:
-            desired_rotation = 0.5
-        else:
-            desired_rotation = 0.95
-
-        return achieved_rotation >= desired_rotation
+        ag = np.asarray(achieved_goal, dtype=np.float64)
+        dg = np.asarray(desired_goal, dtype=np.float64)
+        result = ag.reshape(-1) >= dg.reshape(-1)
+        return bool(result[0]) if result.size == 1 else result
 
     def is_failure(self, achieved_goal, desired_goal):
         """ Dummy function. Always returns ``False``.
@@ -404,6 +468,27 @@ class MIMoRollOverEnv(MIMoEnv):
             else:
                 self.starting_position='prone'
 
+        # Re-sample the goal for the new episode.
+        #
+        # This has to happen here rather than in 'MIMoEnv._reset_simulation', which is where it
+        # looks like it happens: that method is part of the pre-1.0 gymnasium MujocoEnv API and
+        # nothing calls it any more (gymnasium 1.0.0's 'MujocoEnv.reset' goes straight to
+        # 'mj_resetData' and 'reset_model'). The consequence was that 'sample_goal' ran exactly
+        # once, at construction, and 'self.goal' then never changed again -- invisible while the
+        # goal was the constant 0.95, fatal for goal sampling and HER.
+        #
+        # It must also come after the alternating-position flip above, so that the goal matches
+        # the position MIMo is actually starting from.
+        #
+        # Retire the episode that just ended into the curriculum statistics first, so the goal for
+        # the new episode already accounts for it.
+        if self._episode_max_achieved is not None:
+            self._recent_episode_max.append(self._episode_max_achieved)
+        self._episode_max_achieved = None
+
+        self.goal = self.sample_goal()
+        self._prev_achieved_goal = None
+
         # self.set_state(self.init_qpos, self.init_qvel)
         self.put_in_starting_position()
         self.pbrs_last_state_potential=0
@@ -467,12 +552,19 @@ class MIMoRollOverEnv(MIMoEnv):
     def sample_goal(self):
         """ Returns the goal rotation.
 
-        We use a fixed goal rotation of 0.95 [previously: 0.8]
+        By default this is the fixed rotation that :meth:`.is_success` used to hardcode: 0.95 for
+        a full roll, 0.5 under 'success_at_side_lying'. Moving the threshold from the success
+        check into the goal is what lets the success check be a pure function of its arguments.
+
+        If 'goal_low'/'goal_high' are set, the target is instead drawn uniformly from that range
+        on every reset. HER needs this: with a constant desired_goal the policy has no reason to
+        condition on the goal input, and the relabelled transitions describe goals that are never
+        asked for at evaluation time. Evaluation should always pin the goal to 0.95.
 
         For intrinsic goals, we sample a goal in the reset() function.
 
         Returns:
-            np.array[float]: [0.95]
+            np.array[float]: The target rotation, shape (1,).
         """
         if self.goal_function == "intrinsic":
             # We initialize intrinsic goals at the very end of the constructor of this environment.
@@ -487,8 +579,59 @@ class MIMoRollOverEnv(MIMoEnv):
                     return self.prone_intrinsic_goal.copy()
             else:
                 return self.get_achieved_goal()
-        
-        return np.array([0.95])
+
+        if self.goal_low is not None:
+            high = self._effective_goal_high()
+            # A degenerate range means a fixed goal. Return it without drawing: consuming a
+            # random number would shift every later draw from the same generator, in particular
+            # the initial joint randomisation in 'put_in_starting_position', which changes which
+            # episodes you get. That made evaluation results depend on whether the goal was
+            # pinned via goal_low/goal_high or left at the default (measured: 94% vs 98% on the
+            # same policy and the same seeds).
+            if self.goal_low == high:
+                return np.array([float(self.goal_low)])
+            return np.array([self.np_random.uniform(self.goal_low, high)])
+
+        return np.array([0.5 if self.success_at_side_lying else 0.95])
+
+    def _effective_goal_high(self):
+        """ Upper end of the goal range for the episode that is about to start.
+
+        Without the curriculum this is simply 'goal_high'. With it, the range only extends a
+        little past what MIMo has recently managed:
+
+            high = clip(quantile(recent episode maxima) + margin, goal_low + margin, goal_high)
+
+        The reason is a measured failure mode of HER, not a general curriculum argument. **HER
+        only ever relabels onto goals that were actually reached.** A run that plateaus at, say,
+        rho ~ 0.6 therefore has no relabelled transition anywhere above 0.6; with
+        'n_sampled_goal=4' four out of five sampled transitions are relabelled, so the region
+        above the plateau is trained almost exclusively on the original transitions, and those
+        all carry the sparse reward -1. The policy does not merely fail to learn high goals -- it
+        learns something actively wrong there. Measured on the third E3b seed (2026-08-14),
+        deterministic, 30 episodes each:
+
+            goal 0.25 -> rho_max 0.546     goal 0.75 -> rho_max 0.091
+            goal 0.50 -> rho_max 0.786     goal 0.95 -> rho_max 0.092
+
+        A policy that ignored 'desired_goal' entirely would score 0.786 everywhere, so
+        conditioning on an out-of-distribution goal is worse than not conditioning at all. Keeping
+        the sampled goals inside the region HER can actually relabel into is what this avoids.
+
+        Returns:
+            float: The upper end of the range to sample the goal from.
+        """
+        if not self.goal_curriculum:
+            return self.goal_high
+
+        floor = min(self.goal_low + self.goal_curriculum_margin, self.goal_high)
+        if not self._recent_episode_max:
+            # No finished episode yet, e.g. the observation calls during construction.
+            return floor
+
+        reached = np.quantile(np.asarray(self._recent_episode_max, dtype=np.float64),
+                              self.goal_curriculum_quantile)
+        return float(np.clip(reached + self.goal_curriculum_margin, floor, self.goal_high))
     
     def get_rotation_degrees_to_goal_z_axis(self, body_name):
         """ Returns the rotation in degrees of the body part 'body_name' local x axis
@@ -675,6 +818,11 @@ class MIMoRollOverEnv(MIMoEnv):
         """
         # Cache potential of current state to be used in calculating next reward.
         self.pbrs_last_state_potential = self.get_potential()
+        # Same quantity, but stored as a goal rather than a potential, so that the shaping term
+        # can be rebuilt from (achieved_goal, desired_goal, info) after HER rewrites the goal.
+        if self.goal_function != 'intrinsic':
+            self._prev_achieved_goal = np.asarray(self.get_achieved_goal(), dtype=np.float64).copy()
+
         obs, reward, terminated, truncated, info = super().step(action)
 
         # Write achieved hip and chest rotation in info dict.
@@ -684,6 +832,29 @@ class MIMoRollOverEnv(MIMoEnv):
         info['side_lying'] = 1.0 if achieved_goal >= 0.5 else 0.0
         info['45_deg'] = 1.0 if achieved_goal >= 0.25 else 0.0
         info['raw_ctrl_cost'] = self.compute_raw_penalization_of_action(action)
+
+        # Whether MIMo actually rolled over, independent of whatever goal was sampled or
+        # relabelled for this episode. Under sampled goals 'is_success' can report a healthy
+        # rate against easy targets while no real roll ever happens, so this is the quantity to
+        # report -- cf. the rho_max ISR artefact that invalidated the earlier COMPOSER logs.
+        info['rolled_over'] = 1.0 if achieved_goal >= 0.95 else 0.0
+
+        # Running maximum for the goal curriculum. Retired into '_recent_episode_max' on reset.
+        rho = float(np.asarray(achieved_goal).reshape(-1)[0])
+        self._episode_max_achieved = (rho if self._episode_max_achieved is None
+                                      else max(self._episode_max_achieved, rho))
+        # On the last step of an episode this is the episode's maximum, which is the quantity the
+        # evaluation protocol reports. Note that 'side_lying' and 'rolled_over' above describe the
+        # *final* step instead, so the two disagree whenever MIMo rolls and then rolls back.
+        info['episode_rho_max'] = self._episode_max_achieved
+        info['goal_high_effective'] = self._effective_goal_high() if self.goal_low is not None \
+            else float('nan')
+
+        # Goal-INDEPENDENT reward terms, stored so HER can reuse them verbatim for the virtual
+        # transitions it builds. Requires HerReplayBuffer(copy_info_dict=True).
+        info['ctrl_cost'] = self.compute_penalization()
+        if self._prev_achieved_goal is not None:
+            info['prev_achieved_goal'] = self._prev_achieved_goal
 
         return obs, reward, terminated, truncated, info
 
@@ -742,27 +913,129 @@ class MIMoRollOverEnv(MIMoEnv):
         Shaping and instead simply return the potential of the current state
         as a reward (which is the euclidean distance to the desired goal).
 
+        This function is **pure and vectorized** for the scalar goal functions ('angle', 'cos'):
+        it depends only on its arguments, and it accepts either a single goal of shape (1,) or a
+        batch of shape (N, 1). Both properties are required by HER, which rewrites desired_goal
+        offline and then calls this method on whole batches via ``env_method``.
+
+        The three reward terms differ in how they behave under relabelling, and that is what
+        drives the implementation:
+
+        * the success term depends on (achieved_goal, desired_goal) and must be recomputed;
+        * the action penalty depends only on the controls, so it is goal-INDEPENDENT and is
+          carried through ``info['ctrl_cost']``;
+        * the PBRS term needs two consecutive states, which the (achieved, desired) pair alone
+          cannot express, so the earlier achieved goal is carried through
+          ``info['prev_achieved_goal']``.
+
+        When those info keys are absent -- i.e. during ordinary stepping, or under
+        ``copy_info_dict=False`` -- the live simulation values are used instead, which reproduces
+        the original behaviour exactly.
+
+        The 'intrinsic' goal function keeps the old live-state implementation: its goals are
+        dictionaries of sensor readings and it is not HER-compatible.
+
         Arguments:
-            achieved_goal (float): The achieved hip and chest rotation.
-            desired_goal (float): The desired hip and chest rotation so as to
-                classify this trajectory as a successfull roll over.
-            info (dict): This parameter is ignored.
+            achieved_goal (float | np.ndarray): The achieved hip and chest rotation, possibly
+                batched with shape (N, 1).
+            desired_goal (float | np.ndarray): The desired hip and chest rotation.
+            info (dict | Sequence[dict]): Carries the goal-independent reward terms. May be a
+                single dict or one per batch element.
 
         Returns:
-            float: The reward as described above.
+            float | np.ndarray: A float for a single goal, an array of shape (N,) for a batch.
         """
+        if self.goal_function == 'intrinsic':
+            return self._compute_reward_intrinsic(achieved_goal, desired_goal, info)
+
+        ag = np.asarray(achieved_goal, dtype=np.float64)
+        batched = ag.ndim >= 2
+        ag = ag.reshape(-1)
+        dg = np.asarray(desired_goal, dtype=np.float64).reshape(-1)
+        n = ag.shape[0]
+
         # Penalize excessive use of force unless disabled by '--nopen' argument.
+        quad_ctrl_cost = self._info_column(info, 'ctrl_cost', self.compute_penalization(), n)
+
+        success = ag >= dg
+
+        if self.sparse_reward:
+            reward = np.where(success, 0.0, -1.0)
+        else:
+            curr_potential = self._potential(ag, dg)
+            if self.pbrs:
+                prev_ag = self._info_column(
+                    info, 'prev_achieved_goal',
+                    self._prev_achieved_goal if self._prev_achieved_goal is not None else ag, n)
+                reward = self.pbrs_w * (curr_potential - self._potential(prev_ag, dg))
+            else:
+                reward = curr_potential
+            # If the goal is reached, give a very high positive reward.
+            reward = np.where(success, float(self.reward_success), reward)
+
+        reward = reward - quad_ctrl_cost
+        return reward if batched else float(reward[0])
+
+    def _potential(self, achieved, desired):
+        """ Potential of a state, as a pure function of the achieved and desired rotation.
+
+        Deliberately **continuous**, unlike :meth:`.get_potential`, which jumps to
+        ``+reward_success`` at the goal.
+
+        That jump is unreachable in the shaping difference as long as episodes terminate on
+        success: the previous state of a step can then never be a goal state, and a current state
+        that is a goal state is handled by the early success branch in :meth:`.compute_reward`
+        instead. So dropping it changes nothing for the ordinary PPO/SAC pipeline -- verified by
+        the PBRS regression check in ``mimoEnv/goalenv_check.py``.
+
+        Under HER it is not unreachable, and that is why this method exists. HER relabels the
+        goal to a rotation MIMo actually reached mid-trajectory, and MIMo routinely drifts back
+        out of that rotation a few steps later. With the jump in place such a transition pays
+        ``pbrs_w * (-reward_success)``: measured -50002.0 for a goal of 0.40 and a drift from
+        0.45 to 0.38, which drives SAC's critic loss to ~4e7 within a few thousand steps.
+        Terminating episodes do not help, because they only ever terminate on the real goal.
+        """
+        return -np.abs(desired - achieved)
+
+    @staticmethod
+    def _info_column(info, key, default, n):
+        """ Pull a per-transition scalar out of an info dict, a sequence of them, or nothing.
+
+        HER hands over one info dict per batch element (as a numpy array of objects), the
+        environment step hands over a single dict, and the SB3 env checker hands over a
+        two-element array. Anything missing falls back to 'default', which is the live value.
+        """
+        fallback = np.full(n, np.asarray(default, dtype=np.float64).reshape(-1)[0]
+                           if np.size(default) else 0.0, dtype=np.float64)
+        if info is None:
+            return fallback
+        if isinstance(info, dict):
+            if key not in info:
+                return fallback
+            return np.full(n, np.asarray(info[key], dtype=np.float64).reshape(-1)[0])
+
+        entries = np.asarray(info, dtype=object).reshape(-1)
+        if entries.shape[0] != n:
+            return fallback
+        values = np.empty(n, dtype=np.float64)
+        for i, entry in enumerate(entries):
+            if isinstance(entry, dict) and key in entry:
+                values[i] = np.asarray(entry[key], dtype=np.float64).reshape(-1)[0]
+            else:
+                values[i] = fallback[i]
+        return values
+
+    def _compute_reward_intrinsic(self, achieved_goal, desired_goal, info):
+        """ The original live-state reward, kept for the 'intrinsic' goal function. """
         quad_ctrl_cost = self.compute_penalization()
 
-        # If the goal is reached, give a very high positive reward.
         if self.is_success(achieved_goal, desired_goal):
             return self.reward_success - quad_ctrl_cost
 
-        # Potential of current state.
         curr_potential = self.get_potential()
 
         if not self.pbrs:
             return curr_potential - quad_ctrl_cost
-        
+
         return self.pbrs_w * (curr_potential - self.pbrs_last_state_potential) - quad_ctrl_cost
     

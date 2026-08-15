@@ -35,8 +35,8 @@ for i in $(seq 0 5); do
 		"--morph_age=9" \
 		"--physio_age=9" \
 		"--pbrs_w=100" \
-		"--obs_noise=0.3" \
-		"--lr=0.0002" &
+		"--proprio_config=torque" \
+		"--lr=0.0003" &
 done
 
 # Wait until all ssh commands finished, i.e. all MIMo simulations are finished. Then, plot the results.
