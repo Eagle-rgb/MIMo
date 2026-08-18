@@ -43,7 +43,8 @@ import yaml
 import numpy as np
 
 from mimoEnv.envs.roll_over import TOUCH_PARAMS as ROLL_OVER_TOUCH_PARAMS
-from mimoEnv.envs.roll_over_callback import RollOverCallback
+from mimoEnv.envs.roll_over_callback import RollOverCallback, RollOverEvalCallback, \
+    GlobalStepCallback
 from mimoEnv.envs.morphological_curriculum import make_curriculum_callback
 from mimoEnv.envs.isr_callback import ISRCallback
 from stable_baselines3.common.callbacks import CallbackList
@@ -218,7 +219,8 @@ def test(wrapped_env, save_dir, model=None, render_video=False, render_frames=Fa
 
     wrapped_env.reset()
 
-def train(model, train_for, save_every, save_dir, isr, argparse_args, save_intermediate=False):
+def train(model, train_for, save_every, save_dir, isr, argparse_args, save_intermediate=False,
+          eval_callback=None, lr_state=None):
     """ Training function of a model.
 
     If 'isr' is active, then trains the model for 75% with 'isr' enabled and the remaining last 25%
@@ -232,6 +234,9 @@ def train(model, train_for, save_every, save_dir, isr, argparse_args, save_inter
         save_dir (str): The path to save the model.
         isr (bool): Activate Initial State Randomization?
         save_intermediate (bool): Save intermediate model at reaching 50% side lying success rate?
+        eval_callback: Optional RollOverEvalCallback. Runs the reported evaluation protocol
+            periodically and keeps the best model, since a run's final policy is not reliably
+            its best one.
     """ 
     counter = 0
     train_for_total = train_for
@@ -245,6 +250,12 @@ def train(model, train_for, save_every, save_dir, isr, argparse_args, save_inter
 
     if callback_morph:
         callbacks.append(callback_morph)
+
+    if eval_callback is not None:
+        callbacks.append(eval_callback)
+
+    if lr_state is not None:
+        callbacks.append(GlobalStepCallback(lr_state))
 
     while train_for > 0:
         counter += 1
@@ -495,8 +506,41 @@ An example is '251206_prone_linear_1e6_test'
     parser.add_argument('--goal_curriculum_margin', default=0.1, type=float,
                         help="How far the sampled goals may reach beyond that quantile. Also the "
                              "width of the initial range, before any episode has finished.")
+    parser.add_argument('--lr_schedule', default='constant', choices=['constant', 'linear'],
+                        help="'linear' decays the learning rate to 0 over the run (SB3 takes a "
+                             "callable of the remaining progress). Runs were observed losing a "
+                             "solved policy late -- one seed went from 100 %% roll at 800k to 0 %% "
+                             "at 1e6 -- and a rate that reaches 0 freezes the endpoint instead of "
+                             "letting it drift. Independent of whether the entropy coefficient is "
+                             "the cause, which is why it is the cheap first defence.")
+    parser.add_argument('--target_entropy', default=None, type=float,
+                        help="SAC's entropy target, default -dim(action) = -46 here. The "
+                             "automatic coefficient rises whenever the policy becomes more "
+                             "deterministic than this, so on a solved task it re-injects noise: "
+                             "across 18 seeds the gap between the best and the final checkpoint "
+                             "correlates with the rise of 'train/ent_coef' at r = +0.68, and the "
+                             "five collapsing seeds ended at 0.0153 against 0.0034 for the "
+                             "stable ones. A lower value (e.g. -92) permits convergence while "
+                             "keeping the automatic tuning. SAC only.")
+    parser.add_argument('--eval_every', default=0, type=int,
+                        help="Run a deterministic evaluation every N steps (0 = off) under the "
+                             "protocol of eval_rollover.py: ISR off, goal pinned to 0.95, no "
+                             "curriculum, episodes not cut short. Logs 'eval/*' and saves "
+                             "'model_best.zip' at the peak. Costs a second environment "
+                             "(~3.6 GB RSS) and about 4 %% wall clock at the defaults.")
+    parser.add_argument('--eval_episodes', default=20, type=int,
+                        help="Episodes per evaluation when --eval_every is set.")
+    parser.add_argument('--episode_steps', default=None, type=int,
+                        help=f"Episode horizon in steps, overriding the "
+                             f"{ROLL_OVER_EPISODE_STEPS}-step TimeLimit that "
+                             f"mimoEnv/__init__.py registers for MIMoRollOver-v0. Only the "
+                             f"roll_over environment reads this. Longer episodes give MIMo more "
+                             f"time per attempt but cost proportionally more simulation per "
+                             f"episode, and with --her they also lengthen the window the 'future' "
+                             f"strategy samples relabelled goals from. Stored in data.yml, so "
+                             f"eval_rollover.py evaluates a run at the horizon it was trained on.")
     parser.add_argument('--no_done_active', action='store_true',
-                        help="Do not terminate the episode on success; run the full 500 steps. "
+                        help="Do not terminate the episode on success; run the full episode. "
                              "Recommended with --her: a relabelled goal is reached mid-episode "
                              "in a trajectory that kept going, so the virtual transition is not "
                              "marked terminal and the critic bootstraps past it. The Fetch envs "
@@ -608,6 +652,40 @@ An example is '251206_prone_linear_1e6_test'
     goal_high = args.goal_high
     done_active = not args.no_done_active
 
+    # SB3 accepts either a float or a callable of the remaining progress (1.0 -> 0.0). That
+    # argument cannot be used here: train() calls learn() once per --save_every segment, and SB3
+    # recomputes the progress within each call, so the rate would saw-tooth back up at every
+    # checkpoint (measured: segment 1 ran 3e-4 -> 0, segment 2 restarted at 1.3e-4). The schedule
+    # therefore reads the model's global step count instead; 'lr_state' is filled in once the
+    # model exists.
+    lr_state = {'steps': 0, 'total': args.train_for}
+    if args.lr_schedule == 'linear':
+        base_lr = learning_rate
+
+        def learning_rate(progress_remaining, _base=base_lr, _state=lr_state):
+            total = _state['total']
+            if not total:
+                return progress_remaining * _base
+            return max(0.0, 1.0 - _state['steps'] / total) * _base
+
+    if args.target_entropy is not None and algorithm != 'SAC':
+        raise ValueError(
+            f"--target_entropy is a SAC parameter, got --algorithm={algorithm}. TD3 and DDPG "
+            f"have no entropy term, and PPO's is a fixed coefficient (--ent_coef upstream).")
+
+    # The horizon actually in force. gym.make's 'max_episode_steps' overrides the TimeLimit from
+    # the registration, so everything downstream has to read this rather than the constant.
+    episode_steps = args.episode_steps if args.episode_steps is not None \
+        else ROLL_OVER_EPISODE_STEPS
+
+    if args.episode_steps is not None:
+        if env_name != 'roll_over':
+            raise ValueError(
+                f"--episode_steps is only implemented for roll_over, got --env={env_name}. The "
+                f"other environments keep the horizon from their registration.")
+        if args.episode_steps < 1:
+            raise ValueError(f"--episode_steps must be at least 1, got {args.episode_steps}.")
+
     if use_her:
         if algorithm not in OFF_POLICY_ALGORITHMS:
             raise ValueError(
@@ -628,12 +706,12 @@ An example is '251206_prone_linear_1e6_test'
                   "relabelled transitions are not marked terminal and the critic bootstraps "
                   "past the virtual goal.")
         # HerReplayBuffer.sample() raises until at least one episode has finished, because it
-        # needs episode boundaries to pick a 'future' goal. The horizon here is the 500 steps
-        # from the TimeLimit in mimoEnv/__init__.py.
-        if args.learning_starts <= ROLL_OVER_EPISODE_STEPS:
-            args.learning_starts = 2 * ROLL_OVER_EPISODE_STEPS
+        # needs episode boundaries to pick a 'future' goal. The horizon is 'episode_steps',
+        # which --episode_steps may have moved away from the registered default.
+        if args.learning_starts <= episode_steps:
+            args.learning_starts = 2 * episode_steps
             print(f"--her set: raising --learning_starts to {args.learning_starts} "
-                  f"(must exceed the {ROLL_OVER_EPISODE_STEPS}-step episode horizon).")
+                  f"(must exceed the {episode_steps}-step episode horizon).")
 
     if (goal_low is None) != (goal_high is None):
         raise ValueError("Provide both --goal_low and --goal_high, or neither.")
@@ -729,6 +807,9 @@ An example is '251206_prone_linear_1e6_test'
     if env_name == 'roll_over':
         print(f"Using proprioception parameters: " + ','.join(proprio_params["components"]))
         env = gym.make(env_names[env_name], actuation_model=actuation_model,
+            # Overrides the TimeLimit from the registration. Passing the registered default back
+            # in is a no-op, so this is safe when --episode_steps was not given.
+            max_episode_steps=episode_steps,
             starting_position=roll_over_starting_position,
             goal_function=roll_over_goal_function,
             width=480, # always 480 regardless whether we render actuations or not.
@@ -817,15 +898,23 @@ An example is '251206_prone_linear_1e6_test'
         if load_model:
             model = RL.load(load_model, env, buffer_size=args.buffer_size)
         else:
-            model = RL("MultiInputPolicy", env,
-                    tensorboard_log=save_dir,
-                    buffer_size=args.buffer_size,
-                    train_freq=args.train_freq,
-                    gradient_steps=args.gradient_steps,
-                    learning_starts=args.learning_starts,
-                    replay_buffer_class=replay_buffer_class,
-                    replay_buffer_kwargs=replay_buffer_kwargs,
-                    verbose=1)
+            # 18.08.2026 'learning_rate' was missing here: --lr was silently ignored for every
+            # off-policy run and SB3's default of 3e-4 applied instead. It happens to equal the
+            # default of --lr, so every run so far is unaffected -- but --lr=1e-4 would have
+            # trained at 3e-4 while data.yml recorded 1e-4.
+            off_policy_kwargs = dict(
+                tensorboard_log=save_dir,
+                learning_rate=learning_rate,
+                buffer_size=args.buffer_size,
+                train_freq=args.train_freq,
+                gradient_steps=args.gradient_steps,
+                learning_starts=args.learning_starts,
+                replay_buffer_class=replay_buffer_class,
+                replay_buffer_kwargs=replay_buffer_kwargs,
+                verbose=1)
+            if args.target_entropy is not None:
+                off_policy_kwargs['target_entropy'] = args.target_entropy
+            model = RL("MultiInputPolicy", env, **off_policy_kwargs)
     else:
         if load_model:
             model = RL.load(load_model, env)
@@ -836,7 +925,9 @@ An example is '251206_prone_linear_1e6_test'
 
     # Save model metadata in model.
     yaml_data = {
-        'lr': learning_rate,
+        # args.lr, not 'learning_rate': with --lr_schedule the latter is a callable, and
+        # yaml.dump would write a '!!python/name:' tag that yaml.safe_load then refuses.
+        'lr': args.lr,
         'nopen': nopen,
         'pbrs': pbrs,
         'pbrs_w': pbrs_w,
@@ -877,10 +968,51 @@ An example is '251206_prone_linear_1e6_test'
         'goal_curriculum_quantile': args.goal_curriculum_quantile,
         'goal_curriculum_margin': args.goal_curriculum_margin,
         'no_done_active': args.no_done_active,
+        # The horizon in force, not args.episode_steps: eval_rollover.py reads this to evaluate
+        # a run at the length it was trained on, and 'None' would send it back to the default.
+        'episode_steps': episode_steps,
+        # Stability knobs. 'lr' above is the base rate; with a schedule it is the value at step 0.
+        'lr_schedule': args.lr_schedule,
+        'target_entropy': args.target_entropy,
+        'eval_every': args.eval_every,
+        'eval_episodes': args.eval_episodes,
         'achieved_goal_in_observation': achieved_goal_in_observation,
     }
     with open(f'{save_dir}/data.yml', 'w') as outfile:
         yaml.dump(yaml_data, outfile, default_flow_style=False)
+
+    # Second environment for the periodic evaluation, with the reported protocol baked in:
+    # ISR off (it inflates rho_max), goal pinned to the milestone rather than sampled, no
+    # curriculum (it would move the goal), and episodes never cut short so every episode gets
+    # the same number of chances. Costs another ~3.6 GB RSS, hence opt-in.
+    eval_callback = None
+    if args.eval_every > 0:
+        if env_name != 'roll_over':
+            raise ValueError(f"--eval_every is only implemented for roll_over, got "
+                             f"--env={env_name}.")
+        eval_env = gym.make(env_names[env_name], actuation_model=actuation_model,
+            max_episode_steps=episode_steps,
+            starting_position=roll_over_starting_position,
+            goal_function=roll_over_goal_function,
+            width=480, height=render_height, nopen=nopen,
+            isr=False,
+            pbrs=pbrs, render_mode='rgb_array',
+            touch_params=ROLL_OVER_TOUCH_PARAMS if touch else None,
+            achieved_goal_in_observation=achieved_goal_in_observation,
+            proprio_params=proprio_params, pbrs_w=pbrs_w, pen_factor=pen_factor,
+            intrinsic_goal=intrinsic_goal, intrinsic_goal_w=intrinsic_goal_w,
+            freeze_leg=freeze_leg, freeze_arm=freeze_arm,
+            success_at_side_lying=False,
+            sparse_reward=sparse_reward,
+            goal_low=0.95, goal_high=0.95,
+            goal_curriculum=False,
+            done_active=False,
+            age_physio=physio_age, age_morph=morph_age).unwrapped
+        eval_callback = RollOverEvalCallback(eval_env=eval_env,
+                                             eval_every=args.eval_every,
+                                             n_episodes=args.eval_episodes,
+                                             save_dir=save_dir,
+                                             episode_steps=episode_steps)
 
     if train_for > 0:
         if model is None:
@@ -891,7 +1023,11 @@ An example is '251206_prone_linear_1e6_test'
               save_every=save_every,
               isr=isr,
               argparse_args=args,
-              save_intermediate=save_intermediate)
+              save_intermediate=save_intermediate,
+              eval_callback=eval_callback,
+              lr_state=lr_state if args.lr_schedule != 'constant' else None)
+        if eval_callback is not None:
+            eval_callback.eval_env.close()
 
     if should_test:
         # Note here we do not check for 'model is None', because we allow it. If in testing the model is

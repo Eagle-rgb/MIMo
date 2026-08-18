@@ -1,79 +1,159 @@
-# MIMo, the Multimodal Infant Model 
+# MIMo — roll-over fork
 
-<img src="/docs/source/imgs/growth.png" width="400" align="right">
+Upstream [MIMo](https://mimo.readthedocs.io) is a Gymnasium + MuJoCo platform for a multimodal
+infant model (vision, touch, proprioception, vestibular). **This checkout is a research fork.**
+The default branch `v2/main` is upstream MIMo-v2; the working branch **`roll_over`** adds a
+roll-over learning experiment: MIMo starts prone or supine and has to roll onto his other side,
+with MIMo's morphological (body) age and physiological (actuation) age as independent variables,
+and — in the later part of the work — a sparse-reward + HER variant of the same task.
 
-MIMo is a platform for the research of the cognitive development of infants. It consists of a [Gymnasium](https://github.com/Farama-Foundation/Gymnasium) environment using [MuJoCo](https://mujoco.readthedocs.io) for the physical simulation and multiple modules that can produce simulated sensory input for vision, touch, proprioception and the vestibular system.
+Almost all fork-specific work lives in `mimoEnv/envs/roll_over.py`, `mimoEnv/illustrations.py`
+and `mimoEnv/eval_rollover.py`. **The manual for that stack is
+[`docs/roll_over.md`](docs/roll_over.md)** — read it before changing anything in the reward,
+goal or evaluation path. This file only gets you running.
 
-[//]: # (See "MIMo: A Multi-Modal Infant Model for Studying Cognitive Development in Humans and AIs".)
+## Install
 
-[A full API documentation is available on ReadTheDocs.](https://mimo.readthedocs.io)
+```bash
+conda activate mimo          # the reference environment, Python 3.12; the cluster scripts assume this name
+pip install -r requirements.txt
+pip install -e .
+```
 
-## Installation
+Versions in `requirements.txt` are pinned deliberately, `gymnasium==1.0.0` in particular:
+`MIMoEnv._initialize_simulation` must assign `self.model`/`self.data` itself *and* return them,
+which is version-dependent behaviour. Changing that pin has broken the fork repeatedly.
 
-- Clone this repository 
-- `pip install -r requirements.txt` 
-- `pip install -e .`
+Verify the install with the regression gate, not with a training run:
 
-## The MIMo environment
+```bash
+MUJOCO_GL=osmesa python mimoEnv/goalenv_check.py     # a couple of minutes, PASS/FAIL per check
+```
 
-The main class of the codebase is `MIMoEnv`. It is an openAI gym style environment, implementing all the relevant gym interfaces. It is the base class that is subclassed by all the experiment specific environments. It takes a MuJoCo XML and a series of parameter dictionaries for the sensory modalities and builds all the specific attributes, such as the observation space, from these initial inputs.
+`mimoEnv/showroom.py` opens an interactive viewer (registered with `render_mode="human"`, so it
+needs a display) and is a quick visual sanity check of the model, nothing more.
 
-The MuJoCo XMLs defines the simulated geometries and their degrees of freedom. We have set ours up in a modular fashion to avoid duplication as much as possible. MIMos kinematic tree is defined in `mimo_model.xml` while the associated actuators and sensors are located in `mimo_meta.xml`. A scene then includes both of these files. This allows multiple scenes to share the same base model with different actuation models and ancillary objects.
+**There is no test suite.** Files named `*test*` are experiments, not tests
+(`mimoActuation/muscle_testing.py`, `mimoEnv/isr_test.py`, `mimoEnv/envs/muscle_test.py`).
+`goalenv_check.py` is the one real check — run it after touching `compute_reward`, `is_success`,
+`_potential`, `sample_goal` or anything on the HER path.
 
-The action space of the gym environment is generated automatically from the underlying MuJoCo XML. Each actuator whose name starts with 'act:' is included in the action space. Each actuator has a range from -1 to 1, with full torque in opposite directions at -1 and 1 and a linear response in between.
+## Train
 
-The observation space is a dictionary type space built automatically based on the configuration of the sensor modules. An entry 'observation' is always included and always returns relative joint positions. Enabling more sensor modules adds extra entries. For example, each camera of the vision system will store its image in a separate entry in the observation space, named after the associated camera.
+`mimoEnv/illustrations.py` is the single train/eval CLI for all demo environments and defaults to
+`--env=roll_over`. There are no per-environment training scripts in this fork.
 
-### Observation spaces and `done`
+The shaped-reward baseline (PPO + potential-based reward shaping):
 
-By default, this environment follows the behaviour of the old `Robot` environments in gym. This means that the 'done' return value from `step` is always `False`, and the calling method has to figure out when to stop or reset. In addition, the observation space includes two entries with the desired and the currently achieved goal (populated by `sample_goal` and `get_achieved_goal`).
+```bash
+MUJOCO_GL=osmesa python mimoEnv/illustrations.py \
+    --train_for=1000000 --save_every=200000 \
+    --algorithm=PPO --pbrs --pbrs_w=100 \
+    --roll_over_starting_position=prone \
+    --goal_achievement_function=cos --pen_factor=0.02 \
+    --morph_age=9 --physio_age=9 \
+    --roll_over_model_path_auto --save_model=my_run
+```
 
-This behaviour can be changed with two parameters during initialization of the environment. 
-  1. `goals_in_observation` : If this parameter is `False`, the goal entries will not be included in the observation space. Set to `True` by default.
-  2. `done_active` : If this parameter is `True`, 'done' is `True` if either `is_success` or `is_failure` returns `True`. If set to `False`, 'done' is always `False`. By default, set to `False`. Note that this behaviour is defined in the `_is_done` function. If you overwrite this function you can ignore this parameter.
+The sparse-reward + HER configuration (SAC) is wrapped in a script, because it needs several
+flags that only make sense together:
 
-## Actuation and sensory modules
+```bash
+./run_her_sparse.sh                  # or: ./run_her_sparse.sh <name> <n_seeds>
+```
 
-We provide two different actuation models with different trade-offs between run time and accuracy. They can be swapped out without any other adjustments to the environment.
-All the sensor modules follow the same pattern. They are initialized with a MuJoCo gym environment and a dictionary of parameters and their observations can be collected by calling their `get_<modality>_obs` function. The return of this function is generally a single array containing the flattened/concatenated output. Modules can be disabled or reduced to a minimum by passing an empty dictionary. Each module also has an attribute `sensor_outputs` that stores the unflattened outputs as a dictionary. The parameter structure and workings of each module are described in more detail in the documentation.
+Models land in
+`models/roll_over/<yy-mm-dd>/<prone|supine>/<yy-mm-dd>_<prone|supine>_<save_model>/`, next to a
+TensorBoard directory (`PPO_0/`, `SAC_0/`, …) and `data.yml`, which records the run's
+hyperparameters and is read back by `--load_model`.
 
-## Sample Environments
+## Evaluate
 
-We provide several sample environments with some simple tasks for demonstration purposes. These come with both an openAI environment in `mimoEnv/envs` as well as simple training scripts using stable-baselines3, in `mimoEnv`. These environments include:
+Use `eval_rollover.py` for any number that goes into a write-up. `illustrations.py --test` runs a
+single episode and is a rendering tool, not a measurement.
 
-  1. `reach` - A stripped down version where MIMo is tasked with reaching for a ball hovering in front of him. By default, only the proprioceptive sensors are used. MIMo can only move his right arm and his head is manually fixed to track the ball. The initial position of both the ball and MIMo is slightly randomized.
-  2. `standup` - MIMo is tasked with standing up. At the start he is in a low crouch with his hands gripping the bars of a crib. Proprioception and the vestibular sensors are included by default.
-  3. `selfbody` - MIMo is sitting on the ground and rewarded for touching a specific body part with his right arm. The target body part is randomized each episode.
-  4. `catch` - A ball is dropped from a short height onto MIMo's outstretched arm. Episodes are completed successfully when MIMo holds onto the ball continuously for a full second.
+```bash
+MUJOCO_GL=osmesa python mimoEnv/eval_rollover.py \
+    --model=models/roll_over/<yy-mm-dd>/supine/<run_dir>/model_5.zip \
+    --starting_position=supine --episodes=50
+```
 
-## License
+It reads the run's `data.yml`, then forces the fixed protocol (ISR off, goal pinned to 0.95,
+no early termination, deterministic actions, success = per-episode maximum rotation ≥ 0.95).
+Each rule exists because of a specific measurement — see
+[`docs/roll_over.md`](docs/roll_over.md#6-evaluation-protocol).
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details
+To render instead of measure:
 
-## Citation
+```bash
+MUJOCO_GL=osmesa python mimoEnv/illustrations.py --test --render_video --render_frames \
+    --load_model=models/roll_over/<yy-mm-dd>/<prone|supine>/<run_dir>/model_1.zip
+```
 
-If you use MIMo for your research, please cite the following paper:
+## Things that will catch you in the first hour
+
+- **`MUJOCO_GL=osmesa`, not `egl`.** `egl` fails in the `mimo` conda env. `eval_rollover.py` and
+  `goalenv_check.py` set it themselves via `os.environ.setdefault`; `illustrations.py` does not.
+  (`mimoComposer/README.md` claims the opposite; it is wrong.)
+- **One MIMo env costs ~3.6 GB RSS** — that is the MuJoCo model, not the renderer and not the
+  replay buffer (measured identical with and without `render_mode`, and unchanged between a 100k
+  and a 200k buffer). On a 16 GB machine runs must be **sequential**; four in parallel were
+  OOM-killed. This is why `run_her_sparse.sh` loops instead of backgrounding.
+- **The last checkpoint is not reliably the best one.** One HER run collapsed after 600k steps
+  (critic loss 1 → 901) and its final model scored 2 % while its 600k checkpoint was far better.
+  Do not set `--save_every` equal to `--train_for` for off-policy runs; use `--save_every=200000`
+  and evaluate every checkpoint.
+- **Always pass `--starting_position` to `eval_rollover.py`.** The starting posture is
+  deliberately *not* stored in `data.yml`, so the script's fallback silently evaluates every run
+  as `supine`. A prone run scored against the supine reset is meaningless.
+- **`rollout/success_rate` in TensorBoard is not the roll rate.** It scores against the *sampled*
+  goal, which is as low as 0.25 under `--goal_low`. Read `rollout/ep_rho_max_mean` instead.
+
+## Repository layout
+
+| Path | What it is |
+|---|---|
+| `mimoEnv/envs/roll_over.py` | The roll-over environment. The centre of this fork. |
+| `mimoEnv/envs/roll_over_callback.py`, `isr_callback.py`, `morphological_curriculum.py` | Training callbacks: logging, ISR shutdown, embodiment swapping. |
+| `mimoEnv/illustrations.py` | The train/eval CLI (58 flags; reference table in the manual). |
+| `mimoEnv/eval_rollover.py` | The fixed evaluation protocol. |
+| `mimoEnv/goalenv_check.py` | Regression gate for the goal/reward/HER path. |
+| `mimoEnv/assets/roll_over/prone/` | 16 pre-generated age scenes, `scene_act_<physio>_body_<morph>.xml`. |
+| `mimoEnv/envs/mimo_env.py` | Upstream base class: Dict observation space, sensor modules, action space. |
+| `mimoProprioception/`, `mimoTouch/`, `mimoVision/`, `mimoVestibular/` | Upstream sensor modules. |
+| `mimoActuation/` | Upstream actuation models (spring-damper, muscle, frozen-limb variant). |
+| `mimoGrowth/` | Upstream age rescaling. **Bypassed** by roll-over — see the manual. |
+| `results/` | Standalone analysis scripts (`python results/<script>.py --date=… --suffix=…`). |
+| `rbi_*.sh` | Cluster launch scripts; the record of which sweeps were actually run. |
+| `docs/source/` | The upstream Sphinx API docs (`cd docs && make html`). |
+| `docs/roll_over.md` | This fork's manual. Standalone Markdown, not part of the Sphinx build. |
+
+`.gitignore` excludes `models*`, `*.csv`, `*.png`, `*.pdf`, `*.npy`, `png/`, `csv/`, `pdf/` —
+trained models and plots are local artifacts. It also excludes `CLAUDE.md`, `mimoComposer/` and
+`results/composer/`, so those exist only in a working copy and not in the repository.
+
+## License and citation
+
+MIT — see [LICENSE](LICENSE). If you use MIMo, cite the upstream papers:
+
 ```
 @article{mattern2024mimo,
   title={MIMo: A Multimodal Infant Model for Studying Cognitive Development},
-  author={Mattern, Dominik and Schumacher, Pierre and L{\'o}pez, Francisco M and Raabe, Marcel C and Ernst, Markus R and Aubret, Arthur and Triesch, Jochen},
+  author={Mattern, Dominik and Schumacher, Pierre and L{\'o}pez, Francisco M and Raabe, Marcel C
+          and Ernst, Markus R and Aubret, Arthur and Triesch, Jochen},
   journal={IEEE Transactions on Cognitive and Developmental Systems},
-  volume={16},
-  number={4},
-  pages={1291--1301},
-  year={2024},
-  publisher={IEEE}
+  volume={16}, number={4}, pages={1291--1301}, year={2024}, publisher={IEEE}
 }
 ```
 
-If you use any of the functionality of MIMo-v2, such as body growth, developing visual acuity, or sensorimotor delays, please also include the following citation:
+For body growth, developing visual acuity or sensorimotor delays (MIMo-v2), also cite:
+
 ```
 @inproceedings{lopez2025mimo,
   title={MIMo Grows! Simulating Body and Sensory Development in a Multimodal Infant Model},
-  author={L{\'o}pez, Francisco M and Lenz, Miles and Fedozzi, Marco G and Aubret, Arthur and Triesch, Jochen},
-  booktitle={2025 IEEE International Conference on Development and Learning (ICDL)},  
-  pages={1--6},
-  year={2025},
-  organization={IEEE}
+  author={L{\'o}pez, Francisco M and Lenz, Miles and Fedozzi, Marco G and Aubret, Arthur
+          and Triesch, Jochen},
+  booktitle={2025 IEEE International Conference on Development and Learning (ICDL)},
+  pages={1--6}, year={2025}, organization={IEEE}
 }
 ```

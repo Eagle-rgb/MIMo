@@ -271,6 +271,50 @@ def test_goal_curriculum():
     check("refused without a goal range", refused)
 
 
+def test_episode_horizon():
+    """--episode_steps must move the TimeLimit, and must not change anything when unset.
+
+    The horizon is enforced by the TimeLimit wrapper from the registration, so this is the one
+    section that must keep the wrapper instead of unwrapping it. A silently ignored override
+    would be invisible in training: episodes would just keep their old length while data.yml
+    claims otherwise.
+    """
+    print("\n11. Episode horizon (--episode_steps)")
+
+    def run_to_truncation(env, limit):
+        """Step with zero actions until the wrapper ends the episode. Returns the step count."""
+        env.reset(seed=0)
+        for step in range(1, limit + 2):
+            _, _, terminated, truncated, _ = env.step(np.zeros(env.action_space.shape))
+            if terminated or truncated:
+                return step, truncated
+        return None, False
+
+    params = dict(starting_position='supine', goal_function='cos', touch_params=None,
+                  pbrs=False, sparse_reward=True, pen_factor=0.02, isr=False,
+                  age_physio=9, age_morph=9, achieved_goal_in_observation=True,
+                  # Nothing may terminate early, or the horizon is not what ends the episode.
+                  goal_low=0.95, goal_high=0.95, done_active=False, render_mode='rgb_array')
+
+    env = gym.make('MIMoRollOver-v0', max_episode_steps=40, **params)
+    steps, truncated = run_to_truncation(env, 40)
+    check("override takes effect", steps == 40 and truncated,
+          f"episode ended after {steps} steps, truncated={truncated}, expected 40")
+    env.close()
+
+    # The registered default, which every existing run was trained under.
+    env = gym.make('MIMoRollOver-v0', **params)
+    default = env.spec.max_episode_steps
+    check("registered default is 500", default == 500, f"registration says {default}")
+    env.close()
+
+    # Passing the default back in is what illustrations.py does when --episode_steps is unset.
+    env = gym.make('MIMoRollOver-v0', max_episode_steps=500, **params)
+    check("passing the default back in is a no-op", env.spec.max_episode_steps == 500,
+          f"got {env.spec.max_episode_steps}")
+    env.close()
+
+
 if __name__ == '__main__':
     print("GoalEnv acceptance checks for MIMoRollOver-v0")
     test_sb3_env_checker()
@@ -283,6 +327,7 @@ if __name__ == '__main__':
     test_her_relabel_end_to_end()
     test_pbrs_bounded_under_relabelling()
     test_goal_curriculum()
+    test_episode_horizon()
 
     print()
     if FAILURES:

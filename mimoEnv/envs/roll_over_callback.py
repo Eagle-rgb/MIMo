@@ -86,3 +86,124 @@ class RollOverCallback(BaseCallback):
                 # Save the model ...
                 self.model.save(os.path.join(self.save_dir, "model_intermediate_90"))
         return True
+
+class RollOverEvalCallback(BaseCallback):
+    """ Periodic deterministic evaluation under the protocol from 'eval_rollover.py'.
+
+    Why this exists rather than SB3's own EvalCallback: SB3 scores the mean episode *reward*,
+    which under a sparse {0, -1} reward is dominated by how long MIMo took, and under HER is
+    computed against sampled goals. Neither is the milestone. This measures rho_max -- the
+    highest rotation reached anywhere in the episode -- against the pinned goal of 0.95, exactly
+    as the reported evaluation does, so the training curve and the reported number are the same
+    quantity.
+
+    It also fixes a measurement gap: checkpoints every 200k sample the run at five points, and
+    runs were observed peaking between them (one seed's optimum sat at 400k). The best model is
+    saved whenever rho_max improves, so the peak is kept rather than reconstructed afterwards.
+
+    The evaluation environment must be built with the protocol already applied -- ISR off, goal
+    pinned, no curriculum, episodes not terminating on success -- and must be the unwrapped
+    environment, since the horizon is enforced here.
+
+    Args:
+        eval_env: Unwrapped MIMoRollOverEnv configured per the evaluation protocol.
+        eval_every (int): Evaluate every this many training steps.
+        n_episodes (int): Episodes per evaluation.
+        save_dir (str): Where to write 'model_best.zip'. No best-model saving if None.
+        episode_steps (int): Episode horizon, matching the training environment.
+        seed0 (int): Episodes use seeds seed0..seed0+n_episodes-1, so every evaluation sees the
+            same start states and the curve is not noise from varying initial poses.
+    """
+
+    ROLL_THRESHOLD = 0.95
+    SIDE_LYING_THRESHOLD = 0.5
+
+    def __init__(self, eval_env, eval_every, n_episodes=20, save_dir=None, episode_steps=500,
+                 seed0=1000):
+        super().__init__()
+        self.eval_env = eval_env
+        self.eval_every = eval_every
+        self.n_episodes = n_episodes
+        self.save_dir = save_dir
+        self.episode_steps = episode_steps
+        self.seed0 = seed0
+        self.best_rho = -np.inf
+        self.best_step = None
+        self._next_eval = None
+
+    def _on_training_start(self):
+        # Anchor on the current step count: 'train()' calls learn() once per checkpoint segment
+        # with reset_num_timesteps=False, so num_timesteps keeps rising across segments.
+        if self._next_eval is None:
+            self._next_eval = self.model.num_timesteps + self.eval_every
+        print(f"Using RollOverEvalCallback: {self.n_episodes} episodes every "
+              f"{self.eval_every} steps, horizon {self.episode_steps}.")
+
+    def _run_episodes(self):
+        rho_max, rolled, side, first = [], [], [], []
+        for episode in range(self.n_episodes):
+            obs, _ = self.eval_env.reset(seed=self.seed0 + episode)
+            best = float(self.eval_env.get_achieved_goal_cos()[0])
+            step, hit, done = 0, None, False
+            while not done and step < self.episode_steps:
+                action, _ = self.model.predict(obs, deterministic=True)
+                obs, _, terminated, truncated, _ = self.eval_env.step(action)
+                step += 1
+                best = max(best, float(self.eval_env.get_achieved_goal_cos()[0]))
+                if hit is None and best >= self.ROLL_THRESHOLD:
+                    hit = step
+                done = terminated or truncated
+            rho_max.append(best)
+            rolled.append(1.0 if best >= self.ROLL_THRESHOLD else 0.0)
+            side.append(1.0 if best >= self.SIDE_LYING_THRESHOLD else 0.0)
+            first.append(hit if hit is not None else np.nan)
+        return np.array(rho_max), np.array(rolled), np.array(side), np.array(first, dtype=float)
+
+    def _on_step(self) -> bool:
+        if self.eval_every <= 0 or self.model.num_timesteps < self._next_eval:
+            return True
+        self._next_eval = self.model.num_timesteps + self.eval_every
+
+        rho_max, rolled, side, first = self._run_episodes()
+        self.logger.record("eval/rho_max_mean", float(rho_max.mean()))
+        self.logger.record("eval/rho_max_min", float(rho_max.min()))
+        self.logger.record("eval/roll_rate", float(rolled.mean()))
+        self.logger.record("eval/side_lying_rate", float(side.mean()))
+        finished = first[~np.isnan(first)]
+        if finished.size:
+            self.logger.record("eval/steps_to_roll", float(finished.mean()))
+
+        # Keep the peak. Runs collapse late without warning -- one seed went from 100 % roll at
+        # 800k to 0 % at 1e6 -- so the final model is not reliably the run's result.
+        if rho_max.mean() > self.best_rho:
+            self.best_rho = float(rho_max.mean())
+            self.best_step = self.model.num_timesteps
+            if self.save_dir is not None:
+                self.model.save(os.path.join(self.save_dir, "model_best"))
+        self.logger.record("eval/rho_max_best", self.best_rho)
+        return True
+
+    def _on_training_end(self):
+        if self.best_step is not None:
+            print(f"RollOverEvalCallback: best eval rho_max {self.best_rho:.3f} at step "
+                  f"{self.best_step}" + (f", saved as model_best.zip" if self.save_dir else ""))
+
+
+class GlobalStepCallback(BaseCallback):
+    """ Publishes the global step count into a plain dict, for the learning-rate schedule.
+
+    A schedule spanning the whole run cannot use SB3's 'progress_remaining': 'train()' calls
+    learn() once per checkpoint segment, and SB3 recomputes that fraction within each call, so
+    the rate saw-tooths back up at every checkpoint. Reading the step count directly fixes it,
+    but the schedule must not close over the model -- SB3 pickles the schedule when saving, and
+    a model reference drags a thread lock into the pickle ("cannot pickle '_thread.lock'").
+    Hence this indirection: the callback writes an int, the schedule reads an int.
+    """
+
+    def __init__(self, state):
+        super().__init__()
+        self.state = state
+
+    def _on_step(self) -> bool:
+        self.state['steps'] = self.model.num_timesteps
+        return True

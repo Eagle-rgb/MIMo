@@ -28,6 +28,10 @@ import mimoEnv  # noqa: F401  (registers MIMoRollOver-v0)
 
 SIDE_LYING_THRESHOLD = 0.5
 ROLL_THRESHOLD = 0.95
+# Horizon registered for MIMoRollOver-v0 in mimoEnv/__init__.py. Runs trained with
+# --episode_steps record their own in data.yml and are evaluated at that length instead:
+# a policy that needs 300 steps to roll fails every episode if scored over 200.
+DEFAULT_EPISODE_STEPS = 500
 
 
 def load_run_config(model_path):
@@ -100,7 +104,8 @@ def load_policy(model_path, algorithm, env):
     return cls.load(model_path, env=env, custom_objects={'buffer_size': 1, 'learning_starts': 0})
 
 
-def evaluate(model, env, episodes, seed0=1000, policy_goal=None):
+def evaluate(model, env, episodes, seed0=1000, policy_goal=None,
+             episode_steps=DEFAULT_EPISODE_STEPS):
     """Roll out the policy and measure rho_max, the highest rotation reached in the episode.
 
     'policy_goal' lies to the policy: the environment keeps its own desired_goal for reward and
@@ -110,6 +115,9 @@ def evaluate(model, env, episodes, seed0=1000, policy_goal=None):
 
     Only 'desired_goal' is replaced. 'achieved_goal' and every sensor reading stay real, and
     rho_max is measured from the simulation, so the score is honest even though the input is not.
+
+    'episode_steps' is the horizon. build_env returns the unwrapped environment, so the TimeLimit
+    from the registration is gone and this loop is what ends an episode.
     """
     rolled, side, rho_max, steps = [], [], [], []
     for episode in range(episodes):
@@ -118,7 +126,7 @@ def evaluate(model, env, episodes, seed0=1000, policy_goal=None):
         step = 0
         first_success = None
         done = False
-        while not done and step < 500:
+        while not done and step < episode_steps:
             if policy_goal is not None:
                 obs = dict(obs)
                 obs['desired_goal'] = np.full_like(np.asarray(obs['desired_goal'], dtype=np.float64),
@@ -146,6 +154,11 @@ def main():
                         choices=['prone', 'supine'],
                         help="Defaults to the position recorded in data.yml, else supine.")
     parser.add_argument('--label', default=None, help="Name to print for this run.")
+    parser.add_argument('--episode_steps', default=None, type=int,
+                        help="Episode horizon. Defaults to the one recorded in the run's "
+                             "data.yml, else 500. Override only to compare runs trained at "
+                             "different horizons on a common one -- otherwise a policy is scored "
+                             "over a length it never saw.")
     parser.add_argument('--goal', default=None, type=float,
                         help="Target rotation fed to the policy as desired_goal. Defaults to "
                              "0.95, or to 0.5 for runs trained with --side_lying. The policy is "
@@ -175,6 +188,9 @@ def main():
     else:
         goal = ROLL_THRESHOLD
 
+    # A run trained with --episode_steps is scored over its own horizon, not the default.
+    episode_steps = args.episode_steps or config.get('episode_steps') or DEFAULT_EPISODE_STEPS
+
     env = build_env(config, start, goal)
     model = load_policy(args.model, algorithm, env)
     label = args.label or os.path.basename(os.path.dirname(args.model))
@@ -183,21 +199,24 @@ def main():
         values = parse_sweep(args.policy_goal_sweep)
         print()
         print(f"run                 : {label}")
-        print(f"episodes            : {args.episodes} per row (deterministic, ISR off, {start})")
+        print(f"episodes            : {args.episodes} per row (deterministic, ISR off, {start}, "
+              f"{episode_steps} steps)")
         print(f"env goal            : {goal:.2f} (fixed; rho_max is measured from the simulation, "
               f"so it does not depend on this)")
         print()
         print(f"{'fed goal':>9}  {'roll':>6}  {'side':>6}  {'rho_max mean':>13}  {'min':>6}  "
               f"{'max':>6}")
         for value in values:
-            r = evaluate(model, env, args.episodes, policy_goal=value)
+            r = evaluate(model, env, args.episodes, policy_goal=value,
+                         episode_steps=episode_steps)
             print(f"{value:>9.2f}  {r['rolled'].mean() * 100:>5.0f}%  {r['side'].mean() * 100:>5.0f}%"
                   f"  {r['rho_max'].mean():>13.3f}  {r['rho_max'].min():>6.3f}  "
                   f"{r['rho_max'].max():>6.3f}")
         env.close()
         return
 
-    results = evaluate(model, env, args.episodes, policy_goal=args.policy_goal)
+    results = evaluate(model, env, args.episodes, policy_goal=args.policy_goal,
+                       episode_steps=episode_steps)
     env.close()
 
     finished = results['steps'][~np.isnan(results['steps'])]
@@ -205,7 +224,8 @@ def main():
     print(f"run                 : {label}")
     print(f"algorithm / her     : {algorithm} / {config.get('her', False)}")
     print(f"reward              : {'sparse' if config.get('sparse_reward') else ('pbrs' if config.get('pbrs') else 'distance')}")
-    print(f"episodes            : {args.episodes} (deterministic, ISR off, goal={goal:.2f}, {start})")
+    print(f"episodes            : {args.episodes} (deterministic, ISR off, goal={goal:.2f}, "
+          f"{start}, {episode_steps} steps)")
     if args.policy_goal is not None:
         print(f"policy was fed      : desired_goal={args.policy_goal:.2f} (constant -- the score "
               f"below is still measured against {goal:.2f})")

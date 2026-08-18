@@ -12,7 +12,7 @@ from utils import DATE_FORMAT, valid_date
 
 # --- Konfiguration ---
 BASE_DIR = "."
-TAGS_TO_LOAD = ["rollout/ep_rew_mean", "rollout/success_rate", "rollout/side_lying_success_rate", "rollout/ctrl_cost"]
+TAGS_TO_LOAD = ["rollout/ep_rew_mean", "rollout/success_rate", "rollout/side_lying_success_rate", "rollout/ctrl_cost", "rollout/ep_rho_max_mean"]
 N_POINTS = 500  # Auflösung der X-Achse
 
 def get_model_training_data_aggregated(dates, suffixes, haltungen, tags, xmax):
