@@ -1,0 +1,130 @@
+{% extends "base.html" %}
+{% from "_macros.html" import rho_meter, progress_meter with context %}
+{% block title %}{{ run.model_name }} &middot; MIMo Lab{% endblock %}
+
+{% block body %}
+<main class="main" style="max-width:76rem;margin:0 auto">
+
+  <div class="pagehead">
+    <div>
+      <h1>{{ run.model_name }}{% if run.seed_idx is not none %} <span style="color:var(--ink-faint)">#{{ run.seed_idx }}</span>{% endif %}</h1>
+      <p class="sub mono">{{ run.run_id }}</p>
+    </div>
+    <div class="actions">
+      <span class="chip {{ run.posture }}">{{ run.posture }}</span>
+      <span class="chip {{ run.state }}">{{ run.state }}</span>
+      <a class="btn sm" href="/analysis?run={{ run.run_id|urlencode }}">Analyse</a>
+      <button class="btn sm" type="button" data-tb-runs="{{ run.run_id }}">TensorBoard</button>
+    </div>
+  </div>
+
+  <div class="chartgrid">
+    <div>
+      <div class="panel">
+        <h2>Headline</h2>
+        <p class="sub">Best <code>rollout/ep_rho_max_mean</code> reached, against the 0.95 roll threshold.</p>
+        {{ rho_meter(run.best_rho) }}
+        <div style="margin-top:.7rem">{{ progress_meter(run) }}</div>
+        <dl class="kv" style="margin-top:.9rem">
+          <dt>final <span class="caseless">&rho;</span></dt><dd>{{ '%.3f'|format(run.final_rho) if run.final_rho is not none else '--' }}</dd>
+          <dt>steps</dt><dd>{{ human_steps(run.last_step) }} / {{ human_steps(run.num_train) }}</dd>
+          <dt>horizon</dt><dd>{{ run.episode_steps or 500 }}{% if not run.episode_steps %} (default){% endif %}</dd>
+          <dt>path</dt><dd>{{ run.path }}</dd>
+        </dl>
+      </div>
+
+      <div class="panel">
+        <h2>Configuration</h2>
+        <p class="sub">As recorded in <code>data.yml</code>, with the <code>age</code> shim applied.</p>
+        <dl class="kv">
+          {% for key, value in run.yaml_parsed.items()|sort %}
+            <dt>{{ key }}</dt><dd>{{ value }}</dd>
+          {% endfor %}
+        </dl>
+      </div>
+    </div>
+
+    <div>
+      <div class="panel">
+        <h2>Evaluate</h2>
+        <p class="sub">Runs <code>eval_rollover.py</code> &mdash; ISR off, goal pinned, deterministic.
+          Queued one at a time; each env is ~3.6&nbsp;GB.</p>
+        {% if not run.checkpoint_list %}
+          <div class="empty" style="padding:1.2rem"><b>No checkpoints saved.</b>Nothing to evaluate yet.</div>
+        {% else %}
+        <form class="form" data-eval-form>
+          <input type="hidden" name="run_id" value="{{ run.run_id }}">
+          <div class="fieldrow">
+            <div class="field">
+              <label for="ck">Checkpoint</label>
+              <select id="ck" name="checkpoint">
+                {% for c in run.checkpoint_list %}<option value="{{ c }}" {% if loop.last %}selected{% endif %}>{{ c }}</option>{% endfor %}
+              </select>
+            </div>
+            <div class="field">
+              <label for="ep">Episodes</label>
+              <input id="ep" type="number" name="episodes" value="50" min="1" max="500">
+            </div>
+            <div class="field">
+              <label for="gs">Goal sweep (optional)</label>
+              <input id="gs" type="text" name="policy_goal_sweep" placeholder="0.25:0.95:0.05">
+            </div>
+          </div>
+          <div>
+            <button class="btn primary sm" type="submit">Queue evaluation</button>
+            <span class="hint mono" style="font-size:.68rem;color:var(--ink-faint)" data-eval-msg></span>
+          </div>
+        </form>
+        {% endif %}
+      </div>
+
+      {% if run.evals %}
+      <div class="panel">
+        <h2>Results</h2>
+        <p class="sub">Roll rate is &rho;<sub>max</sub> &ge; 0.95, aggregated per episode.</p>
+        <div class="tablewrap">
+        <table class="runs">
+          <thead><tr><th>Checkpoint</th><th>Fed goal</th><th>Roll</th><th>Side</th><th><span class="caseless">&rho;</span> mean</th><th>Steps</th><th>When</th></tr></thead>
+          <tbody>
+          {% for e in run.evals %}
+            <tr>
+              <td class="mono runmeta">{{ e.checkpoint }}</td>
+              <td class="num runmeta">{{ '%.2f'|format(e.policy_goal) if e.policy_goal is not none else 'real' }}</td>
+              <td class="num"><b>{{ (e.rolled * 100)|round|int }}%</b></td>
+              <td class="num runmeta">{{ (e.side * 100)|round|int }}%</td>
+              <td class="num runmeta">{{ '%.3f'|format(e.rho_mean) }}</td>
+              <td class="num runmeta">{{ e.steps_mean|round|int if e.steps_mean else '--' }}</td>
+              <td class="runmeta">{{ human_age(e.created_at) }}</td>
+            </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+        </div>
+      </div>
+      {% endif %}
+
+      {% if sweep %}
+      <div class="panel">
+        <h2>Goal response</h2>
+        <p class="sub">What the policy does when fed a <code>desired_goal</code> it was not asked for.</p>
+        <div class="chart"><img data-chart="/api/plot/goal_response.png?run={{ run.run_id|urlencode }}&amp;checkpoint={{ run.checkpoint_list[-1] }}" alt="Goal response curve"></div>
+      </div>
+      {% endif %}
+    </div>
+  </div>
+
+  <div class="panel" style="margin-top:.9rem">
+    <h2>Training curves</h2>
+    <p class="sub">This run, and its {{ siblings|length - 1 }} sibling seed{{ '' if siblings|length == 2 else 's' }}.</p>
+    <div class="chartgrid">
+      {% for tag in ['rollout/ep_rho_max_mean', 'rollout/ep_rew_mean'] %}
+        {% if tag in run.tags %}
+        <div class="chart"><img alt="{{ tag }}"
+          data-chart="/api/plot/curve.png?tag={{ tag|urlencode }}{% for s in siblings %}&amp;run={{ s.run_id|urlencode }}{% endfor %}"></div>
+        {% endif %}
+      {% endfor %}
+    </div>
+  </div>
+
+</main>
+{% endblock %}

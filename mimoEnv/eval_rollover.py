@@ -16,7 +16,9 @@ The protocol, and why each rule is there:
 Reads the run's own data.yml so the evaluation environment matches how the model was trained.
 """
 import argparse
+import json
 import os
+import re
 
 os.environ.setdefault("MUJOCO_GL", "osmesa")
 
@@ -146,6 +148,47 @@ def evaluate(model, env, episodes, seed0=1000, policy_goal=None,
                 rho_max=np.array(rho_max), steps=np.array(steps, dtype=float))
 
 
+def _row(results, policy_goal=None):
+    """One result row, in the same numbers the table prints."""
+    finished = results['steps'][~np.isnan(results['steps'])]
+    return {
+        'policy_goal': policy_goal,
+        'rolled': float(results['rolled'].mean()),
+        'side': float(results['side'].mean()),
+        'rho_mean': float(results['rho_max'].mean()),
+        'rho_min': float(results['rho_max'].min()),
+        'rho_max': float(results['rho_max'].max()),
+        'steps_mean': float(finished.mean()) if finished.size else None,
+        'steps_std': float(finished.std()) if finished.size else None,
+        'steps_n': int(finished.size),
+    }
+
+
+def write_json(path, payload):
+    if not path:
+        return
+    directory = os.path.dirname(os.path.abspath(path))
+    if directory:
+        os.makedirs(directory, exist_ok=True)
+    with open(path, 'w') as fh:
+        json.dump(payload, fh, indent=2)
+
+
+def starting_position_from_path(model_path):
+    """Recover the starting posture from the save path.
+
+    --roll_over_model_path_auto writes models/roll_over/<date>/<posture>/<date>_<posture>_<name>/,
+    so the posture appears both as a directory component and in the run directory's name. Returns
+    None when neither is present rather than guessing.
+    """
+    parts = os.path.abspath(model_path).split(os.sep)
+    for part in reversed(parts):
+        for posture in ('prone', 'supine'):
+            if part == posture or re.search(rf'(^|[_-]){posture}([_-]|$)', part):
+                return posture
+    return None
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--model', required=True, help="Path to model_*.zip")
@@ -176,11 +219,22 @@ def main():
                              "comma-separated list ('0.05,0.5,2.0') or 'low:high:step' "
                              "('0.25:0.95:0.05'). Prints one row per value. Locates the point "
                              "where goal conditioning stops working.")
+    parser.add_argument('--json', default=None, type=str,
+                        help="Also write the results to this path as JSON. The printed table is "
+                             "for reading; this is for tooling (mimolab stores it in its index). "
+                             "Both carry the same numbers.")
     args = parser.parse_args()
 
     config = load_run_config(args.model)
     algorithm = config.get('algorithm', 'SAC')
-    start = args.starting_position or config.get('roll_over_starting_position', 'supine')
+    # 19.08.2026 'roll_over_starting_position' is deliberately not stored in data.yml (it
+    # describes the invocation, not the model), so config.get() here always missed and every
+    # prone run was silently evaluated as supine -- 198 checkpoints in models/ are affected.
+    # The save path does record the posture, so read it from there before falling back.
+    start = (args.starting_position
+             or config.get('roll_over_starting_position')
+             or starting_position_from_path(args.model)
+             or 'supine')
     if args.goal is not None:
         goal = args.goal
     elif config.get('side_lying', False):
@@ -194,6 +248,13 @@ def main():
     env = build_env(config, start, goal)
     model = load_policy(args.model, algorithm, env)
     label = args.label or os.path.basename(os.path.dirname(args.model))
+
+    payload = {'run': label, 'model': os.path.abspath(args.model), 'algorithm': algorithm,
+               'her': bool(config.get('her', False)),
+               'reward': 'sparse' if config.get('sparse_reward') else (
+                   'pbrs' if config.get('pbrs') else 'distance'),
+               'starting_position': start, 'goal': goal, 'episodes': args.episodes,
+               'episode_steps': episode_steps, 'rows': []}
 
     if args.policy_goal_sweep is not None:
         values = parse_sweep(args.policy_goal_sweep)
@@ -212,7 +273,9 @@ def main():
             print(f"{value:>9.2f}  {r['rolled'].mean() * 100:>5.0f}%  {r['side'].mean() * 100:>5.0f}%"
                   f"  {r['rho_max'].mean():>13.3f}  {r['rho_max'].min():>6.3f}  "
                   f"{r['rho_max'].max():>6.3f}")
+            payload['rows'].append(_row(r, policy_goal=value))
         env.close()
+        write_json(args.json, payload)
         return
 
     results = evaluate(model, env, args.episodes, policy_goal=args.policy_goal,
@@ -236,6 +299,9 @@ def main():
         print(f"steps to roll       : {finished.mean():.1f} +- {finished.std():.1f} (n={finished.size})")
     else:
         print(f"steps to roll       : n/a (no episode reached the goal)")
+
+    payload['rows'].append(_row(results, policy_goal=args.policy_goal))
+    write_json(args.json, payload)
 
 
 if __name__ == '__main__':

@@ -25,23 +25,23 @@ class RollOverCallback(BaseCallback):
         self.end_chest_deg = deque(maxlen=window_size)
         self.side_lying_success = deque(maxlen=window_size)
         self.intermediate_90_saved = False
+
+        # Buffer of aggregated (sum) control cost in episodes. Before, we stored the mean control cost over an episode,
+        # but this favors long episode and so it skews the control cost result so that policies rolling over longer
+        # episodes have less control cost in the log.
         self.raw_ctrl_cost = deque(maxlen=window_size)
         # Highest rotation reached anywhere in the episode, as opposed to 'side_lying' below,
         # which only looks at the final step. This is the quantity 'eval_rollover.py' reports, so
         # logging it makes the training curve comparable to the evaluation numbers.
         self.episode_rho_max = deque(maxlen=window_size)
 
-        # Aggregated raw control cost in an episode. Is reset to 0 after each episode. Mean
-        # is calculated by dividing the sum by 'self.episode_stp_cnt' - a counter of how many
-        # entries we have added to 'aggr_raw_ctrl_cost_in_episode'.
+        # Aggregated raw control cost in an episode. Is reset to 0 after each episode.
         self.aggr_raw_ctrl_cost_in_episode=0
-        self.episode_stp_cnt=0
 
     def _on_step(self) -> bool:
         # We are in a DummyVecEnv
         for i, info in enumerate(self.locals["infos"]):
             self.aggr_raw_ctrl_cost_in_episode += info['raw_ctrl_cost']
-            self.episode_stp_cnt += 1
 
             # Is the episode finished?
             if "episode" in info:
@@ -50,14 +50,15 @@ class RollOverCallback(BaseCallback):
                 chest = info['chest_deg']
                 side_lying_success = info['side_lying']
 
-                # Calculate mean control cost in this episode and reset aggregation and step count.
-                if self.episode_stp_cnt > 0:
-                    self.raw_ctrl_cost.append(self.aggr_raw_ctrl_cost_in_episode / self.episode_stp_cnt)
-                else:
-                    self.raw_ctrl_cost.append(0)
+                # Aggregated control cost of this episode, then reset the aggregation. No step
+                # count is involved any more: this is deliberately the sum, not the mean, because
+                # the mean rewarded long episodes (see the note in '_on_training_start'). The
+                # 'episode_stp_cnt > 0' guard that used to sit here was left behind by that
+                # change and read an attribute that no longer exists, crashing at the first
+                # episode end.
+                self.raw_ctrl_cost.append(self.aggr_raw_ctrl_cost_in_episode)
 
                 self.aggr_raw_ctrl_cost_in_episode = 0
-                self.episode_stp_cnt = 0
 
                 self.end_hip_deg.append(hip)
                 self.end_chest_deg.append(chest)

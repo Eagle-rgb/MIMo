@@ -62,6 +62,22 @@ flags that only make sense together:
 ./run_her_sparse.sh                  # or: ./run_her_sparse.sh <name> <n_seeds>
 ```
 
+The **intrinsic-goal** variant replaces the hand-designed rotation target with one MIMo can
+actually sense — six joint angles plus the vestibular accelerometer, instead of the root free
+joint that proprioception does not report:
+
+```bash
+MUJOCO_GL=osmesa python mimoEnv/illustrations.py \
+    --algorithm=SAC --goal_achievement_function=intrinsic \
+    --her --sparse_reward --no_done_active \
+    --roll_over_starting_position=prone --roll_over_model_path_auto \
+    --train_for=1000000 --save_every=200000 --save_model=intrinsic_her
+```
+
+`--intrinsic_goal_eps` (the success radius) has **not** been calibrated yet; read
+[`docs/roll_over.md` §3.4](docs/roll_over.md#34-the-intrinsic-goal-function--a-non-scalar-non-extrinsic-goal)
+before trusting a number from it.
+
 Models land in
 `models/roll_over/<yy-mm-dd>/<prone|supine>/<yy-mm-dd>_<prone|supine>_<save_model>/`, next to a
 TensorBoard directory (`PPO_0/`, `SAC_0/`, …) and `data.yml`, which records the run's

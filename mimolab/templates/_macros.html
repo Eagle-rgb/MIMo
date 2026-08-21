@@ -1,0 +1,31 @@
+{% macro rho_meter(value) -%}
+  {%- if value is none -%}
+    <span class="rho empty"><span class="track"><span class="tick"></span></span><span class="val">--</span></span>
+  {%- else -%}
+    <span class="rho" title="best rollout/ep_rho_max_mean = {{ '%.3f'|format(value) }} (roll threshold 0.95)">
+      <span class="track">
+        <span class="fill" style="width: {{ (([value, 0]|max), 1)|min * 100 }}%" data-rolled="{{ 1 if value >= 0.95 else 0 }}"></span>
+        <span class="tick"></span>
+      </span>
+      <span class="val">{{ '%.2f'|format(value) }}</span>
+    </span>
+  {%- endif -%}
+{%- endmacro %}
+
+{% macro progress_meter(run) -%}
+  {%- set p = progress(run) -%}
+  {%- if p is none -%}
+    <span class="prog"><span class="val">{{ human_steps(run.last_step) }}</span></span>
+  {%- else -%}
+    <span class="prog" title="{{ run.last_step }} of {{ run.num_train }} steps">
+      <span class="track"><span class="fill" style="width: {{ (p * 100)|round(1) }}%"></span></span>
+      <span class="val">{{ (p * 100)|round|int }}%</span>
+    </span>
+  {%- endif -%}
+{%- endmacro %}
+
+{% macro sort_link(key, label, params) -%}
+  {%- set active = (params.get('sort') or 'date') == key -%}
+  {%- set nxt = 'asc' if (active and params.get('dir') != 'asc') else ('desc' if active else 'desc') -%}
+  <a href="#" data-sort="{{ key }}" data-dir="{{ nxt }}" {% if active %}data-active="1"{% endif %}>{{ label|safe }}{% if active %} {{ '&uarr;'|safe if params.get('dir') == 'asc' else '&darr;'|safe }}{% endif %}</a>
+{%- endmacro %}

@@ -65,6 +65,121 @@ TOUCH_PARAMS = {
 # observation was observed in and writes the observation to disk.
 TEST_INTRINSIC_GOALS_CREATION=False
 
+# 19.08.2026 The "non-scalar, non-extrinsic" goal.
+#
+# Every other goal function here ('angle', 'cos') is computed from the first 7 entries of
+# 'data.qpos', i.e. from the root free joint. That is the body's absolute orientation in the world,
+# and MIMo cannot sense it: proprioception only reports joints named 'robot:*', which excludes the
+# free joint, so the quantity being optimised is not present in the observation at all. The goal
+# below is built exclusively from things MIMo does observe:
+#
+#   * the joint angles of the six joints listed in 'INTRINSIC_GOAL_JOINTS' -- all of them 1-DoF
+#     hinges, so one scalar each. These are exactly the values the 'Joint' sliders in
+#     'mujoco.viewer' write: 'data.qpos[model.jnt_qposadr[joint_id]]', in radians. The identical
+#     numbers are already inside 'obs["observation"]' (see 'SimpleProprioception'), which is the
+#     whole point -- nothing new is being sensed, the goal is just a projection of the observation.
+#   * one or more components of the vestibular accelerometer, 'obs["vestibular"][:3]'. This is the
+#     only part of the goal that distinguishes prone from supine: the six joint angles are all
+#     satisfiable without rolling at all, and measured across resets they barely move between the
+#     two postures (hip_bend1 -0.32 prone vs -0.25 supine, in the normalised units below).
+#
+#     19.08.2026 The axis is **x**, not z. The accelerometer reports in the *site's local frame*,
+#     and the 'vestibular' site sits on the head with its local x axis pointing along world +z --
+#     the same convention as this module's own 'get_dot_local_x_to_global_z'. Measured at reset:
+#     acc = [-9.74, -0.02, +0.37] prone against [+9.58, -0.10, -0.48] supine. Component z is
+#     within noise of zero in both postures, so the original plan of using it would have produced
+#     a goal that cannot tell prone from supine at all.
+#
+# Deliberately NOT the actuator state ('actuation_model.observations()'): that is the motor
+# command, not the sensed configuration, so a goal defined on it could be reached by emitting the
+# right control signal while lying perfectly still.
+# 20.08.2026 The 'gravity' goal function -- the successor to 'intrinsic', which does not work
+# (see docs/roll_over.md 3.4 for the measurements that killed it).
+#
+# It estimates the direction of gravity in MIMo's HIP frame and takes its x component. That is the
+# same quantity 'get_dot_local_x_to_global_z("hip")' returns (+1 supine, -1 prone), but
+# reconstructed from things MIMo can sense instead of read off the root free joint:
+#
+#     t = 0, MIMo demonstrably at rest:  g_site <- normalize(accelerometer)
+#     every step, gyroscope only:        g_site <- rotate(g_site, -omega * dt)
+#     goal:                              (R_hip^T R_site @ g_site)[0]
+#
+# Why each of the three defects of 'intrinsic' disappears:
+#
+#   * Shaking. Linear acceleration does not enter the integration at all, so there is nothing to
+#     forge. The old goal could be driven 77% of the way to the target while lying still.
+#   * Head turning. Self-cancelling rather than merely counterweighted: turning the head makes the
+#     gyroscope rotate 'g_site' by exactly the amount that leaves 'R_rel @ g_site' unchanged. The
+#     joint-angle targets that used to serve this purpose were measured to be ~2x too weak.
+#   * Anti-correlation. The joints are no longer goal dimensions; they appear only in the frame
+#     transform, which is where they belong.
+#
+# The root free joint cancels out of 'R_hip^T R_site' (measured residual 0.017 deg), so this stays
+# non-extrinsic. Validated offline before implementation over 14 recorded episodes: correlation
+# with the truth 0.9991 on a policy that rolls, drift 0.004 over a full 250-step episode, and the
+# estimate stays at +0.995 for the policy that games the old goal.
+
+
+# 21.08.2026 Which body frames the gravity direction is expressed in. Both, not just the hip:
+# a hip-only version was trained for 1M steps and plateaued at rho 0.385 with the hip at 101.9 deg
+# and the chest at 42.5 deg -- MIMo twists the pelvis and leaves the torso lying. That is the same
+# failure the 'cos' goal ran into historically and fixed the same way; see the 'compute_reward_v1'
+# docstring. Kept as two separate dimensions rather than averaged, because an average cannot tell
+# (hip -1, chest +1) from (hip 0, chest 0), while the vector distance penalises the gap directly.
+GRAVITY_GOAL_BODIES = ("hip", "chest")
+
+
+def rotate_by_angular_velocity(v, omega, dt):
+    """ Rotate 'v' by '-omega * dt' (Rodrigues), keeping it a unit vector.
+
+    'v' is a WORLD-fixed direction expressed in a ROTATING frame, so the transport theorem gives
+    dv/dt = -omega x v: if the frame turns by +omega, the coordinates of a fixed vector in it turn
+    by -omega. MuJoCo's gyro reports omega of the site in the site's own frame, which is exactly
+    the omega this needs -- no conversion.
+
+    Rodrigues is the closed-form exact solution for constant omega over the interval, not an Euler
+    step; the only error left is that omega is not really constant within one 10 ms sample.
+    """
+    magnitude = np.linalg.norm(omega)
+    theta = magnitude * dt
+    if theta < 1e-12:
+        return v
+    k = -omega / magnitude
+    rotated = (v * np.cos(theta) + np.cross(k, v) * np.sin(theta)
+               + k * np.dot(k, v) * (1.0 - np.cos(theta)))
+    return rotated / np.linalg.norm(rotated)
+
+
+INTRINSIC_GOAL_JOINTS = [
+    "robot:head_swivel",
+    "robot:head_tilt_side",
+    "robot:head_tilt",
+    "robot:hip_lean1",
+    "robot:hip_rot1",
+    "robot:hip_bend1",
+]
+
+# Gravity, in m/s^2, used to bring the accelerometer into the same [-1, 1] range as the
+# range-normalised joint angles. Without this the raw units are radians (hip_rot1 spans +-0.31)
+# against m/s^2 (acc_x spans +-9.81) and a plain euclidean distance is ~97% accelerometer.
+INTRINSIC_ACC_SCALE = 9.81
+
+# Which accelerometer components go into the goal vector, as a subset of 'xyz'. See the axis note
+# above for why the default is 'x' alone.
+INTRINSIC_ACC_AXES = 'x'
+_ACC_AXIS_INDEX = {'x': 0, 'y': 1, 'z': 2}
+
+
+def parse_acc_axes(axes):
+    """ 'xz' -> [0, 2]. The empty string means no accelerometer dimensions at all. """
+    axes = (axes or '').strip().lower()
+    unknown = sorted(set(axes) - set(_ACC_AXIS_INDEX))
+    if unknown:
+        raise ValueError(f"Unknown accelerometer axes {unknown}; expected a subset of 'xyz'.")
+    if len(set(axes)) != len(axes):
+        raise ValueError(f"Duplicate accelerometer axis in '{axes}'.")
+    return [_ACC_AXIS_INDEX[axis] for axis in axes]
+
 
 class MIMoRollOverEnv(MIMoEnv):
     """
@@ -114,10 +229,26 @@ class MIMoRollOverEnv(MIMoEnv):
                  # Penalization factor for action penalization.
                  pen_factor=0.02,
                  pca=None,
-                 intrinsic_goal='all',
-                 # Intrinsic goal weightings. Not-specified keys are automatically
-                 # defaulted to 1.0.
-                 intrinsic_goal_w={},
+                 # --- 'intrinsic' goal function (see INTRINSIC_GOAL_JOINTS above) --------------
+                 # The joints whose angles make up the goal vector. Configurable so the ablations
+                 # (joints only, accelerometer only) cost nothing.
+                 intrinsic_goal_joints=None,
+                 # Which vestibular accelerometer components are appended to the goal vector, as
+                 # a subset of 'xyz'. Empty string for none. Default 'x' -- see the axis note at
+                 # the top of this module, the other two carry no posture signal.
+                 intrinsic_acc_axes=INTRINSIC_ACC_AXES,
+                 # Weight of the accelerometer dimension relative to the joint dimensions. Folded
+                 # into the goal vector itself rather than applied in the distance, so that
+                 # ':meth:`._potential`' stays a plain norm and therefore stays relabelable.
+                 intrinsic_acc_w=1.0,
+                 # Success radius: 'is_success' is '||achieved - desired|| <= intrinsic_goal_eps'.
+                 # A continuous vector goal is never matched exactly, so "reached" has to mean
+                 # "close enough"; under '--sparse_reward' this value IS the task definition.
+                 intrinsic_goal_eps=0.15,
+                 # Number of resets averaged into the recorded reference posture. A single reset
+                 # would pin the goal to whatever 'head_swivel' happened to settle at under the
+                 # initial joint noise, and MIMo would then be asked to reproduce that draw.
+                 intrinsic_reference_samples=20,
                  freeze_arm=False,
                  freeze_leg=False,
                  success_at_side_lying=False,
@@ -147,15 +278,21 @@ class MIMoRollOverEnv(MIMoEnv):
             msg += "Needs to be 'prone', 'supine' or 'alternating'."
             raise ValueError(msg)
 
-        if goal_function not in ['angle', 'cos', 'intrinsic']:
+        if goal_function not in ['angle', 'cos', 'intrinsic', 'gravity']:
             msg = f"Unknown reward function '{goal_function}'. "
-            msg += "Needs to be 'angle', 'cos' or 'intrinsic'."
+            msg += "Needs to be 'angle', 'cos', 'intrinsic' or 'gravity'."
             raise ValueError(msg)
         
-        if intrinsic_goal not in ['all', 'vesti', 'vesti_acc', 'sparse_proprio']:
-            msg = f"Unknown intrinsic goal '{intrinsic_goal}'. "
-            msg += "Needs to be 'all', 'vesti', 'vesti_acc' or 'sparse_proprio'."
-            raise ValueError(msg)
+        # 19.08.2026 The 'intrinsic_goal' sub-modes ('all', 'vesti', 'vesti_acc',
+        # 'sparse_proprio') were removed. They returned dict-valued goals, which SB3 cannot use as
+        # a goal space and HER cannot relabel, and only 3 of 539 stored runs ever used them (2 of
+        # those with a value that was no longer even in 'choices'). 'intrinsic' now means the
+        # single flat posture goal defined at the top of this module.
+        if intrinsic_goal_eps <= 0.0:
+            raise ValueError(f"'intrinsic_goal_eps' must be positive, got {intrinsic_goal_eps}.")
+        if intrinsic_reference_samples < 1:
+            raise ValueError("'intrinsic_reference_samples' must be at least 1, got "
+                             f"{intrinsic_reference_samples}.")
         
         # Instead of supplying 'age' as a parameter to the environment directly, we beforehand created the
         # appropriate age scene. So we manually specify the scene location.
@@ -180,7 +317,28 @@ class MIMoRollOverEnv(MIMoEnv):
         self.pbrs_w=pbrs_w
         self.steps_after_reset=steps_after_reset
         self.pen_factor=pen_factor
-        self.intrinsic_goal=intrinsic_goal
+        self.intrinsic_goal_joints = list(INTRINSIC_GOAL_JOINTS if intrinsic_goal_joints is None
+                                          else intrinsic_goal_joints)
+        self.intrinsic_acc_axes = (intrinsic_acc_axes or '').strip().lower()
+        self._intrinsic_acc_idx = parse_acc_axes(self.intrinsic_acc_axes)
+        self.intrinsic_acc_w = intrinsic_acc_w
+        self.intrinsic_goal_eps = intrinsic_goal_eps
+        self.intrinsic_reference_samples = intrinsic_reference_samples
+        # Filled in by ':meth:`.initialize`', which runs both at construction and on every
+        # embodiment hot-swap, so the addresses follow 'set_embodiment' rebuilding the model.
+        self._intrinsic_qpos_adr = None
+        self._intrinsic_qpos_lo = None
+        self._intrinsic_qpos_hi = None
+        # Per-dimension spread of the recorded reference, kept for diagnostics: a dimension with a
+        # large std across resets carries no posture information and is a candidate for dropping.
+        self.intrinsic_goal_std = {}
+        # 'gravity' goal function: the running estimate of the gravity direction in the vestibular
+        # site's frame, and the sim time it was last advanced to. Reset to None on every episode so
+        # the next read re-seeds it from the accelerometer while MIMo is still settled.
+        self._g_site = None
+        self._g_site_time = None
+        self._vestibular_site_id = None
+        self._gravity_body_ids = None
         self.success_at_side_lying=success_at_side_lying
         self.sparse_reward=sparse_reward
         self.goal_low=goal_low
@@ -215,12 +373,6 @@ class MIMoRollOverEnv(MIMoEnv):
         # shaping term can be recomputed from the arguments alone (it needs two consecutive
         # states), which is what makes PBRS survive HER goal relabelling.
         self._prev_achieved_goal = None
-        # Initialize intrinsic goal weighting dict, i.e. add missing sensor keys.
-        for key in ['observation', 'touch', 'vestibular']:
-            if key not in intrinsic_goal_w:
-                intrinsic_goal_w[key] = 1.0
-
-        self.intrinsic_goal_w = intrinsic_goal_w
 
         self.starting_position=starting_position
         self.alternating_starting_position=self.starting_position=='alternating'
@@ -253,15 +405,19 @@ class MIMoRollOverEnv(MIMoEnv):
         self.init_position=self.data.qpos.copy()
         self.put_in_starting_position()
 
-        # 07.01.2026 The potential of the last state. Used in PBRS (Potential Based Reward Shaping) reward
-        # function. Set in overloaded function 'step(...)' before calling the parent 'step', i.e. before
-        # performing the environment dynamics to receive the next state. Reset to 0 on environment reset.
-        self.pbrs_last_state_potential=0
-
-        if self.goal_function == 'intrinsic':
-            print("Creating prone and supine intrinsic goals.")
+        if self.goal_function in ('intrinsic', 'gravity'):
+            print(f"Creating prone and supine reference goals ('{self.goal_function}').")
             self.create_prone_and_supine_intrinsic_goal()
         self.intrinsic_goals_created = True
+        if self.goal_function in ('intrinsic', 'gravity'):
+            # 19.08.2026 Re-sample now that the references exist. 'initialize()' already set
+            # 'self.goal', but it ran before this point, so 'sample_goal' took its
+            # not-yet-created fallback branch and stored the constructor-time *achieved* goal.
+            # Training never sees it (reset_model re-samples before the first step), but any
+            # analysis script that reads 'env.goal' without resetting first gets a goal that is
+            # simply MIMo's current posture -- which silently measures distance from where he
+            # started instead of distance to the target.
+            self.goal = self.sample_goal()
         self.fix_top_camera_rotation_supine()
 
     def fix_top_camera_rotation_supine(self):
@@ -271,6 +427,50 @@ class MIMoRollOverEnv(MIMoEnv):
             quat = np.zeros(4)
             mujoco.mju_euler2Quat(quat, [0.0, 0.0, 0.0], 'xyz')
             self.model.cam_quat[cam_top_id] = quat
+
+    def initialize(self):
+        """ Called at construction and again on every embodiment hot-swap.
+
+        Overridden to (re)resolve the addresses of the joints that make up the intrinsic goal.
+        'set_embodiment' rebuilds 'self.model'/'self.data' from a different scene XML, which
+        invalidates any cached index, and the base implementation ends by calling 'sample_goal',
+        which for the intrinsic goal function reads the achieved goal -- so the addresses have to
+        exist before 'super().initialize()' runs, not after.
+
+        The recorded reference posture is deliberately *not* re-recorded here. It is stored in the
+        range-normalised space, and joint ranges are the same across the four age scenes, so it
+        stays comparable across an MGC embodiment swap.
+        """
+        if self.goal_function == 'gravity':
+            self._vestibular_site_id = self.model.site('vestibular').id
+            self._gravity_body_ids = [self.model.body(name).id
+                                      for name in GRAVITY_GOAL_BODIES]
+            self._g_site = None
+            self._g_site_time = None
+
+        if self.goal_function == 'intrinsic':
+            ids = [self.model.joint(name).id for name in self.intrinsic_goal_joints]
+            for name, jid in zip(self.intrinsic_goal_joints, ids):
+                if self.model.jnt_type[jid] != mujoco.mjtJoint.mjJNT_HINGE:
+                    raise ValueError(
+                        f"Intrinsic goal joint '{name}' is not a hinge. The goal assumes one "
+                        f"scalar per joint (this is what a 'Joint' slider in mujoco.viewer sets); "
+                        f"a ball or free joint has no such scalar.")
+            self._intrinsic_qpos_adr = np.asarray([self.model.jnt_qposadr[jid] for jid in ids])
+            limits = self.model.jnt_range[ids]
+            self._intrinsic_qpos_lo = limits[:, 0].astype(np.float64)
+            self._intrinsic_qpos_hi = limits[:, 1].astype(np.float64)
+            span = self._intrinsic_qpos_hi - self._intrinsic_qpos_lo
+            if np.any(span <= 0):
+                bad = [n for n, sp in zip(self.intrinsic_goal_joints, span) if sp <= 0]
+                raise ValueError(f"Intrinsic goal joints without a usable range: {bad}. The goal "
+                                 f"normalises each angle by its range, which needs a positive one.")
+        super().initialize()
+
+    @property
+    def intrinsic_goal_dim(self):
+        """ Length of the intrinsic goal vector: one entry per joint, plus accelerometer z. """
+        return len(self.intrinsic_goal_joints) + len(self._intrinsic_acc_idx)
 
     def set_embodiment(self, morph_age, physio_age):
         """ Sets the embodiment to the MuJoCo .xml file that fits to the
@@ -290,49 +490,115 @@ class MIMoRollOverEnv(MIMoEnv):
         # render_top_down_and_save(self, self.starting_position, '/home/leon/MIMo', f'test_embodiment_age{morph_age}')
 
     def create_prone_and_supine_intrinsic_goal(self):
-        # Once for the current starting position and once for the opposite starting
-        # position.
-        for _ in range(2):
-            self.reset_model()
+        """ Record the reference posture vector in prone and in supine.
 
-            # Get a goalless observation to use as 'desired_goal'.
-            obs = self.get_achieved_goal()
-            
-            if self.starting_position == 'prone':
+        These are the two 'desired_goal's: starting prone, the target is the supine reference,
+        and vice versa. Both are recorded once, at construction.
+
+        Two things differ from the original single-shot implementation, and both were bugs waiting
+        to happen:
+
+        * The reference is **averaged over 'intrinsic_reference_samples' resets with ISR off**. A
+          single reset fixes the goal at one draw of the initial joint noise -- 'head_swivel' in
+          particular settles anywhere within a wide range -- and MIMo would then be scored on
+          reproducing that specific draw rather than on the posture.
+        * The RNG state is **saved and restored** around the recording. The reference resets draw
+          from 'self.np_random', the same generator that produces the initial joint noise of every
+          training episode, so without this the number of samples taken here would silently shift
+          which episodes the run sees. This is the same failure that made evaluation depend on
+          whether the goal was pinned via goal_low/goal_high (measured 94% vs 98%); see
+          ':meth:`.sample_goal`'.
+        """
+        rng_state = self.np_random.bit_generator.state
+        saved_isr = self.isr
+        saved_position = self.starting_position
+        self.isr = False
+
+        try:
+            for position in ('prone', 'supine'):
+                self.starting_position = position
+                samples = []
+                for _ in range(self.intrinsic_reference_samples):
+                    self.reset_model()
+                    samples.append(np.asarray(self.get_achieved_goal(), dtype=np.float64))
+                samples = np.asarray(samples, dtype=np.float64)
+                reference = samples.mean(axis=0)
+                spread = samples.std(axis=0)
+
                 if TEST_INTRINSIC_GOALS_CREATION:
                     frame = self.render()
                     img = Image.fromarray(frame)
-                    img.save(os.path.join('.', 'prone_to_supine_goal.png'))
-                    proprio_obs = obs['observation']
-                    vesti_obs = obs['vestibular']
-                    np.savez("intrinsic_goal_prone_to_supine_proprio.npz", proprio_obs)
-                    np.savez("intrinsic_goal_prone_to_supine_vesti.npz", vesti_obs)
+                    img.save(os.path.join('.', f'{position}_intrinsic_goal.png'))
+                    np.savez(f"intrinsic_goal_{position}.npz",
+                             reference=reference, std=spread, samples=samples)
 
-                self.prone_intrinsic_goal = obs.copy()
-                self.starting_position = 'supine'
+                if position == 'prone':
+                    self.prone_intrinsic_goal = reference
+                else:
+                    self.supine_intrinsic_goal = reference
+                self.intrinsic_goal_std[position] = spread
 
-            else: # supine
-                if TEST_INTRINSIC_GOALS_CREATION:
-                    frame = self.render()
-                    img = Image.fromarray(frame)
-                    img.save(os.path.join('.', 'supine_to_prone_goal.png'))
-                    proprio_obs = obs['observation']
-                    vesti_obs = obs['vestibular']
-                    np.savez("intrinsic_goal_supine_to_prone_proprio.npz", proprio_obs)
-                    np.savez("intrinsic_goal_supine_to_prone_vesti.npz", vesti_obs)
+                labels = self.intrinsic_goal_labels()
+                print(f"Intrinsic reference posture ({position}, "
+                      f"n={self.intrinsic_reference_samples}):")
+                for label, value, sd in zip(labels, reference, spread):
+                    print(f"    {label:<22} {value:+.3f}  (sd {sd:.3f})")
+        finally:
+            self.isr = saved_isr
+            self.starting_position = saved_position
+            self.np_random.bit_generator.state = rng_state
 
-                self.supine_intrinsic_goal = obs.copy()
-                self.starting_position = 'prone'
+    def intrinsic_goal_labels(self):
+        """ Names of the intrinsic goal dimensions, in order. For logging and diagnostics. """
+        if self.goal_function == 'gravity':
+            return [f'gravity_x_in_{name}_frame' for name in GRAVITY_GOAL_BODIES]
+        labels = [name.replace('robot:', '') for name in self.intrinsic_goal_joints]
+        labels += [f'vestibular_acc_{axis}' for axis in self.intrinsic_acc_axes]
+        return labels
 
     def disable_isr(self):
         self.isr = False
 
+    def _as_goal_batch(self, goal):
+        """ Reshape a goal argument to (N, goal_dim), whatever shape it arrived in.
+
+        HER hands over batches of shape (N, d), the environment step hands over a single (d,), and
+        the SB3 checker hands over both. Everything downstream works on (N, d), so the scalar goal
+        functions (d = 1) and the intrinsic posture goal (d = 7) share one code path.
+        """
+        return np.asarray(goal, dtype=np.float64).reshape(-1, self.goal_dim)
+
+    @property
+    def goal_dim(self):
+        """ Length of a single goal. 1 for the scalar rotation goals. """
+        if self.goal_function == 'intrinsic':
+            return self.intrinsic_goal_dim
+        if self.goal_function == 'gravity':
+            return len(GRAVITY_GOAL_BODIES)
+        return 1
+
+    def _success_mask(self, achieved, desired):
+        """ Success as a (N,) boolean array, from goals already shaped (N, goal_dim).
+
+        For the scalar goal functions success is 'achieved >= desired': the goal is a rotation
+        threshold, and overshooting it is still success.
+
+        For the intrinsic posture goal it is '||achieved - desired|| <= intrinsic_goal_eps'. A
+        threshold comparison makes no sense on a vector, and equality never happens on continuous
+        sensor readings, so the goal is a point and success is a ball around it.
+        """
+        if self.goal_function in ('intrinsic', 'gravity'):
+            # Both are point goals, not thresholds: 'gravity' runs from +1 (supine) to -1 (prone),
+            # so 'achieved >= desired' would be satisfied at the start of a prone->supine episode.
+            return np.linalg.norm(desired - achieved, axis=-1) <= self.intrinsic_goal_eps
+        return (achieved >= desired).reshape(-1)
+
     def is_success(self, achieved_goal, desired_goal):
-        """ Did we reach our goal rotation.
+        """ Did we reach our goal.
 
         This is a **pure** function of its arguments: it does not read the live simulation
         state. That matters because HER relabels goals offline and recomputes the reward from
-        stored (achieved_goal, desired_goal) pairs. The previous implementation ignored both
+        stored (achieved_goal, desired_goal) pairs. The original implementation ignored both
         arguments and read ``self.get_achieved_goal_cos()`` instead, which made every relabelled
         transition silently keep the reward of the real transition.
 
@@ -340,24 +606,21 @@ class MIMoRollOverEnv(MIMoEnv):
         lives in the goal itself -- :meth:`.sample_goal` returns 0.5 instead of 0.95 in the
         side-lying case -- so the behaviour is unchanged while the function becomes relabelable.
 
-        The 'intrinsic' goal function is exempt: its goals are dictionaries of sensor readings,
-        not rotations, and success there was always measured by the cosine rotation regardless of
-        the goal. That path is left as it was and is not HER-compatible.
+        19.08.2026 The 'intrinsic' goal function used to be exempt, reading the *extrinsic* cosine
+        rotation off live state no matter what goal it was handed -- which meant its goal and its
+        success criterion measured different things. It now goes through the same pure path, with
+        the vector success criterion described in ':meth:`._success_mask`'.
 
         Arguments:
-            achieved_goal (float | np.ndarray): The achieved hip/chest rotation. May be batched.
-            desired_goal (float | np.ndarray): The target rotation. May be batched.
+            achieved_goal (float | np.ndarray): The achieved goal. May be batched.
+            desired_goal (float | np.ndarray): The target goal. May be batched.
 
         Returns:
-            bool | np.ndarray: Whether the achieved rotation reaches the desired rotation.
+            bool | np.ndarray: Whether the goal is reached. A plain bool for a single goal, an
+            array of shape (N,) for a batch.
         """
-        if self.goal_function == 'intrinsic':
-            achieved_rotation = self.get_achieved_goal_cos()[0]
-            return achieved_rotation >= (0.5 if self.success_at_side_lying else 0.95)
-
-        ag = np.asarray(achieved_goal, dtype=np.float64)
-        dg = np.asarray(desired_goal, dtype=np.float64)
-        result = ag.reshape(-1) >= dg.reshape(-1)
+        result = self._success_mask(self._as_goal_batch(achieved_goal),
+                                    self._as_goal_batch(desired_goal))
         return bool(result[0]) if result.size == 1 else result
 
     def is_failure(self, achieved_goal, desired_goal):
@@ -491,63 +754,30 @@ class MIMoRollOverEnv(MIMoEnv):
 
         # self.set_state(self.init_qpos, self.init_qvel)
         self.put_in_starting_position()
-        self.pbrs_last_state_potential=0
+
+        # Drop the gravity estimate so the first read below re-seeds it from the accelerometer.
+        # This has to come AFTER 'put_in_starting_position': that method drops MIMo onto the floor
+        # and runs 'steps_after_reset' settle steps, and only once those are done is he at rest,
+        # which is the single condition under which specific force equals gravity. Seeding before
+        # it would both read a moving accelerometer and integrate the settle steps as if they were
+        # part of the episode.
+        self._g_site = None
+        self._g_site_time = None
 
         return self._get_obs()
     
     def get_goal_space(self, obs_space):
-        if self.goal_function != 'intrinsic':
-            return spaces.Box(-np.inf, np.inf, shape=(1,), dtype=np.float64)
+        """ The goal space.
 
-        # stableBaselines is incompatible with nested dict spaces, which is quite
-        # unfortunate, but this simply means that instead of directly using the
-        # observation space as a goal space, we instead calculate a box space by
-        # flattening the dict obs space.
-        # Since all our observations are scalars, we just add up the shapes
-        # of each space.
-                    
-        # Intrinsic goal space. Here we need to check the chose intrinsic goal.
-        if self.intrinsic_goal == 'all':
-            # Take entire observation as goal.
-            space_flattened = 0
+        A flat Box in both cases: shape (1,) for the scalar rotation goals, shape
+        ('intrinsic_goal_dim',) for the intrinsic posture goal. Flatness is what makes the
+        intrinsic goal usable at all -- SB3 cannot take a nested dict as a goal space, and
+        HerReplayBuffer relabels by writing into an array.
+        """
+        return spaces.Box(-np.inf, np.inf, shape=(self.goal_dim,), dtype=np.float64)
 
-            for space in obs_space.values():
-                space_flattened += space.shape[0]
-            return spaces.Box(-np.inf, np.inf, shape=(space_flattened,), dtype=np.float64)
-        
-        if self.intrinsic_goal == 'vesti':
-            # Take only vestibular observation as goal.
-            return spaces.Box(-np.inf, np.inf, shape=self.get_vestibular_obs().shape, dtype=np.float64)
-        
-        if self.intrinsic_goal == 'vesti_acc':
-            # Take only accelerometer of vestibular observation as goal.
-            return spaces.Box(-np.inf, np.inf, shape=(3,), dtype=np.float64)
-        
-        if self.intrinsic_goal == 'sparse_proprio':
-            # Take entire observation as goal, but only sparse proprio observation (i.e. only joint qpos)
-            # as proprio observation.
-            space_flattened = self.proprioception.get_sparse_proprioception_obs().shape[0]
-
-            keys_without_proprio = list(obs_space.keys())
-            keys_without_proprio.remove('observation')
-
-            for key in keys_without_proprio:
-                space_flattened += obs_space[key].shape[0]
-            return spaces.Box(-np.inf, np.inf, shape=(space_flattened,), dtype=np.float64)
-        
-        raise NotImplementedError
-        
     def get_desired_goal_obs(self):
-        if self.goal_function != 'intrinsic':
-            return self.goal
-        
-        if self.intrinsic_goal == 'vesti' or self.intrinsic_goal == 'vesti_acc':
-            return self.goal
-        
-        # For intrinsic goal function, we cannot simply return the goal, since it has
-        # the same shape as the observation, i.e. a dictionary. Instead, we must
-        # also flatten the goal like we did in 'get_goal_space'.
-        return np.concatenate([self.goal[key] for key in sorted(self.goal.keys())])
+        return self.goal
 
     def sample_goal(self):
         """ Returns the goal rotation.
@@ -566,12 +796,16 @@ class MIMoRollOverEnv(MIMoEnv):
         Returns:
             np.array[float]: The target rotation, shape (1,).
         """
-        if self.goal_function == "intrinsic":
-            # We initialize intrinsic goals at the very end of the constructor of this environment.
-            # In between, we do get observation calls that call this function 'sample_goal'. Since
-            # the goals 'prone_intrinsic_goal' and 'supine_intrinsic_goal' are not yet created,
-            # this function would return an error. Instead, we just return the current observation
-            # as goal in that case.
+        if self.goal_function in ("intrinsic", "gravity"):
+            # The intrinsic goal is the reference posture recorded in the *opposite* position, so
+            # it is fixed per starting position rather than sampled. HER still sees plenty of goal
+            # variation, because every relabelled goal is an achieved posture vector from the
+            # trajectory -- which is why this goal function needs neither --goal_low/--goal_high
+            # nor the goal curriculum that the scalar goals do.
+            #
+            # The references are recorded at the very end of the constructor. Observation calls
+            # before that point reach this function while they do not exist yet, so fall back to
+            # the current achieved goal -- it is only used to shape the observation space.
             if self.intrinsic_goals_created:
                 if self.starting_position == 'prone':
                     return self.supine_intrinsic_goal.copy()
@@ -747,19 +981,78 @@ class MIMoRollOverEnv(MIMoEnv):
         return np.array([(rot_hip + rot_chest) / 2.0])
     
     def get_achieved_goal_intrinsic(self):
-        if self.intrinsic_goal == 'vesti':
-            return self.get_vestibular_obs()
-        
-        if self.intrinsic_goal == 'vesti_acc':
-            return self.get_vestibular_obs()[:3]
-        
-        if self.intrinsic_goal == 'sparse_proprio':
-            return self._get_obs(without_goals=True, sparse_proprio=True)
-        
-        if self.intrinsic_goal == 'all':
-            return self._get_obs(without_goals=True, sparse_proprio=False)
-        
-        raise NotImplementedError
+        """ The intrinsic posture goal: what MIMo can actually sense about his own configuration.
+
+        Returns a flat vector of 'intrinsic_goal_dim' entries, all of them O(1) in magnitude:
+
+        * one entry per joint in 'intrinsic_goal_joints', its angle mapped from its own
+          [lower, upper] limit onto [-1, 1]. The raw value is 'data.qpos[jnt_qposadr[id]]' in
+          radians -- the number a 'Joint' slider in 'mujoco.viewer' writes, and the same number
+          that already sits in the 'qpos' block of 'obs["observation"]'.
+        * one entry per accelerometer axis in 'intrinsic_acc_axes' (default just x), divided by
+          gravity and weighted by 'intrinsic_acc_w'. The weight is folded in here rather than
+          applied in the distance so
+          that ':meth:`._potential`' stays a plain norm of its two arguments, and therefore stays
+          a pure function that HER can recompute.
+
+        Nothing here reads the root free joint, which is the whole point: unlike
+        ':meth:`.get_achieved_goal_cos`' this quantity is available to the policy.
+        """
+        angles = self.data.qpos[self._intrinsic_qpos_adr]
+        scaled = 2.0 * (angles - self._intrinsic_qpos_lo) \
+            / (self._intrinsic_qpos_hi - self._intrinsic_qpos_lo) - 1.0
+
+        if not self._intrinsic_acc_idx:
+            return scaled.astype(np.float64)
+
+        acc = self.get_vestibular_obs()[self._intrinsic_acc_idx] \
+            / INTRINSIC_ACC_SCALE * self.intrinsic_acc_w
+        return np.concatenate([scaled, acc]).astype(np.float64)
+
+    def get_achieved_goal_gravity(self):
+        """ The gravity direction in each of 'GRAVITY_GOAL_BODIES', x component.
+
+        One entry per body, all on the same scale: +1 supine, -1 prone -- the same scale as
+        'get_dot_local_x_to_global_z(body)', but
+        reconstructed from the gyroscope and the proprioceptive joint chain instead of from the
+        root free joint that proprioception does not report.
+
+        The estimate is a running one, advanced lazily: the first read after a reset seeds it from
+        the accelerometer (the one moment MIMo is demonstrably at rest, so specific force IS
+        gravity), and every later read integrates the gyroscope forward to the current 'data.time'.
+        Keying on the simulation clock rather than on a step counter makes this idempotent -- the
+        environment reads the achieved goal several times per step (observation, reward, info) and
+        all of them must see the same value.
+
+        Note this makes 'get_achieved_goal' history-dependent, unlike the other goal functions.
+        'compute_reward' stays pure -- it only ever sees the stored achieved/desired pair -- so HER
+        relabelling is unaffected.
+        """
+        self._advance_gravity_estimate()
+        R_site = self.data.site_xmat[self._vestibular_site_id].reshape(3, 3)
+        # R_body^T @ R_site depends only on the joints between that body and the head; the root
+        # rotation cancels, which is what keeps this quantity non-extrinsic.
+        return np.array([float(((self.data.xmat[body_id].reshape(3, 3).T @ R_site)
+                                @ self._g_site)[0])
+                         for body_id in self._gravity_body_ids])
+
+    def _advance_gravity_estimate(self):
+        """ Seed or integrate ':attr:`._g_site`' up to the current simulation time. """
+        now = float(self.data.time)
+        if self._g_site is None or self._g_site_time is None:
+            acc = self.get_vestibular_obs()[:3]
+            norm = np.linalg.norm(acc)
+            # A degenerate reading would be free fall, which cannot happen at reset; fall back to
+            # the site's own +x rather than dividing by zero.
+            self._g_site = acc / norm if norm > 1e-9 else np.array([1.0, 0.0, 0.0])
+            self._g_site_time = now
+            return
+        dt = now - self._g_site_time
+        if dt <= 0.0:
+            return
+        self._g_site = rotate_by_angular_velocity(
+            self._g_site, self.get_vestibular_obs()[3:6], dt)
+        self._g_site_time = now
 
     def get_achieved_goal(self):
         """ Returns the goal calculated from either of the tree goal functions.
@@ -770,36 +1063,35 @@ class MIMoRollOverEnv(MIMoEnv):
             return self.get_achieved_goal_cos()
         elif self.goal_function=='intrinsic':
             return self.get_achieved_goal_intrinsic()
+        elif self.goal_function=='gravity':
+            return self.get_achieved_goal_gravity()
         
         raise NotImplementedError
 
     def get_potential(self):
-        """ Returns the potential of the current state.
+        """ Returns the potential of the *current live state*, against the current goal.
 
-        The potential of the current state is the euclidean distance between the desired
-        goal and the achieved goal.
+        The negative euclidean distance between the desired goal and the achieved goal.
         See [https://arxiv.org/pdf/2201.08299 Goal-Conditioned Reinforcement Learning:
         Problems and Solutions by Liu et al. 2022 pp2-3 section 'Sample Efficiency:
         Towards Sparse Rewards'] for a discussion and the motivation behind this
         lazy approach.
-          We handle reaching the goal state in the reward function. The potential of
-        a goal state is 0.
+
+        Not used by the reward any more -- ':meth:`.compute_reward`' uses the pure, relabelable
+        ':meth:`._potential`' instead, and this method's jump to '+reward_success' inside the goal
+        region is exactly what made the reward diverge under HER. It is kept because
+        'goalenv_check.py' and 'results/collect_observation_util.py' read it as a diagnostic.
+
+        Works for both the scalar goals and the intrinsic posture vector.
         """
-        achieved_goal = self.get_achieved_goal()
+        achieved_goal = self._as_goal_batch(self.get_achieved_goal())
+        desired_goal = self._as_goal_batch(self.goal)
 
-        if self.goal_function != 'intrinsic' or self.intrinsic_goal == 'vesti' or self.intrinsic_goal == 'vesti_acc':
-            desired_goal = self.goal
+        if self._success_mask(achieved_goal, desired_goal)[0]:
+            return self.reward_success
 
-            if self.is_success(achieved_goal, desired_goal):
-                return self.reward_success
+        return float(self._potential(achieved_goal, desired_goal)[0])
 
-            return -np.linalg.norm(desired_goal - achieved_goal)
-        
-        concat_scaled_achieved_goal = np.concatenate([achieved_goal[key] * self.intrinsic_goal_w[key] for key in sorted(achieved_goal.keys())])
-        concat_desired_goal = np.concatenate([self.goal[key] * self.intrinsic_goal_w[key] for key in sorted(self.goal.keys())])
-
-        return -np.linalg.norm(concat_desired_goal - concat_scaled_achieved_goal)
-    
     def reset(self, seed=None, options=None):
         obs, info = super().reset(seed=seed, options=options)
         info['chest_deg'] = self.get_achieved_rotation_degrees('chest')
@@ -816,12 +1108,11 @@ class MIMoRollOverEnv(MIMoEnv):
         This overloaded function from mimo_env is used for PBRS (Potential Based Reward Shaping) to cache the
         potential of the current state for the reward function to use it in PBRS.
         """
-        # Cache potential of current state to be used in calculating next reward.
-        self.pbrs_last_state_potential = self.get_potential()
-        # Same quantity, but stored as a goal rather than a potential, so that the shaping term
-        # can be rebuilt from (achieved_goal, desired_goal, info) after HER rewrites the goal.
-        if self.goal_function != 'intrinsic':
-            self._prev_achieved_goal = np.asarray(self.get_achieved_goal(), dtype=np.float64).copy()
+        # The achieved goal before the step, so that the potential-based shaping term can be
+        # rebuilt from (achieved_goal, desired_goal, info) after HER rewrites the goal. Cached for
+        # every goal function including 'intrinsic', where it is a whole posture vector -- the
+        # guard that used to skip it there would have made PBRS silently unrelabelable.
+        self._prev_achieved_goal = np.asarray(self.get_achieved_goal(), dtype=np.float64).copy()
 
         obs, reward, terminated, truncated, info = super().step(action)
 
@@ -911,12 +1202,18 @@ class MIMoRollOverEnv(MIMoEnv):
 
         If 'pbrs=False' as an argument, we do not use Potential Based Reward
         Shaping and instead simply return the potential of the current state
-        as a reward (which is the euclidean distance to the desired goal).
+        as a reward (which is the negative euclidean distance to the desired goal).
 
-        This function is **pure and vectorized** for the scalar goal functions ('angle', 'cos'):
-        it depends only on its arguments, and it accepts either a single goal of shape (1,) or a
-        batch of shape (N, 1). Both properties are required by HER, which rewrites desired_goal
-        offline and then calls this method on whole batches via ``env_method``.
+        This function is **pure and vectorized**: it depends only on its arguments, and it accepts
+        either a single goal of shape (goal_dim,) or a batch of shape (N, goal_dim). Both
+        properties are required by HER, which rewrites desired_goal offline and then calls this
+        method on whole batches via ``env_method``.
+
+        19.08.2026 This now covers the 'intrinsic' goal function too. It used to have its own
+        live-state implementation ('_compute_reward_intrinsic'), which is exactly the shape of bug
+        this docstring warns about: it read 'self.get_potential()' and ignored its arguments, so
+        relabelling it was a no-op. The only difference between the goal functions is now the
+        dimensionality of the goal vector and the success test; the reward structure is shared.
 
         The three reward terms differ in how they behave under relabelling, and that is what
         drives the implementation:
@@ -926,47 +1223,40 @@ class MIMoRollOverEnv(MIMoEnv):
           carried through ``info['ctrl_cost']``;
         * the PBRS term needs two consecutive states, which the (achieved, desired) pair alone
           cannot express, so the earlier achieved goal is carried through
-          ``info['prev_achieved_goal']``.
+          ``info['prev_achieved_goal']`` (a full vector under the intrinsic goal function).
 
         When those info keys are absent -- i.e. during ordinary stepping, or under
         ``copy_info_dict=False`` -- the live simulation values are used instead, which reproduces
         the original behaviour exactly.
 
-        The 'intrinsic' goal function keeps the old live-state implementation: its goals are
-        dictionaries of sensor readings and it is not HER-compatible.
-
         Arguments:
-            achieved_goal (float | np.ndarray): The achieved hip and chest rotation, possibly
-                batched with shape (N, 1).
-            desired_goal (float | np.ndarray): The desired hip and chest rotation.
+            achieved_goal (float | np.ndarray): The achieved goal, possibly batched with shape
+                (N, goal_dim).
+            desired_goal (float | np.ndarray): The desired goal.
             info (dict | Sequence[dict]): Carries the goal-independent reward terms. May be a
                 single dict or one per batch element.
 
         Returns:
             float | np.ndarray: A float for a single goal, an array of shape (N,) for a batch.
         """
-        if self.goal_function == 'intrinsic':
-            return self._compute_reward_intrinsic(achieved_goal, desired_goal, info)
-
-        ag = np.asarray(achieved_goal, dtype=np.float64)
-        batched = ag.ndim >= 2
-        ag = ag.reshape(-1)
-        dg = np.asarray(desired_goal, dtype=np.float64).reshape(-1)
+        raw = np.asarray(achieved_goal, dtype=np.float64)
+        batched = raw.ndim >= 2
+        ag = self._as_goal_batch(raw)
+        dg = self._as_goal_batch(desired_goal)
         n = ag.shape[0]
 
         # Penalize excessive use of force unless disabled by '--nopen' argument.
         quad_ctrl_cost = self._info_column(info, 'ctrl_cost', self.compute_penalization(), n)
 
-        success = ag >= dg
+        success = self._success_mask(ag, dg)
 
         if self.sparse_reward:
             reward = np.where(success, 0.0, -1.0)
         else:
             curr_potential = self._potential(ag, dg)
             if self.pbrs:
-                prev_ag = self._info_column(
-                    info, 'prev_achieved_goal',
-                    self._prev_achieved_goal if self._prev_achieved_goal is not None else ag, n)
+                fallback = self._prev_achieved_goal if self._prev_achieved_goal is not None else ag
+                prev_ag = self._info_block(info, 'prev_achieved_goal', fallback, n, self.goal_dim)
                 reward = self.pbrs_w * (curr_potential - self._potential(prev_ag, dg))
             else:
                 reward = curr_potential
@@ -977,7 +1267,12 @@ class MIMoRollOverEnv(MIMoEnv):
         return reward if batched else float(reward[0])
 
     def _potential(self, achieved, desired):
-        """ Potential of a state, as a pure function of the achieved and desired rotation.
+        """ Potential of a state, as a pure function of the achieved and desired goal.
+
+        The negative euclidean distance between the two, taken over the goal dimensions. For the
+        scalar goal functions that is just '-|desired - achieved|'; for the intrinsic posture goal
+        it is the norm over all 'goal_dim' entries. Both arguments must already be shaped
+        (N, goal_dim) -- use ':meth:`._as_goal_batch`'.
 
         Deliberately **continuous**, unlike :meth:`.get_potential`, which jumps to
         ``+reward_success`` at the goal.
@@ -989,13 +1284,13 @@ class MIMoRollOverEnv(MIMoEnv):
         the PBRS regression check in ``mimoEnv/goalenv_check.py``.
 
         Under HER it is not unreachable, and that is why this method exists. HER relabels the
-        goal to a rotation MIMo actually reached mid-trajectory, and MIMo routinely drifts back
-        out of that rotation a few steps later. With the jump in place such a transition pays
+        goal to a state MIMo actually reached mid-trajectory, and MIMo routinely drifts back
+        out of it a few steps later. With the jump in place such a transition pays
         ``pbrs_w * (-reward_success)``: measured -50002.0 for a goal of 0.40 and a drift from
         0.45 to 0.38, which drives SAC's critic loss to ~4e7 within a few thousand steps.
         Terminating episodes do not help, because they only ever terminate on the real goal.
         """
-        return -np.abs(desired - achieved)
+        return -np.linalg.norm(desired - achieved, axis=-1)
 
     @staticmethod
     def _info_column(info, key, default, n):
@@ -1025,17 +1320,33 @@ class MIMoRollOverEnv(MIMoEnv):
                 values[i] = fallback[i]
         return values
 
-    def _compute_reward_intrinsic(self, achieved_goal, desired_goal, info):
-        """ The original live-state reward, kept for the 'intrinsic' goal function. """
-        quad_ctrl_cost = self.compute_penalization()
+    @staticmethod
+    def _info_block(info, key, default, n, width):
+        """ The vector-valued counterpart of ':meth:`._info_column`', returning (n, width).
 
-        if self.is_success(achieved_goal, desired_goal):
-            return self.reward_success - quad_ctrl_cost
+        Needed because under the intrinsic goal function 'prev_achieved_goal' is a whole posture
+        vector rather than a scalar, and PBRS has to reconstruct it per transition for HER's
+        relabelled batches.
+        """
+        fallback = np.asarray(default, dtype=np.float64).reshape(-1, width)
+        if fallback.shape[0] == 1:
+            fallback = np.repeat(fallback, n, axis=0)
+        if fallback.shape[0] != n:
+            fallback = np.repeat(fallback[:1], n, axis=0)
 
-        curr_potential = self.get_potential()
+        if info is None:
+            return fallback
+        if isinstance(info, dict):
+            if key not in info:
+                return fallback
+            return np.repeat(np.asarray(info[key], dtype=np.float64).reshape(1, width), n, axis=0)
 
-        if not self.pbrs:
-            return curr_potential - quad_ctrl_cost
+        entries = np.asarray(info, dtype=object).reshape(-1)
+        if entries.shape[0] != n:
+            return fallback
+        values = fallback.copy()
+        for i, entry in enumerate(entries):
+            if isinstance(entry, dict) and key in entry:
+                values[i] = np.asarray(entry[key], dtype=np.float64).reshape(width)
+        return values
 
-        return self.pbrs_w * (curr_potential - self.pbrs_last_state_potential) - quad_ctrl_cost
-    

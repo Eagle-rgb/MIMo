@@ -133,27 +133,35 @@ if __name__ == "__main__":
     tags = []
 
     for i in range(1,max_models+1):
-        date = getattr(args, f'date{i}')
-        if date is None:
-            break
-
         suffix = getattr(args, f'suffix{i}')
         if suffix is None:
-            raise ValueError(f"No suffix provided for model {i}")
+            break
+        
+        date = getattr(args, f'date{i}')
+
+        # default to date1 if not specified.
+        if date is None:
+            date = dates[0]
+        else:
+            date = date.strftime(DATE_FORMAT)
+
+
         
         label = getattr(args, f'label{i}')
         if label is None:
             raise ValueError(f"No label provided for model {i}")
         
         haltung = getattr(args, f'haltung{i}')
+
+        # default to haltung1 if not specified.
         if haltung is None:
-            raise ValueError(f"No haltung provided for model {i}")
+            haltung = haltungen[0]
         
         #tag = getattr(args, f'tag{i}')
         #if suffix is None:
         #    raise ValueError(f"No tag provided for model {i}")
         
-        dates.append(date.strftime(DATE_FORMAT))
+        dates.append(date)
         suffixes.append(suffix)
         labels.append(label)
         haltungen.append(haltung)

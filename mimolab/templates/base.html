@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}MIMo Lab{% endblock %}</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,600;12..96,700;12..96,800&family=JetBrains+Mono:wght@400;600&display=swap">
+<link rel="stylesheet" href="/static/app.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><circle cx='8' cy='8' r='6' fill='%231F5C6E'/></svg>">
+<script src="/static/htmx.min.js" defer></script>
+<script src="/static/app.js" defer></script>
+</head>
+<body>
+
+<header class="topbar">
+  <span class="brand"><span class="dot"></span>MIMo&nbsp;Lab <small>roll_over</small></span>
+  <nav class="tabs">
+    <a href="{{ runs_href(request) }}" {% if nav == 'runs' %}aria-current="page"{% endif %}>Runs</a>
+    <a href="/analysis" {% if nav == 'analysis' %}aria-current="page"{% endif %}>Analysis</a>
+    <a href="/jobs" {% if nav == 'jobs' %}aria-current="page"{% endif %}>Jobs</a>
+  </nav>
+  <span class="spacer"></span>
+  {% if stats is defined %}
+  <span class="topstat"><b>{{ stats.runs }}</b> runs &nbsp;<b>{{ stats.checkpoints }}</b> checkpoints
+    &nbsp;<b>{{ stats.evals }}</b> evals{% if stats.running %} &nbsp;<b>{{ stats.running }}</b> running{% endif %}</span>
+  {% endif %}
+  {% if settings.offline %}<span class="chip warn">offline</span>{% endif %}
+  <button class="btn sm" type="button" data-reindex title="Re-scan models/ for new or changed runs and reload this view">Refresh</button>
+  <button class="btn sm" type="button" data-theme-toggle aria-label="Switch light or dark theme">Theme</button>
+</header>
+
+{% block body %}{% endblock %}
+
+<div class="tray" id="tray" data-open="0">
+  <span class="n"><span data-tray-count>0</span> runs selected</span>
+  <span class="hint">Compare their curves, open TensorBoard, or clear the selection.</span>
+  <span class="spacer"></span>
+  <a class="btn primary sm" href="#" data-tray-compare>Compare curves</a>
+  <button class="btn sm" type="button" data-tray-tb>Open TensorBoard</button>
+  <button class="btn sm" type="button" data-tray-clear>Clear</button>
+</div>
+
+</body>
+</html>

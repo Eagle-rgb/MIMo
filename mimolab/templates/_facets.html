@@ -1,0 +1,39 @@
+{% macro facet(field, title, params, facets, labels={}) -%}
+{% if facets.get(field) %}
+<div class="facet">
+  <h3>{{ title }}</h3>
+  {% for value, count in facets[field] %}
+    {% if value is none %}
+    {# 485 runs predate --episode_steps and ran at the 500-step default. They are a real group,
+       so they get a real control rather than being silently unselectable. #}
+    <label>
+      <input type="checkbox" name="{{ field }}" value="none"
+             {% if 'none' in (params.get(field) if params.get(field) is iterable and params.get(field) is not string else [params.get(field)])|map('string')|list %}checked{% endif %}>
+      <span>not recorded</span>
+      <span class="n">{{ count }}</span>
+    </label>
+    {% elif value != '' %}
+    <label>
+      <input type="checkbox" name="{{ field }}" value="{{ value }}"
+             {% if value|string in (params.get(field) if params.get(field) is iterable and params.get(field) is not string else [params.get(field)])|map('string')|list %}checked{% endif %}>
+      <span>{{ labels.get(value|string, value) }}</span>
+      <span class="n">{{ count }}</span>
+    </label>
+    {% endif %}
+  {% endfor %}
+</div>
+{% endif %}
+{%- endmacro %}
+
+{% macro tri(field, title, params) -%}
+<div class="facet">
+  <h3>{{ title }}</h3>
+  {% for value, label in [('', 'any'), ('1', 'yes'), ('0', 'no')] %}
+  <label>
+    <input type="radio" name="{{ field }}" value="{{ value }}"
+           {% if (params.get(field) or '') == value %}checked{% endif %}>
+    <span>{{ label }}</span>
+  </label>
+  {% endfor %}
+</div>
+{%- endmacro %}

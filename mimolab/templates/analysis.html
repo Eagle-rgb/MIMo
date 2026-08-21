@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+{% block title %}Analysis &middot; MIMo Lab{% endblock %}
+
+{% block body %}
+<main class="main" style="max-width:82rem;margin:0 auto">
+  <div class="pagehead">
+    <div>
+      <h1>Analysis</h1>
+      <p class="sub">{{ selected|length }} run{{ '' if selected|length == 1 else 's' }} selected.
+        Curves are seed-aggregated by experiment: the line is the mean, the band is the min&ndash;max across seeds.</p>
+    </div>
+    <div class="actions">
+      <div class="field check"><input type="checkbox" id="agg" checked><label for="agg">Aggregate seeds</label></div>
+      <div class="field check"><label for="smooth">Smoothing</label><input type="number" id="smooth" value="1" min="1" max="51" style="width:4rem"></div>
+      <button class="btn sm" type="button" data-tb-selected>TensorBoard</button>
+    </div>
+  </div>
+
+  {% if warning %}<div class="notice"><b>Mixed horizons.</b> {{ warning }}</div>{% endif %}
+
+  {% if not selected %}
+    <div class="panel"><div class="empty"><b>Nothing selected.</b>
+      Pick runs on the Runs tab, then choose Compare curves.</div></div>
+  {% else %}
+
+  <div class="panel">
+    <h2>Metric</h2>
+    <p class="sub">Read <code>ep_rho_max_mean</code>, not <code>success_rate</code> &mdash; the latter
+      scores against the sampled goal, which can be as low as 0.25.</p>
+    <div class="fieldrow">
+      <div class="field">
+        <label for="tagsel">Tag</label>
+        <select id="tagsel">
+          {% for t in tags %}<option value="{{ t }}" {% if t == 'rollout/ep_rho_max_mean' %}selected{% endif %}>{{ t }}</option>{% endfor %}
+        </select>
+      </div>
+    </div>
+  </div>
+
+  <div class="chart" style="margin-top:.9rem">
+    <img id="mainchart" alt="Training curve"
+      data-chart-base="/api/plot/curve.png?{% for r in selected %}run={{ r|urlencode }}&amp;{% endfor %}">
+  </div>
+
+  <div class="chartgrid" style="margin-top:.9rem">
+    <div class="panel">
+      <h2>Embodiment grid</h2>
+      <p class="sub">Best &rho; by morphological and physiological age, over the selection.</p>
+      <div class="chart"><img data-chart="/api/plot/age_grid.png?{{ request.url.query }}" alt="Age grid"></div>
+    </div>
+    <div class="panel">
+      <h2>Selection</h2>
+      <p class="sub">The runs feeding these charts.</p>
+      <div class="tablewrap" style="max-height:22rem;overflow:auto">
+        <table class="runs"><tbody>
+        {% for r in runs %}
+          <tr data-posture="{{ r.posture }}">
+            <td class="stripe"><i></i></td>
+            <td><a class="runname" href="/run/{{ r.run_id }}">{{ r.model_name }}{% if r.seed_idx is not none %} #{{ r.seed_idx }}{% endif %}</a></td>
+            <td class="num runmeta">{{ '%.2f'|format(r.best_rho) if r.best_rho is not none else '--' }}</td>
+          </tr>
+        {% endfor %}
+        </tbody></table>
+      </div>
+    </div>
+  </div>
+  {% endif %}
+</main>
+{% endblock %}

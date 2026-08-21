@@ -1,0 +1,56 @@
+{% from "_macros.html" import rho_meter, progress_meter, sort_link with context %}
+<div class="toolbar">
+  <span class="count">{{ total }} run{{ '' if total == 1 else 's' }}{% if total > runs|length %} &mdash; showing {{ runs|length }}{% endif %}</span>
+  <span class="spacer" style="flex:1"></span>
+  <button class="btn sm" type="button" data-select-page>Select all shown</button>
+</div>
+
+{% if not runs %}
+  <div class="panel"><div class="empty">
+    <b>No runs match these filters.</b>
+    Clear a filter, or reindex if you just finished training something.
+  </div></div>
+{% else %}
+<div class="tablewrap">
+<table class="runs">
+  <thead>
+    <tr>
+      <th style="width:3px"></th>
+      <th style="width:1.6rem"></th>
+      <th>{{ sort_link('name', 'Run', params) }}</th>
+      <th>{{ sort_link('date', 'Date', params) }}</th>
+      <th>Setup</th>
+      <th>{{ sort_link('morph', 'Age', params) }}</th>
+      <th>{{ sort_link('rho', 'best <span class="caseless">&rho;</span>', params) }}</th>
+      <th>{{ sort_link('steps', 'Progress', params) }}</th>
+      <th>{{ sort_link('checkpoints', 'Ckpt', params) }}</th>
+      <th>{{ sort_link('state', 'State', params) }}</th>
+    </tr>
+  </thead>
+  <tbody>
+  {% for r in runs %}
+    <tr data-posture="{{ r.posture }}" data-run="{{ r.run_id }}">
+      <td class="stripe"><i></i></td>
+      <td><input type="checkbox" data-pick value="{{ r.run_id }}" aria-label="Select {{ r.model_name }}"></td>
+      <td>
+        <a class="runname" href="/run/{{ r.run_id }}" title="{{ r.run_id }}">{{ r.model_name or r.run_id }}{% if r.seed_idx is not none %} <span class="runmeta">#{{ r.seed_idx }}</span>{% endif %}</a>
+        <span class="runmeta">{{ r.collection }}{% if r.episode_steps %} &middot; {{ r.episode_steps }} steps{% endif %}</span>
+      </td>
+      <td class="num runmeta">{{ r.date or '--' }}</td>
+      <td>
+        <span class="chip {{ r.posture }}">{{ r.posture }}</span>
+        <span class="chip muted">{{ r.algorithm or '?' }}</span>
+        {% if r.her %}<span class="chip ok">her</span>{% endif %}
+        <span class="chip muted">{{ r.reward_shape }}</span>
+      </td>
+      <td class="num runmeta">{% if r.morph_age is not none %}{{ r.morph_age }}/{{ r.physio_age }}{% else %}--{% endif %}</td>
+      <td>{{ rho_meter(r.best_rho) }}</td>
+      <td>{{ progress_meter(r) }}</td>
+      <td class="num runmeta">{{ r.n_checkpoints }}</td>
+      <td><span class="chip {{ r.state }}">{{ r.state }}</span></td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% endif %}

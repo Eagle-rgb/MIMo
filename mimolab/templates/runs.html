@@ -1,0 +1,107 @@
+{% extends "base.html" %}
+{% from "_facets.html" import facet, tri %}
+{% block title %}Runs &middot; MIMo Lab{% endblock %}
+
+{% block body %}
+<div class="shell">
+
+  <aside class="rail">
+    <form id="filters" hx-get="/fragments/runs" hx-target="#results" hx-trigger="change, search"
+          hx-indicator="#results">
+
+      <div class="facet">
+        <h3>Find</h3>
+        <input class="search" type="search" name="q" placeholder="name or path&hellip;"
+               value="{{ params.get('q', '') }}"
+               hx-get="/fragments/runs" hx-target="#results" hx-trigger="input changed delay:300ms"
+               hx-include="#filters">
+      </div>
+
+      {{ facet('posture', 'Posture', params, facets) }}
+      {{ facet('algorithm', 'Algorithm', params, facets) }}
+      {{ facet('reward_shape', 'Reward', params, facets) }}
+      {{ tri('her', 'HER', params) }}
+
+      <div class="facet">
+        <h3>Embodiment &mdash; morph &times; physio</h3>
+        <div class="agegrid">
+          <span class="hd"></span>
+          {% for p in AGES %}<span class="hd">{{ p }}</span>{% endfor %}
+          {% for m in AGES %}
+            <span class="hd">{{ m }}</span>
+            {% for p in AGES %}
+              {% set n = age_pairs.get((m, p), 0) %}
+              <button type="button" data-age="{{ m }}:{{ p }}"
+                      aria-pressed="false" {% if not n %}disabled{% endif %}
+                      title="morph {{ m }} mo, physio {{ p }} mo &mdash; {{ n }} run{{ '' if n == 1 else 's' }}">{{ n or '&middot;'|safe }}</button>
+            {% endfor %}
+          {% endfor %}
+        </div>
+        <input type="hidden" name="morph_age" value="{{ params.get('morph_age', '') }}">
+        <input type="hidden" name="physio_age" value="{{ params.get('physio_age', '') }}">
+      </div>
+
+      {{ facet('episode_steps', 'Episode horizon', params, facets) }}
+      {{ facet('state', 'State', params, facets) }}
+      {{ facet('collection', 'Collection', params, facets) }}
+      <div class="facet">
+        <h3>Date</h3>
+        <div class="quick">
+          {% for key, label in [('latest', 'Latest'), ('latest_each', 'Latest per experiment'),
+                                ('7d', 'Last 7 days'), ('30d', 'Last 30 days')] %}
+            <button type="button" data-date-preset="{{ key }}"
+                    aria-pressed="{{ 'true' if params.get('date_preset') == key else 'false' }}"
+                    title="{{ DATE_PRESETS[key] }} &mdash; {{ date_preset_counts[key] }} runs">
+              {{ label }} <span class="n">{{ date_preset_counts[key] }}</span>
+            </button>
+          {% endfor %}
+        </div>
+        <input type="hidden" name="date_preset" value="{{ params.get('date_preset', '') }}">
+        {% if latest_date %}
+          <p class="hint">Newest run: <span class="mono">{{ latest_date }}</span></p>
+        {% endif %}
+      </div>
+
+      {{ facet('date', 'Every date', params, facets) }}
+
+      <div class="facet">
+        <h3>Threshold</h3>
+        <div class="rowfield">
+          <span>best <span class="caseless">&rho;</span> at least</span>
+          <input class="search" type="number" step="0.05" min="0" max="1"
+                 name="min_rho" value="{{ params.get('min_rho', '') }}">
+        </div>
+      </div>
+
+      {{ tri('has_eval', 'Evaluated', params) }}
+
+      <input type="hidden" name="sort" value="{{ params.get('sort', 'date') }}">
+      <input type="hidden" name="dir" value="{{ params.get('dir', 'desc') }}">
+      <input type="hidden" name="view" value="{{ params.get('view', '') }}">{# '' = grouped #}
+
+      <a class="btn sm" href="/" data-reset style="width:100%;justify-content:center">Reset filters</a>
+    </form>
+  </aside>
+
+  <main class="main">
+    <div class="pagehead">
+      <div>
+        <h1>Runs</h1>
+        <p class="sub">Every directory under <code>models/</code> that holds a <code>data.yml</code>.
+          Posture is read from the path &mdash; it is never recorded in the yaml.</p>
+      </div>
+      <div class="actions">
+        <div class="segmented" role="group" aria-label="Row grouping">
+          <button type="button" data-view="groups" aria-pressed="{{ 'true' if grouped else 'false' }}">Experiments</button>
+          <button type="button" data-view="runs" aria-pressed="{{ 'false' if grouped else 'true' }}">Individual runs</button>
+        </div>
+        <a class="btn sm" href="/launch">Launch training</a>
+      </div>
+    </div>
+
+    <div id="results">
+      {% if grouped %}{% include "_groups_table.html" %}{% else %}{% include "_runs_table.html" %}{% endif %}
+    </div>
+  </main>
+</div>
+{% endblock %}

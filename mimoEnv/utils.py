@@ -969,6 +969,18 @@ def load_model_yaml(load_model):
                 yaml_data['morph_age'] = age
                 yaml_data['physio_age'] = age
 
+            # 19.08.2026 The 'intrinsic' goal function used to have sub-modes selected by
+            # 'intrinsic_goal' ('all', 'vesti', 'vesti_acc', 'sparse_proprio') and per-sensor
+            # weights 'proprio_w'/'vesti_w'. All of them returned dict-valued goals and were
+            # removed when 'intrinsic' became the flat posture goal. Only 3 stored runs carry
+            # these keys; drop them so they do not land on the argparse namespace as settings
+            # nothing reads any more.
+            for removed in ('intrinsic_goal', 'proprio_w', 'vesti_w'):
+                if removed in yaml_data:
+                    print(f"Ignoring retired key '{removed}={yaml_data[removed]}' from data.yml: "
+                          f"the intrinsic goal sub-modes were removed on 19.08.2026.")
+                    del yaml_data[removed]
+
             # Downwards-compatibility with flags 'proprio_only_qpos' and 'no_proprio'
             if 'proprio_only_qpos' in yaml_data:
                 if yaml_data['proprio_only_qpos']:

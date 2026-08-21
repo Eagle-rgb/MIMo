@@ -1,13 +1,17 @@
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
-from weasyprint import HTML
 import base64
 from io import BytesIO
 import argparse
 from kobayashi16 import SUPPORT_PATTERNS, MOVEMENT_PATTERNS
 
 def pdf_report(df, out_name):
+    # 20.08.2026 Imported here rather than at module level: weasyprint is only needed for
+    # the PDF report and is not installed in the 'mimo' env, which used to make --npy
+    # (which needs nothing but numpy/pandas) fail on the import line.
+    from weasyprint import HTML
+
     SUPPORT_COLORS = {
         "Two Stationary": "#4CAF50",                     # Grün
         "Stationary IA": "#2196F3",                     # Blau

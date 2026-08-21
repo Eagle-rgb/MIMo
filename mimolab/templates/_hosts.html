@@ -1,0 +1,17 @@
+{% if not probes %}
+  <div class="empty">No hosts probed. Offline mode, or SSH is not configured.</div>
+{% else %}
+<div class="hosts">
+  {% for p in probes %}
+  <div class="host">
+    <div class="name">{{ p.host }}</div>
+    <span class="chip {{ p.state }}">{{ p.state }}</span>
+    <div class="detail">
+      {% if p.state == 'free' %}{{ (p.free_mb / 1024)|round|int }} GB free
+      {% elif p.state in ('mine', 'foreign') %}{{ p.procs|length }} proc{{ '' if p.procs|length == 1 else 's' }}
+      {% else %}{{ p.detail|truncate(28) }}{% endif %}
+    </div>
+  </div>
+  {% endfor %}
+</div>
+{% endif %}

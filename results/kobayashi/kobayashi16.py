@@ -3,7 +3,8 @@ Docstring for results.kobayashi16
 
 Plot velocities of joints used for measurement in Kobayashi 2016 during one episode.
 """
-from results.collect_observation_util import collect_kobayashi_displacements_all
+from results.collect_observation_util import collect_kobayashi_displacements_all, find_runs
+import os
 import argparse
 import matplotlib.pyplot as plt
 import numpy as np
@@ -14,7 +15,9 @@ from results.signal_utils import resample_df_to_60hz, smooth_x_butterworth
 from scipy.interpolate import interp1d
 from collections import Counter
 import datetime
-from results.utils import make_env
+from results.utils import valid_date, DATE_FORMAT
+from mimoEnv.eval_rollover import (build_env, load_run_config, ROLL_THRESHOLD,
+                                   DEFAULT_EPISODE_STEPS)
 
 SUPPORT_PATTERNS = [
     'Two Stationary',
@@ -437,18 +440,18 @@ def classify_movement(df):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--collect_data', required=False, action='store_true')
+    parser.add_argument('--collect_data', required=False, action='store_true', help="Collects data, saves it as *.csv and quits.")
     parser.add_argument('--num_episodes', required=False, default=10, type=int,
                         help="Number of episodes to let each model play in the environment. This " \
                         "is not the number of episodes taken into account for kobayashi analysis. " \
                         "For kobayashi analysis, only the successful episodes out of the 'num_episodes' " \
                         "performed episodes is taken. Default: 10")
-    parser.add_argument('--save_data', required=False, action='store_true', default=False,
-                        help="Saves collected dataframe of '--load_model' as 'data.csv'.")
     parser.add_argument('--load_data', required=False, type=str,
                         help="Load the specified .csv file and perform Kobayashi classification on it.")
     parser.add_argument('--plot_displacement', action='store_true')
     parser.add_argument('--age', choices=[1,3,6,9], type=int, help="Infant Age. Choices: 1, 3, 6, 9", required=True)
+    parser.add_argument('--date', type=valid_date, help="Model date")
+    parser.add_argument('--suffix', type=str, help="Model suffix")
     parser.add_argument('--siegel', action='store_true')
     parser.add_argument('--until', type=str, default="side_lying",
                         choices=["side_lying", "45", "full"], help="Roll milestone to analyze until.")
@@ -464,37 +467,83 @@ if __name__ == '__main__':
                         help="Saves the full pattern report under this .csv name.")
     parser.add_argument('--model_dir', type=str, required=False, default='.',
                         help="Any parent directory to start searching for model.")
+    parser.add_argument('--haltung', type=str, required=False, default='supine',
+                        choices=['supine', 'prone'],
+                        help="Starting position of the runs to collect. Default: supine.")
+    parser.add_argument('--checkpoint', type=str, required=False, default='model_best.zip',
+                        help="Checkpoint file to load from each run directory. Default "
+                             "'model_best.zip', the peak under the reported evaluation protocol "
+                             "(RollOverEvalCallback) -- the last numbered checkpoint is not "
+                             "reliably the best one for off-policy runs.")
+    parser.add_argument('--goal', type=float, required=False, default=ROLL_THRESHOLD,
+                        help="desired_goal fed to the policy. Goal-conditioned runs (HER) are "
+                             "conditioned on it, so it must be the full roll. Default 0.95.")
+    parser.add_argument('--episode_steps', type=int, required=False, default=None,
+                        help="Episode horizon. Defaults to the one recorded in the run's "
+                             "data.yml, else 500.")
+    parser.add_argument('--seed0', type=int, required=False, default=1000,
+                        help="Episode i of every run is seeded with 'seed0 + i', so all runs "
+                             "face identical start states. Pass -1 for unseeded resets.")
+    parser.add_argument('--out', type=str, required=False, default=None,
+                        help="Output .csv for --collect_data. Defaults to "
+                             "'kobayashidata_age<age>.csv'.")
     parser.add_argument('--save_velocities_npy', type=str, required=False,
                         help="Saves normalized mean and std velocities of TR, CA and CL to .npy.")
     
     args = parser.parse_args()
 
     if args.collect_data:
-        if args.age == 6:
-            model_date = '26-05-18'  # new model with corrected model file.
-            model_suffix = 'age6'
-        elif args.age == 9:
-            model_date = '26-03-07'
-            model_suffix = 'age9'
-        elif args.age == 3:
-            model_date = '26-03-09'
-            model_suffix = 'age3'
-        elif args.age == 1:
-            model_date = '26-03-09'
-            model_suffix = 'age1'
+        if not args.suffix or not args.date:
+            raise ValueError("--collect_data, but no suffix or date specified.")
+
+        model_date = args.date.strftime(DATE_FORMAT)
+        model_suffix = args.suffix
 
         if args.transfer_learning:
             age = args.transferlearning_age
         else:
             age = args.age
-        env = make_env(age_physio=age, age_morph=age)
-        
-        df = collect_kobayashi_displacements_all(env, model_date, 'supine', model_suffix, model_dir=args.model_dir, n_tries=args.num_episodes)
-        if args.save_data:
+
+        # 20.08.2026 The environment used to come from 'results.utils.make_env', which hardcodes
+        # PPO-era settings (pbrs, no goal in the observation, done_active). A SAC+HER policy
+        # cannot even be fed by that env: its observation space has no 'desired_goal'. Build the
+        # env from the run's own 'data.yml' instead, through the same 'build_env' the reported
+        # evaluation protocol uses -- ISR off, goal pinned, no termination on success.
+        runs = find_runs(args.model_dir, model_date, args.haltung, model_suffix)
+        if not runs:
+            raise ValueError(f"No run directories matching "
+                             f"{model_date}_{args.haltung}_{model_suffix}_run_* "
+                             f"under {args.model_dir}")
+        print(f"Found {len(runs)} runs. Reading configuration from {runs[0][1]}.")
+
+        config = load_run_config(os.path.join(runs[0][1], args.checkpoint))
+        # The age is an explicit argument because of transfer learning, where the env is
+        # deliberately not the one the policy was trained in.
+        config = dict(config, physio_age=age, morph_age=age)
+        algorithm = config.get('algorithm', 'PPO')
+        episode_steps = (args.episode_steps or config.get('episode_steps')
+                         or DEFAULT_EPISODE_STEPS)
+        print(f"algorithm={algorithm}, her={config.get('her', False)}, "
+              f"checkpoint={args.checkpoint}, goal={args.goal}, "
+              f"episode_steps={episode_steps}, age={age}")
+
+        env = build_env(config, args.haltung, args.goal)
+
+        df = collect_kobayashi_displacements_all(
+            env, model_date, args.haltung, model_suffix,
+            model_dir=args.model_dir, n_tries=args.num_episodes,
+            algorithm=algorithm, checkpoint=args.checkpoint,
+            episode_steps=episode_steps,
+            seed0=None if args.seed0 < 0 else args.seed0)
+
+        out = args.out
+        if out is None:
             if args.transfer_learning:
-                df.to_csv(f'kobayashidata_age{args.age}_transferlearning_age{args.transferlearning_age}.csv')
+                out = f'kobayashidata_age{args.age}_transferlearning_age{args.transferlearning_age}.csv'
             else:
-                df.to_csv(f'kobayashidata_age{args.age}.csv')
+                out = f'kobayashidata_age{args.age}.csv'
+        df.to_csv(out)
+        print(f"Wrote {out}")
 
         quit()
 

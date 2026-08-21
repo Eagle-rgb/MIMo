@@ -38,3 +38,7 @@ csv
 mimoComposer
 results/composer
 CLAUDE.md
+
+# mimolab local state: the run index, job registry, remote logs and rendered plots. All of it is
+# a cache over models/ and can be rebuilt, except the job registry, which is machine-local.
+.mimolab/

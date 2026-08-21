@@ -1,0 +1,420 @@
+/* MIMo Lab -- an instrument, not a document.
+ *
+ * Palette: cool petrol neutrals for chrome; the posture pair is a real diverging axis (supine
+ * reads +1 on the rotation measure, prone -1), so it gets two opposed hues rather than two
+ * arbitrary ones. Chart colours are a separate system and live in plots.py -- an accent hue and
+ * a categorical series ramp do different jobs and must not be shared. */
+
+:root {
+  --ground:      #F2F4F6;
+  --surface:     #FFFFFF;
+  --surface-alt: #E9ECF0;
+  --raised:      #FBFCFD;
+  --ink:         #131920;
+  --ink-soft:    #4E5966;
+  --ink-faint:   #7C8794;
+  --rule:        #D3D9E0;
+  --rule-soft:   #E5E9ED;
+  --accent:      #1F5C6E;
+  --accent-ink:  #FFFFFF;
+  --accent-soft: #E0EDF1;
+  --supine:      #4F5CB0;
+  --prone:       #A85B33;
+  --ok:          #2C6B4F;
+  --warn:        #96631A;
+  --bad:         #A33240;
+  --meter-track: #E0E4E9;
+  --shadow-sm:   0 1px 2px rgba(19,25,32,.07);
+  --shadow-lg:   0 -2px 24px -8px rgba(19,25,32,.18);
+  --rail: 16.5rem;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --ground:      #0E1318;
+    --surface:     #161D24;
+    --surface-alt: #1E262E;
+    --raised:      #1B232B;
+    --ink:         #E2E7EC;
+    --ink-soft:    #A3AEBA;
+    --ink-faint:   #78838F;
+    --rule:        #2C363F;
+    --rule-soft:   #222B33;
+    --accent:      #6FB3C6;
+    --accent-ink:  #08131A;
+    --accent-soft: #16313A;
+    --supine:      #949DDD;
+    --prone:       #D79269;
+    --ok:          #6FBF95;
+    --warn:        #D6A653;
+    --bad:         #E0788A;
+    --meter-track: #263039;
+    --shadow-sm:   0 1px 2px rgba(0,0,0,.45);
+    --shadow-lg:   0 -2px 24px -8px rgba(0,0,0,.7);
+  }
+}
+:root[data-theme="dark"] {
+  --ground:      #0E1318;
+  --surface:     #161D24;
+  --surface-alt: #1E262E;
+  --raised:      #1B232B;
+  --ink:         #E2E7EC;
+  --ink-soft:    #A3AEBA;
+  --ink-faint:   #78838F;
+  --rule:        #2C363F;
+  --rule-soft:   #222B33;
+  --accent:      #6FB3C6;
+  --accent-ink:  #08131A;
+  --accent-soft: #16313A;
+  --supine:      #949DDD;
+  --prone:       #D79269;
+  --ok:          #6FBF95;
+  --warn:        #D6A653;
+  --bad:         #E0788A;
+  --meter-track: #263039;
+  --shadow-sm:   0 1px 2px rgba(0,0,0,.45);
+  --shadow-lg:   0 -2px 24px -8px rgba(0,0,0,.7);
+}
+
+* { box-sizing: border-box; }
+
+html { color-scheme: light dark; }
+
+body {
+  margin: 0;
+  background: var(--ground);
+  color: var(--ink);
+  font-family: "Bricolage Grotesque", "Helvetica Neue", Arial, sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+.mono, code, .num, input, select, textarea {
+  font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.num { font-variant-numeric: tabular-nums; }
+
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; text-underline-offset: 2px; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 2px; }
+
+/* ---------- top bar ---------- */
+.topbar {
+  position: sticky; top: 0; z-index: 40;
+  display: flex; align-items: center; gap: 1.5rem;
+  padding: 0 1.1rem; height: 3.25rem;
+  background: var(--surface); border-bottom: 1px solid var(--rule);
+}
+.brand {
+  font-weight: 800; font-size: 1rem; letter-spacing: -.02em;
+  display: flex; align-items: baseline; gap: .5rem; color: var(--ink);
+}
+.brand .dot {
+  width: .5rem; height: .5rem; border-radius: 50%;
+  background: var(--accent); display: inline-block; flex: none;
+  transform: translateY(-1px);
+}
+.brand small {
+  font-family: "JetBrains Mono", monospace; font-size: .6rem; font-weight: 400;
+  letter-spacing: .1em; text-transform: uppercase; color: var(--ink-faint);
+}
+nav.tabs { display: flex; gap: .25rem; }
+nav.tabs a {
+  padding: .35rem .7rem; border-radius: 3px; color: var(--ink-soft);
+  font-weight: 600; font-size: .82rem;
+}
+nav.tabs a:hover { background: var(--surface-alt); text-decoration: none; }
+nav.tabs a[aria-current="page"] { background: var(--accent-soft); color: var(--accent); }
+
+.topbar .spacer { flex: 1; }
+.topstat {
+  font-family: "JetBrains Mono", monospace; font-size: .68rem; color: var(--ink-faint);
+  letter-spacing: .04em; white-space: nowrap;
+}
+.topstat b { color: var(--ink); font-weight: 600; }
+
+/* ---------- shell ---------- */
+.shell { display: grid; grid-template-columns: var(--rail) 1fr; align-items: start; }
+@media (max-width: 60rem) { .shell { grid-template-columns: 1fr; } }
+
+.rail {
+  position: sticky; top: 3.25rem; align-self: start;
+  height: calc(100vh - 3.25rem); overflow-y: auto;
+  background: var(--surface); border-right: 1px solid var(--rule);
+  padding: 1rem .9rem 4rem;
+}
+@media (max-width: 60rem) { .rail { position: static; height: auto; } }
+
+.main { padding: 1.1rem 1.25rem 7rem; min-width: 0; }
+
+/* ---------- filter rail ---------- */
+.facet { margin-bottom: 1.1rem; }
+.facet > h3 {
+  font-family: "JetBrains Mono", monospace;
+  font-size: .6rem; letter-spacing: .13em; text-transform: uppercase;
+  color: var(--ink-faint); margin: 0 0 .4rem; font-weight: 600;
+}
+.facet label {
+  display: flex; align-items: center; gap: .45rem;
+  padding: .17rem .3rem; border-radius: 2px; cursor: pointer;
+  font-size: .8rem; color: var(--ink-soft);
+}
+.facet label:hover { background: var(--surface-alt); }
+.facet label input { margin: 0; accent-color: var(--accent); }
+.facet .rowfield { display: flex; align-items: center; gap: .4rem; padding: .17rem .3rem; }
+.facet .rowfield span { font-size: .8rem; color: var(--ink-soft); }
+.facet .rowfield input { width: 4.5rem; margin-left: auto; }
+.facet label .n {
+  margin-left: auto; font-family: "JetBrains Mono", monospace;
+  font-size: .66rem; color: var(--ink-faint); font-variant-numeric: tabular-nums;
+}
+.facet label:has(input:checked) { color: var(--ink); font-weight: 600; }
+
+.search {
+  width: 100%; padding: .45rem .55rem; font-size: .78rem;
+  background: var(--ground); color: var(--ink);
+  border: 1px solid var(--rule); border-radius: 3px;
+}
+.search::placeholder { color: var(--ink-faint); }
+
+/* Quick date filters. Wrapping pills rather than a select: they carry their own counts, and
+   seeing "Latest 61" next to "Latest per experiment 363" is the whole point of having them. */
+.quick { display: flex; flex-wrap: wrap; gap: .25rem; margin-bottom: .35rem; }
+.quick button {
+  font-family: "Bricolage Grotesque", sans-serif; font-size: .72rem; font-weight: 600;
+  padding: .2rem .45rem; border: 1px solid var(--rule); border-radius: 2px;
+  background: var(--surface); color: var(--ink-soft); cursor: pointer;
+  display: inline-flex; align-items: baseline; gap: .3rem;
+}
+.quick button:hover { border-color: var(--accent); color: var(--accent); }
+.quick button[aria-pressed="true"] {
+  background: var(--accent); border-color: var(--accent); color: var(--accent-ink);
+}
+.quick button .n {
+  font-family: "JetBrains Mono", monospace; font-size: .62rem; opacity: .75;
+  font-variant-numeric: tabular-nums;
+}
+.facet .hint { margin: .1rem .3rem 0; font-size: .68rem; color: var(--ink-faint); }
+.facet .hint .mono { font-size: .66rem; }
+
+/* The age matrix: a 4x4 grid is the shape of the experiment, so it is the shape of the control. */
+.agegrid { display: grid; grid-template-columns: 1.4rem repeat(4, 1fr); gap: 2px; margin-top: .3rem; }
+.agegrid .hd {
+  font-family: "JetBrains Mono", monospace; font-size: .55rem; color: var(--ink-faint);
+  display: flex; align-items: center; justify-content: center;
+}
+.agegrid button {
+  font-family: "JetBrains Mono", monospace; font-size: .6rem;
+  padding: .3rem 0; border: 1px solid var(--rule); border-radius: 2px;
+  background: var(--ground); color: var(--ink-soft); cursor: pointer;
+  font-variant-numeric: tabular-nums;
+}
+.agegrid button:hover { border-color: var(--accent); color: var(--accent); }
+.agegrid button[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+.agegrid button:disabled { opacity: .3; cursor: default; }
+
+/* ---------- buttons ---------- */
+.btn {
+  display: inline-flex; align-items: center; gap: .4rem;
+  font-family: "Bricolage Grotesque", sans-serif; font-weight: 600; font-size: .78rem;
+  padding: .38rem .72rem; border-radius: 3px; cursor: pointer;
+  border: 1px solid var(--rule); background: var(--surface); color: var(--ink);
+}
+.btn:hover { border-color: var(--accent); color: var(--accent); text-decoration: none; }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+.btn.primary:hover { color: var(--accent-ink); filter: brightness(1.08); }
+.btn.danger { color: var(--bad); border-color: var(--rule); }
+.btn.danger:hover { border-color: var(--bad); color: var(--bad); }
+.btn:disabled { opacity: .45; cursor: not-allowed; }
+.btn.sm { font-size: .7rem; padding: .25rem .5rem; }
+
+/* A two-state control, not a toggle button: the label of a toggle describes the *other* state,
+   which reads as a question every time. Both states are shown, the active one is filled. */
+.segmented { display: inline-flex; border: 1px solid var(--rule); border-radius: 3px; overflow: hidden; }
+.segmented button {
+  font-family: "Bricolage Grotesque", sans-serif; font-weight: 600; font-size: .78rem;
+  padding: .38rem .72rem; border: none; cursor: pointer;
+  background: var(--surface); color: var(--ink-soft);
+}
+.segmented button + button { border-left: 1px solid var(--rule); }
+.segmented button:hover { color: var(--accent); }
+.segmented button[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); }
+
+/* ---------- table ---------- */
+/* The wrapper is a scroll container (overflow != visible), so a sticky th anchors to *it*, not to
+   the viewport -- with top:3.25rem the header was pushed 52px down over the first row. Give the
+   container a real vertical scrollport and stick the header to its top edge instead. */
+.tablewrap {
+  overflow: auto; max-height: calc(100vh - 13rem);
+  background: var(--surface); border: 1px solid var(--rule); border-radius: 4px;
+}
+table.runs { width: 100%; border-collapse: separate; border-spacing: 0; font-size: .8rem; }
+table.runs th {
+  position: sticky; top: 0; z-index: 10;
+  text-align: left; white-space: nowrap;
+  font-family: "JetBrains Mono", monospace; font-weight: 600;
+  font-size: .6rem; letter-spacing: .1em; text-transform: uppercase; color: var(--ink-faint);
+  background: var(--surface); padding: .55rem .55rem;
+  /* box-shadow, not border-bottom: a sticky th under border-collapse:separate leaves its border
+     behind when it detaches. */
+  box-shadow: inset 0 -1px 0 var(--rule);
+}
+table.runs th a { color: inherit; }
+/* Opt out of the uppercasing for symbols that change identity under it. */
+table.runs th .caseless, .kv dt .caseless, .facet .caseless, .caseless { text-transform: none; }
+table.runs th a[data-active] { color: var(--accent); }
+table.runs td { padding: .42rem .55rem; border-bottom: 1px solid var(--rule-soft); vertical-align: middle;
+                background-clip: padding-box; }
+table.runs tbody tr:hover { background: var(--surface-alt); }
+table.runs tbody tr:last-child td { border-bottom: none; }
+table.runs tr.picked { background: var(--accent-soft); }
+table.runs tr.picked:hover { background: var(--accent-soft); }
+
+/* Posture as a stripe on the row edge: colour-scannable without spending a column. */
+td.stripe { padding: 0; width: 3px; }
+td.stripe i { display: block; width: 3px; height: 2.1rem; background: var(--ink-faint); }
+tr[data-posture="supine"] td.stripe i { background: var(--supine); }
+tr[data-posture="prone"] td.stripe i { background: var(--prone); }
+
+.runname { font-weight: 600; color: var(--ink); display: block; max-width: 26rem;
+           overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.runmeta { font-family: "JetBrains Mono", monospace; font-size: .62rem; color: var(--ink-faint); }
+
+/* ---------- the rho meter: the signature element ----------
+ * One number decides whether a run worked, and it is repeated 539 times. Drawn rather than
+ * printed, with the 0.95 roll threshold marked, the whole corpus becomes scannable in one pass. */
+.rho { display: flex; align-items: center; gap: .45rem; min-width: 8.5rem; }
+.rho .track {
+  position: relative; flex: 1; height: .42rem; border-radius: 2px;
+  background: var(--meter-track); overflow: visible;
+}
+.rho .fill { position: absolute; inset: 0 auto 0 0; border-radius: 2px; background: var(--accent); }
+.rho .fill[data-rolled="1"] { background: var(--ok); }
+.rho .tick {
+  position: absolute; top: -2px; bottom: -2px; left: 95%; width: 1px;
+  background: var(--ink-faint); opacity: .75;
+}
+.rho .val { font-family: "JetBrains Mono", monospace; font-size: .7rem;
+            font-variant-numeric: tabular-nums; color: var(--ink-soft); width: 2.6rem; text-align: right; }
+.rho.empty .val { color: var(--ink-faint); }
+
+/* progress of last_step / num_train */
+.prog { display: flex; align-items: center; gap: .4rem; min-width: 6rem; }
+.prog .track { flex: 1; height: .3rem; border-radius: 2px; background: var(--meter-track); }
+.prog .fill { height: 100%; border-radius: 2px; background: var(--ink-faint); }
+.prog .val { font-family: "JetBrains Mono", monospace; font-size: .66rem; color: var(--ink-faint);
+             font-variant-numeric: tabular-nums; }
+
+/* ---------- chips ---------- */
+.chip {
+  display: inline-block; font-family: "JetBrains Mono", monospace;
+  font-size: .6rem; letter-spacing: .05em; text-transform: uppercase; font-weight: 600;
+  padding: .1rem .34rem; border-radius: 2px; border: 1px solid currentColor; white-space: nowrap;
+}
+.chip.supine { color: var(--supine); }
+.chip.prone { color: var(--prone); }
+.chip.ok, .chip.done, .chip.finished { color: var(--ok); }
+.chip.warn, .chip.partial, .chip.stalled, .chip.queued { color: var(--warn); }
+.chip.bad, .chip.failed, .chip.killed, .chip.foreign, .chip.unreachable { color: var(--bad); }
+.chip.running, .chip.free, .chip.launching { color: var(--accent); }
+.chip.muted, .chip.unknown, .chip.mine { color: var(--ink-faint); }
+.chip.solid { background: currentColor; border-color: currentColor; }
+.chip.solid span { color: var(--surface); }
+
+/* ---------- panels ---------- */
+.panel { background: var(--surface); border: 1px solid var(--rule); border-radius: 4px; padding: 1rem 1.1rem; }
+.panel + .panel { margin-top: .9rem; }
+.panel > h2 {
+  margin: 0 0 .1rem; font-size: .95rem; font-weight: 700; letter-spacing: -.01em;
+}
+.panel > .sub { margin: 0 0 .9rem; font-size: .76rem; color: var(--ink-faint); }
+
+.pagehead { display: flex; align-items: flex-start; gap: 1rem; margin-bottom: .9rem; flex-wrap: wrap; }
+.pagehead h1 { margin: 0; font-size: 1.35rem; font-weight: 800; letter-spacing: -.02em; }
+.pagehead .sub { margin: .15rem 0 0; color: var(--ink-faint); font-size: .8rem; }
+.pagehead .actions { margin-left: auto; display: flex; gap: .4rem; align-items: center; flex-wrap: wrap; }
+
+.toolbar { display: flex; gap: .5rem; align-items: center; margin-bottom: .7rem; flex-wrap: wrap; }
+.toolbar .count { font-family: "JetBrains Mono", monospace; font-size: .7rem; color: var(--ink-faint); }
+
+.notice {
+  border: 1px solid var(--rule); border-left: 3px solid var(--warn);
+  background: var(--surface); border-radius: 3px; padding: .6rem .8rem;
+  font-size: .78rem; color: var(--ink-soft); margin-bottom: .8rem;
+}
+.notice.bad { border-left-color: var(--bad); }
+.notice.info { border-left-color: var(--accent); }
+.notice b { color: var(--ink); }
+
+.empty { padding: 3rem 1rem; text-align: center; color: var(--ink-faint); font-size: .85rem; }
+.empty b { display: block; color: var(--ink); font-size: .95rem; margin-bottom: .3rem; }
+
+/* ---------- key/value ---------- */
+.kv { display: grid; grid-template-columns: minmax(7rem, auto) 1fr; gap: .3rem .9rem; font-size: .78rem; }
+.kv dt { font-family: "JetBrains Mono", monospace; font-size: .64rem; letter-spacing: .06em;
+         text-transform: uppercase; color: var(--ink-faint); padding-top: .15rem; }
+.kv dd { margin: 0; color: var(--ink); font-family: "JetBrains Mono", monospace; font-size: .74rem;
+         word-break: break-word; }
+
+/* ---------- charts ---------- */
+.chart { background: var(--surface); border: 1px solid var(--rule); border-radius: 4px; padding: .5rem; }
+.chart img { display: block; width: 100%; height: auto; }
+.chartgrid { display: grid; gap: .9rem; grid-template-columns: repeat(auto-fit, minmax(26rem, 1fr)); }
+
+/* ---------- compare tray ---------- */
+.tray {
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 50;
+  background: var(--surface); border-top: 1px solid var(--rule);
+  box-shadow: var(--shadow-lg);
+  padding: .6rem 1.1rem;
+  display: flex; align-items: center; gap: .7rem; flex-wrap: wrap;
+  transform: translateY(110%); transition: transform .18s ease;
+}
+.tray[data-open="1"] { transform: translateY(0); }
+@media (prefers-reduced-motion: reduce) { .tray { transition: none; } }
+.tray .n {
+  font-family: "JetBrains Mono", monospace; font-size: .72rem; color: var(--ink);
+  font-weight: 600;
+}
+.tray .hint { font-size: .72rem; color: var(--ink-faint); }
+.tray .spacer { flex: 1; }
+
+/* ---------- forms ---------- */
+.form { display: grid; gap: .8rem; }
+.fieldrow { display: grid; grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr)); gap: .6rem; }
+.field { display: flex; flex-direction: column; gap: .2rem; }
+.field > label {
+  font-family: "JetBrains Mono", monospace; font-size: .6rem; letter-spacing: .08em;
+  text-transform: uppercase; color: var(--ink-faint); font-weight: 600;
+}
+.field input[type=text], .field input[type=number], .field select {
+  padding: .35rem .45rem; font-size: .76rem; border-radius: 3px;
+  border: 1px solid var(--rule); background: var(--ground); color: var(--ink);
+}
+.field.check { flex-direction: row; align-items: center; gap: .4rem; }
+.field.check label { text-transform: none; letter-spacing: 0; font-size: .76rem;
+                     font-family: "Bricolage Grotesque", sans-serif; color: var(--ink-soft); }
+.field.check input { accent-color: var(--accent); }
+fieldset { border: 1px solid var(--rule); border-radius: 3px; padding: .7rem .8rem; margin: 0; }
+legend { font-family: "JetBrains Mono", monospace; font-size: .6rem; letter-spacing: .1em;
+         text-transform: uppercase; color: var(--ink-faint); padding: 0 .3rem; }
+
+/* ---------- logs ---------- */
+pre.log {
+  background: var(--ground); border: 1px solid var(--rule); border-radius: 3px;
+  padding: .7rem .8rem; overflow: auto; max-height: 26rem;
+  font-family: "JetBrains Mono", monospace; font-size: .68rem; line-height: 1.55;
+  color: var(--ink-soft); margin: 0; white-space: pre-wrap; word-break: break-word;
+}
+
+.hosts { display: grid; grid-template-columns: repeat(auto-fill, minmax(8.5rem, 1fr)); gap: .4rem; }
+.host {
+  border: 1px solid var(--rule); border-radius: 3px; padding: .45rem .55rem;
+  background: var(--surface);
+}
+.host .name { font-family: "JetBrains Mono", monospace; font-size: .72rem; font-weight: 600; }
+.host .detail { font-size: .62rem; color: var(--ink-faint); font-family: "JetBrains Mono", monospace; }
+
+.htmx-request .spin { opacity: .5; }
+[hidden] { display: none !important; }

@@ -1,0 +1,39 @@
+{% from "_macros.html" import rho_meter with context %}
+<div class="toolbar">
+  <span class="count">{{ groups|length }} experiment{{ '' if groups|length == 1 else 's' }} &mdash; {{ total }} runs</span>
+</div>
+{% if not groups %}
+  <div class="panel"><div class="empty"><b>No experiments match these filters.</b>Clear a filter to widen the search.</div></div>
+{% else %}
+<div class="tablewrap">
+<table class="runs">
+  <thead><tr>
+    <th style="width:3px"></th><th style="width:1.6rem"></th>
+    <th>Experiment</th><th>Date</th><th>Setup</th><th>Seeds</th>
+    <th>mean best <span class="caseless">&rho;</span></th><th>range</th><th>Ckpt</th>
+  </tr></thead>
+  <tbody>
+  {% for g in groups %}
+    <tr data-posture="{{ g.posture }}" data-group="{{ g.run_ids|join(' ') }}">
+      <td class="stripe"><i></i></td>
+      <td><input type="checkbox" data-pick-group value="{{ g.run_ids|join(' ') }}"
+                 aria-label="Select all seeds of {{ g.model_name }}"></td>
+      <td><span class="runname" title="{{ g.model_name }}">{{ g.model_name }}</span>
+          <span class="runmeta">{{ g.collection }}{% if g.episode_steps %} &middot; {{ g.episode_steps }} steps{% endif %}</span></td>
+      <td class="num runmeta">{{ g.date or '--' }}</td>
+      <td>
+        <span class="chip {{ g.posture }}">{{ g.posture }}</span>
+        <span class="chip muted">{{ g.algorithm or '?' }}</span>
+        {% if g.her %}<span class="chip ok">her</span>{% endif %}
+        <span class="chip muted">{{ g.reward_shape }}</span>
+      </td>
+      <td class="num runmeta">n={{ g.n_seeds }}</td>
+      <td>{{ rho_meter(g.rho_mean) }}</td>
+      <td class="num runmeta">{% if g.rho_worst is not none %}{{ '%.2f'|format(g.rho_worst) }}&ndash;{{ '%.2f'|format(g.rho_best) }}{% else %}--{% endif %}</td>
+      <td class="num runmeta">{{ g.n_checkpoints or 0 }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% endif %}

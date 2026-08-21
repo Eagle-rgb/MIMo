@@ -1,0 +1,95 @@
+{% extends "base.html" %}
+{% block title %}Launch &middot; MIMo Lab{% endblock %}
+
+{% set GROUPS = [('run', 'Run'), ('embodiment', 'Embodiment'), ('reward', 'Reward'),
+                 ('her', 'HER and goals'), ('offpolicy', 'Off-policy'), ('optim', 'Optimiser'),
+                 ('eval', 'Periodic evaluation'), ('misc', 'Other')] %}
+
+{% block body %}
+<main class="main" style="max-width:64rem;margin:0 auto">
+  <div class="pagehead">
+    <div>
+      <h1>Launch training</h1>
+      <p class="sub">One run per host, detached with <code>setsid nohup</code> and logged to the
+        shared home &mdash; so it survives the connection closing and can be killed by PID.</p>
+    </div>
+  </div>
+
+  {% if yaml_gaps %}
+    <div class="notice bad"><b>Config drift.</b> <code>{{ yaml_gaps|join(', ') }}</code> would not
+      round-trip through <code>data.yml</code>. Fix <code>yaml_data</code> first.</div>
+  {% endif %}
+
+  <div class="panel">
+    <h2>Preset</h2>
+    <p class="sub">The two configurations this fork actually runs. Everything below is editable.</p>
+    <div style="display:flex;gap:.4rem;flex-wrap:wrap">
+      {% for key, p in PRESETS.items() %}
+        <button class="btn sm" type="button" data-preset="{{ key }}"
+                data-values='{{ p.flags|tojson }}' title="{{ p.note }}">{{ p.label }}</button>
+      {% endfor %}
+    </div>
+  </div>
+
+  <form class="form" id="launchform" style="margin-top:.9rem">
+    <div class="panel">
+      <h2>Sweep</h2>
+      <p class="sub">Seeds are named <code>&lt;name&gt;_run_&lt;i&gt;</code>, the pattern the
+        <code>results/</code> scripts expect.</p>
+      <div class="fieldrow">
+        <div class="field">
+          <label for="name">Name</label>
+          <input id="name" name="name" type="text" required placeholder="sac_her_sparse_v2">
+        </div>
+        <div class="field">
+          <label for="seeds">Seeds</label>
+          <input id="seeds" name="seeds" type="number" value="6" min="1" max="18">
+        </div>
+      </div>
+    </div>
+
+    {% for group_key, group_label in GROUPS %}
+    <fieldset>
+      <legend>{{ group_label }}</legend>
+      <div class="fieldrow">
+        {% for flag, kind, default, group, in_yaml in TRAIN_FLAGS %}
+          {% if group == group_key %}
+            {% if kind == 'bool' %}
+              <div class="field check">
+                <input id="f_{{ flag }}" type="checkbox" name="{{ flag }}" value="1" {% if default %}checked{% endif %}>
+                <label for="f_{{ flag }}">--{{ flag }}</label>
+              </div>
+            {% elif kind == 'choice' %}
+              <div class="field">
+                <label for="f_{{ flag }}">{{ flag }}</label>
+                <select id="f_{{ flag }}" name="{{ flag }}">
+                  {% for c in CHOICES[flag] %}<option value="{{ c }}" {% if c == default %}selected{% endif %}>{{ c }}</option>{% endfor %}
+                </select>
+              </div>
+            {% else %}
+              <div class="field">
+                <label for="f_{{ flag }}">{{ flag }}</label>
+                <input id="f_{{ flag }}" type="text" name="{{ flag }}"
+                       value="{{ '' if default is none else default }}" placeholder="unset">
+              </div>
+            {% endif %}
+          {% endif %}
+        {% endfor %}
+      </div>
+    </fieldset>
+    {% endfor %}
+
+    <div class="panel">
+      <h2>Command</h2>
+      <p class="sub">What will run on each host. Check it before launching.</p>
+      <pre class="log" id="preview">Building the command…</pre>
+      <div id="launcherrors"></div>
+      <div style="margin-top:.7rem;display:flex;gap:.5rem;align-items:center">
+        <button class="btn primary" type="submit">Launch sweep</button>
+        <a class="btn" href="/jobs">Jobs</a>
+        <span class="mono" style="font-size:.7rem;color:var(--ink-faint)" id="launchmsg"></span>
+      </div>
+    </div>
+  </form>
+</main>
+{% endblock %}

@@ -19,6 +19,7 @@ To review a trained model::
 The available algorithms are ``PPO, SAC, TD3, DDPG, A2C``.
 """
 
+import csv
 import os
 import gymnasium as gym
 import time
@@ -65,7 +66,7 @@ from mimoEnv.envs.gaussiannoiseobswrapper import GaussianNoiseObsWrapper
 
 def test(wrapped_env, save_dir, model=None, render_video=False, render_frames=False, render_actuations=False, roll_over_starting_position='prone',
          action_noise='white', action_sigma=0.3, action_seq_len=None, action_noise_seed=0,
-         action_beta=1.0):
+         action_beta=1.0, log_obs=None):
     """ Tests the model for one episode.
 
     Args:
@@ -77,6 +78,11 @@ def test(wrapped_env, save_dir, model=None, render_video=False, render_frames=Fa
             `save_dir`.
         render_frames (bool): If ``True``, records in total 4 frames during the rollover - including the final image.
         render_actuations (bool): If ``True``, renders on the top right corner a plot of the muscle actuations.
+        log_obs (bool | None): If ``True``, writes 'episode_<n>_obs.csv' next to the video: one row
+            per step with every 'robot:*' joint angle in degrees, the vestibular sensors, and the
+            derived rotation measures. ``None`` (the default) means "follow 'render_video'", so a
+            rendered video always comes with the numbers behind it -- reading a posture off a video
+            is guesswork otherwise.
     """ 
     obs, _ = wrapped_env.reset()
     images = []
@@ -117,9 +123,64 @@ def test(wrapped_env, save_dir, model=None, render_video=False, render_frames=Fa
 
     print("Testing model...")
 
-    #proprio_observations = []
-    #vesti_observations = []
-    #touch_observations = []
+    # 20.08.2026 Per-step observation log written alongside the video. Replaces the commented-out
+    # 'proprio_observations' blocks that used to sit here and only ever produced summary .npz
+    # files; what is actually needed when watching a rollout is "what was this joint doing at that
+    # frame", which needs the per-step values under their joint names.
+    if log_obs is None:
+        log_obs = render_video
+    obs_rows = []
+    unw = wrapped_env.unwrapped
+    joint_names = [unw.model.joint(i).name for i in range(unw.model.njnt)
+                   if unw.model.joint(i).name.startswith('robot:')]
+    joint_adr = [unw.model.jnt_qposadr[unw.model.joint(n).id] for n in joint_names]
+    joint_labels = [n.replace('robot:', '') for n in joint_names]
+    is_roll_over = hasattr(unw, 'get_achieved_goal_cos')
+
+    def observation_row(step, action):
+        row = {'step': step}
+        row.update({f'{lbl}_deg': float(np.degrees(unw.data.qpos[adr]))
+                    for lbl, adr in zip(joint_labels, joint_adr)})
+        vest = unw.get_vestibular_obs()
+        for i, k in enumerate(('acc_x', 'acc_y', 'acc_z', 'gyro_x', 'gyro_y', 'gyro_z')):
+            row[f'vestibular_{k}'] = float(vest[i])
+        if is_roll_over:
+            row['rho'] = float(unw.get_achieved_goal_cos()[0])
+            row['hip_deg'] = float(unw.get_achieved_rotation_degrees('hip'))
+            row['chest_deg'] = float(unw.get_achieved_rotation_degrees('chest'))
+            row['dot_hip'] = float(unw.get_dot_local_x_to_global_z('hip'))
+            row['dot_chest'] = float(unw.get_dot_local_x_to_global_z('chest'))
+            # Gravity direction expressed in the HIP frame. The head->hip rotation depends only on
+            # the joints between them, so the root free joint cancels and this stays something
+            # MIMo could in principle sense. At rest its x component equals 'dot_hip'; while he is
+            # moving it does not, because an accelerometer reports gravity PLUS self-acceleration.
+            site = unw.model.site('vestibular').id
+            R_site = unw.data.site_xmat[site].reshape(3, 3)
+            R_hip = unw.data.xmat[unw.model.body('hip').id].reshape(3, 3)
+            acc_hip = (R_hip.T @ R_site) @ vest[:3]
+            for i, k in enumerate('xyz'):
+                row[f'hipframe_acc_{k}'] = float(acc_hip[i])
+        row['action_sq_sum'] = float(np.square(action).sum()) if action is not None else 0.0
+        return row
+
+    def write_obs_csv(counter):
+        if not (log_obs and obs_rows):
+            return
+        path = os.path.join(save_dir, f'episode_{counter}_obs.csv')
+        with open(path, 'w', newline='') as fh:
+            writer = csv.DictWriter(fh, fieldnames=list(obs_rows[0].keys()))
+            writer.writeheader()
+            writer.writerows(obs_rows)
+        print(f"Wrote {len(obs_rows)} observation rows to '{path}'")
+        last = obs_rows[-1]
+        print("Final joint angles of the intrinsic-goal joints (degrees):")
+        for lbl in ('head_swivel', 'head_tilt_side', 'head_tilt',
+                    'hip_lean1', 'hip_rot1', 'hip_bend1'):
+            key = f'{lbl}_deg'
+            if key in last:
+                jid = unw.model.joint(f'robot:{lbl}').id
+                rng = np.degrees(unw.model.jnt_range[jid])
+                print(f"    {lbl:<16} {last[key]:+8.2f}   (range {rng[0]:+.0f} .. {rng[1]:+.0f})")
 
     n_steps = 0
     reached_45_deg=False
@@ -145,6 +206,9 @@ def test(wrapped_env, save_dir, model=None, render_video=False, render_frames=Fa
     if render_frames:
         save_image('frame_1')
 
+    if log_obs:
+        obs_rows.append(observation_row(0, None))
+
     while not done and not trunc:
         if model is None:
             if noise_sampler is None:
@@ -163,9 +227,8 @@ def test(wrapped_env, save_dir, model=None, render_video=False, render_frames=Fa
         obs, _, done, trunc, info = wrapped_env.step(action)
         n_steps += 1
 
-        #proprio_observations.append(obs['observation'])
-        #vesti_observations.append(obs['vestibular'])
-        #touch_observations.append(obs['touch'])
+        if log_obs:
+            obs_rows.append(observation_row(n_steps, action))
         if render_video:
             images.append(get_frame())
 
@@ -190,9 +253,12 @@ def test(wrapped_env, save_dir, model=None, render_video=False, render_frames=Fa
             if render_frames:
                 save_image('frame_4')
 
+            write_obs_csv(im_counter)
+            obs_rows = []
+
             obs, _ = wrapped_env.reset()
             if render_video:
-                save_name=os.path.join(save_dir, 'episode_{}.avi'.format(im_counter))
+                save_name=os.path.join(save_dir, 'episode_{}.mp4'.format(im_counter))
                 print("Rendering video as '"+save_name+"'")
                 render_height = 720 if render_actuations else 480
                 render_width = 480
@@ -200,22 +266,6 @@ def test(wrapped_env, save_dir, model=None, render_video=False, render_frames=Fa
 
                 images = []
                 im_counter += 1
-
-    # Calculate mean and variance of observations.
-    #proprio_observations = np.array(proprio_observations)
-    #vesti_observations = np.array(vesti_observations)
-    #touch_observations = np.array(touch_observations)
-
-    #proprio_mean = np.mean(proprio_observations, axis=0)
-    #vesti_mean = np.mean(vesti_observations, axis=0)
-    #proprio_std = np.std(proprio_observations, axis=0)
-    #vesti_std = np.std(vesti_observations, axis=0)
-    #touch_mean = np.mean(touch_observations, axis=0)
-    #touch_std = np.std(touch_observations, axis=0)
-
-    #np.savez("obs_stats_proprio.npz", mean=proprio_mean, std=proprio_std)
-    #np.savez("obs_stats_vesti.npz", mean=vesti_mean, std=vesti_std)
-    #np.savez("obs_stats_touch.npz", mean=touch_mean, std=touch_std)
 
     wrapped_env.reset()
 
@@ -324,6 +374,20 @@ def load_observation_normalization_dict(obs):
     print("Successfully loaded observation normalization.")
     return mean_dict, std_dict
 
+def parse_intrinsic_goal_joints(joints_string: str):
+    """ Parses the --intrinsic_goal_joints list.
+
+    Comma-separated joint names, with or without the 'robot:' prefix (the model always uses it,
+    but the note this came from does not). An empty string means "use the default six", which is
+    signalled to the environment as None rather than as an empty list -- an empty list would be a
+    goal with no joint dimensions at all, which is a different, valid configuration.
+    """
+    names = [name.strip() for name in joints_string.split(',') if name.strip()]
+    if not names:
+        return None
+    return [name if name.startswith('robot:') else f'robot:{name}' for name in names]
+
+
 def parse_proprio(proprio_args_string: str):
     """ Parses proprio arguments. Returns None if invalid. Expects
     proprio arguments of the format <arg>|<arg>|...
@@ -423,14 +487,43 @@ def main():
                         help='Choose the starting position of MIMo in the roll_over environment. Put '
                              'either \'supine\', \'prone\' or \'alternating\'. Default: \'prone\'.')
     parser.add_argument('--goal_achievement_function', required=False, # Previously: --roll_over_goal_function
-                        choices=['angle', 'cos', 'intrinsic'],
+                        choices=['angle', 'cos', 'intrinsic', 'gravity'],
                         default='cos',
                         help='Choose the function of achieved goal for the roll_over environment. Put '
-                             'either \'angle\', \'cos\' or \'intrinsic\'. Default: \'cos\'.')
-    parser.add_argument('--intrinsic_goal', required=False,
-                        choices=['all', 'vesti', 'vesti_acc', 'sparse_proprio'],
-                        default='all',
-                        help='Goal to use for intrinsic goal achievement function.')
+                             'either \'angle\', \'cos\' or \'intrinsic\'. \'angle\' and \'cos\' are '
+                             'scalar rotations read off the root free joint, which MIMo cannot '
+                             'sense. \'intrinsic\' is the non-scalar, non-extrinsic posture goal: a '
+                             'vector of joint angles plus vestibular acc-z, all of it already in '
+                             'the observation, but it does NOT work -- see docs/roll_over.md 3.4. '
+                             '\'gravity\' is its successor: the gravity direction in the hip frame, '
+                             'integrated from the gyroscope, +1 supine to -1 prone. '
+                             'Default: \'cos\'.')
+    # --- 'intrinsic' goal function ---------------------------------------------------------
+    # 19.08.2026 The old '--intrinsic_goal' sub-mode selector ('all', 'vesti', 'vesti_acc',
+    # 'sparse_proprio') was removed: those goals were dicts of raw sensor readings, which cannot
+    # be a SB3 goal space and cannot be relabelled by HER, and only 3 of 539 stored runs used
+    # them. 'intrinsic' now means the one posture goal, configured by the flags below.
+    parser.add_argument('--intrinsic_goal_joints', default='', type=str, required=False,
+                        help="Comma-separated joint names making up the intrinsic goal vector, "
+                             "with or without the 'robot:' prefix. Empty means the default six "
+                             "(head swivel/tilt/tilt_side, hip lean1/rot1/bend1). All must be "
+                             "1-DoF hinges.")
+    parser.add_argument('--intrinsic_acc_axes', default='x', type=str, required=False,
+                        help="Vestibular accelerometer components in the intrinsic goal, as a "
+                             "subset of 'xyz'. Default 'x': the accelerometer reports in the head "
+                             "site's local frame, whose x axis is the one aligned with world z, so "
+                             "x is the only component that separates prone (-9.7) from supine "
+                             "(+9.6). Pass '' to drop the accelerometer entirely -- that leaves "
+                             "only joint angles, which barely differ between the two postures.")
+    parser.add_argument('--intrinsic_acc_w', default=1.0, type=float, required=False,
+                        help="Weight of the accelerometer dimension of the intrinsic goal "
+                             "relative to the range-normalised joint angles. Default: 1.0.")
+    parser.add_argument('--intrinsic_goal_eps', default=0.15, type=float, required=False,
+                        help="Success radius of the intrinsic goal: success is "
+                             "||achieved - desired|| <= eps. Under --sparse_reward this value is "
+                             "the task definition. Default: 0.15.")
+    parser.add_argument('--intrinsic_reference_samples', default=20, type=int, required=False,
+                        help="Resets averaged into the recorded reference posture. Default: 20.")
     parser.add_argument('--roll_over_model_path_auto', action='store_true',
                         help="""If set, the path of the model for the roll_over environment
 is automatically set to the following:
@@ -469,9 +562,9 @@ An example is '251206_prone_linear_1e6_test'
                              "episode horizon unless you set it higher yourself.")
     parser.add_argument('--her', action='store_true',
                         help="Use Hindsight Experience Replay. Requires an off-policy "
-                             "--algorithm (SAC/TD3/DDPG) and a scalar --goal_achievement_function "
-                             "('cos' or 'angle'); the 'intrinsic' goal function has dict-valued "
-                             "goals and is not relabelable. Forces "
+                             "--algorithm (SAC/TD3/DDPG). Works with every "
+                             "--goal_achievement_function, including 'intrinsic': its goals are "
+                             "flat vectors and its reward is pure, so relabelling is real. Forces "
                              "--achieved_goal_in_observation on, since HER needs that key.")
     parser.add_argument('--n_sampled_goal', default=4, type=int,
                         help="HER: virtual transitions created per real transition.")
@@ -506,13 +599,24 @@ An example is '251206_prone_linear_1e6_test'
     parser.add_argument('--goal_curriculum_margin', default=0.1, type=float,
                         help="How far the sampled goals may reach beyond that quantile. Also the "
                              "width of the initial range, before any episode has finished.")
-    parser.add_argument('--lr_schedule', default='constant', choices=['constant', 'linear'],
-                        help="'linear' decays the learning rate to 0 over the run (SB3 takes a "
-                             "callable of the remaining progress). Runs were observed losing a "
-                             "solved policy late -- one seed went from 100 %% roll at 800k to 0 %% "
-                             "at 1e6 -- and a rate that reaches 0 freezes the endpoint instead of "
-                             "letting it drift. Independent of whether the entropy coefficient is "
-                             "the cause, which is why it is the cheap first defence.")
+    parser.add_argument('--lr_schedule', default='constant',
+                        choices=['constant', 'linear', 'linear_tail'],
+                        help="Decay the learning rate so the endpoint is a frozen policy rather "
+                             "than a drifting one. 'linear' decays from step 0 to 0 at "
+                             "--train_for. **Measured on ep100, 6 seeds: it does what it is meant "
+                             "to do for seeds that learn early (retention 84 %%, best of three "
+                             "variants, and zero catastrophic dropouts) but it cannot rescue a "
+                             "late starter -- one seed was still at rho 0.076 at 500k, climbed "
+                             "afterwards on an already-halved rate and ended at 0.907. Only 3 of "
+                             "6 seeds ever reached 100 %%, against 5 and 6 without it.** "
+                             "'linear_tail' therefore holds the rate constant until "
+                             "--lr_decay_start of the run and only then decays to 0, leaving the "
+                             "whole learning phase at full rate (the first 100 %% falls between "
+                             "442k and 667k across variants) and freezing only the endpoint.")
+    parser.add_argument('--lr_decay_start', default=0.6, type=float,
+                        help="Fraction of --train_for at which 'linear_tail' starts decaying. "
+                             "0.6 of 1e6 = 600k, just after the observed learning phase. Must be "
+                             "in [0, 1).")
     parser.add_argument('--target_entropy', default=None, type=float,
                         help="SAC's entropy target, default -dim(action) = -46 here. The "
                              "automatic coefficient rises whenever the policy becomes more "
@@ -559,10 +663,6 @@ An example is '251206_prone_linear_1e6_test'
     parser.add_argument('--achieved_goal_in_observation', action='store_true', default=False)
     parser.add_argument('--pen_factor', default=0.02, type=float, required=False,  # Previously, '--pen_fac'
                         help="Penalization factor when action penalization is active.")
-    parser.add_argument('--proprio_w', default=0.01, type=float, required=False,  # Previously, 'intrinsic_goal_proprio_w'
-                        help="Weighting of proprio goal in intrinsic goal for state potential. Default: 0.01.")
-    parser.add_argument('--vesti_w', default=1.0, type=float, required=False,  # Previously, 'intrinsic_goal_vesti_w'
-                        help="Weighting of vesti goal in intrinsic goal for state potential. Default: 1.0.")
     parser.add_argument('--freeze_leg', default=False, action='store_true', required=False,
                         help="Freezes leg.")
     parser.add_argument('--freeze_arm', default=False, action='store_true', required=False,
@@ -574,6 +674,13 @@ An example is '251206_prone_linear_1e6_test'
     # Frame 2: 45° mean rollover
     # Frame 3: Side Lying
     # Frame 4: Roll Over - Final Image
+    parser.add_argument('--log_obs', default=None, action=argparse.BooleanOptionalAction,
+                        help="Write 'episode_<n>_obs.csv' next to the rendered video: one row per "
+                             "step with every 'robot:*' joint angle in degrees, the six vestibular "
+                             "sensors, rho / hip_deg / chest_deg, and the gravity vector rotated "
+                             "into the hip frame. Defaults to following --render_video, so a video "
+                             "always ships with the numbers behind it. Pass --no-log_obs to "
+                             "suppress. Describes the invocation, so not stored in data.yml.")
     parser.add_argument('--render_frames', default=False, action='store_true', required=False,
                         help="Renders many frames - including the final image of the episode in testing - "
                         " and saves them as 'frame_{1-5}.png'.")
@@ -638,7 +745,7 @@ An example is '251206_prone_linear_1e6_test'
     touch = args.touch
     achieved_goal_in_observation=args.achieved_goal_in_observation
     pen_factor = args.pen_factor
-    intrinsic_goal = args.intrinsic_goal
+    intrinsic_goal_joints = parse_intrinsic_goal_joints(args.intrinsic_goal_joints)
     freeze_arm = args.freeze_arm
     freeze_leg = args.freeze_leg
     side_lying = args.side_lying
@@ -659,14 +766,23 @@ An example is '251206_prone_linear_1e6_test'
     # therefore reads the model's global step count instead; 'lr_state' is filled in once the
     # model exists.
     lr_state = {'steps': 0, 'total': args.train_for}
-    if args.lr_schedule == 'linear':
+    if args.lr_schedule != 'constant':
+        if not 0.0 <= args.lr_decay_start < 1.0:
+            raise ValueError(f"--lr_decay_start must be in [0, 1), got {args.lr_decay_start}.")
         base_lr = learning_rate
+        # 'linear' is 'linear_tail' with the decay starting at step 0.
+        decay_start = args.lr_decay_start if args.lr_schedule == 'linear_tail' else 0.0
 
-        def learning_rate(progress_remaining, _base=base_lr, _state=lr_state):
+        def learning_rate(progress_remaining, _base=base_lr, _state=lr_state,
+                          _start=decay_start):
             total = _state['total']
             if not total:
                 return progress_remaining * _base
-            return max(0.0, 1.0 - _state['steps'] / total) * _base
+            done = _state['steps'] / total
+            if done <= _start:
+                return _base
+            # Linear from the full rate at '_start' to 0 at the end of the run.
+            return max(0.0, (1.0 - done) / (1.0 - _start)) * _base
 
     if args.target_entropy is not None and algorithm != 'SAC':
         raise ValueError(
@@ -691,11 +807,6 @@ An example is '251206_prone_linear_1e6_test'
             raise ValueError(
                 f"--her needs an off-policy algorithm to attach the replay buffer to, got "
                 f"--algorithm={algorithm}. Use one of {', '.join(OFF_POLICY_ALGORITHMS)}.")
-        if roll_over_goal_function == 'intrinsic':
-            raise ValueError(
-                "--her is incompatible with --goal_achievement_function=intrinsic: those goals "
-                "are dictionaries of sensor readings, and roll_over's compute_reward keeps the "
-                "old live-state path for them, so relabelling would be a silent no-op.")
         # HerReplayBuffer reads next_obs['achieved_goal'], so the key has to be in the
         # observation. Forcing it here rather than erroring keeps the CLI usable.
         if not achieved_goal_in_observation:
@@ -738,18 +849,6 @@ An example is '251206_prone_linear_1e6_test'
 
     if len(args.proprio_config) > 0:
         proprio_params["components"] = parse_proprio(args.proprio_config)
-
-    # Weightings of different sensors in intrinsic goals. We usually weight vestibular much
-    # higher (1.0 compared to 0.01) than proprioception observation.
-    intrinsic_goal_proprio_w = args.proprio_w
-    intrinsic_goal_vesti_w = args.vesti_w
-
-    # Create a dict of the weights to pass to the roll_over environment. Missing weights like
-    # touch are automatically created and defaulted to 1.0.
-    intrinsic_goal_w = {
-        'observation': intrinsic_goal_proprio_w,
-        'vestibular': intrinsic_goal_vesti_w
-    }
 
     if freeze_arm or freeze_leg:
         print("Warning! Some limbs are frozen.")
@@ -823,8 +922,11 @@ An example is '251206_prone_linear_1e6_test'
             proprio_params=proprio_params,
             pbrs_w=pbrs_w,
             pen_factor=pen_factor,
-            intrinsic_goal=intrinsic_goal,
-            intrinsic_goal_w=intrinsic_goal_w,
+            intrinsic_goal_joints=intrinsic_goal_joints,
+            intrinsic_acc_axes=args.intrinsic_acc_axes,
+            intrinsic_acc_w=args.intrinsic_acc_w,
+            intrinsic_goal_eps=args.intrinsic_goal_eps,
+            intrinsic_reference_samples=args.intrinsic_reference_samples,
             freeze_leg=freeze_leg,
             freeze_arm=freeze_arm,
             success_at_side_lying=side_lying,
@@ -938,9 +1040,13 @@ An example is '251206_prone_linear_1e6_test'
         'obs_norm': observation_normalization,
         'touch': touch,
         'pen_factor': pen_factor,
-        'vesti_w': intrinsic_goal_vesti_w,
-        'proprio_w': intrinsic_goal_proprio_w,
-        'intrinsic_goal': intrinsic_goal,
+        # Intrinsic goal function. All experiment-defining, so all of them round-trip: reloading
+        # a model trained with eps=0.15 under a different eps would evaluate a different task.
+        'intrinsic_goal_joints': args.intrinsic_goal_joints,
+        'intrinsic_acc_axes': args.intrinsic_acc_axes,
+        'intrinsic_acc_w': args.intrinsic_acc_w,
+        'intrinsic_goal_eps': args.intrinsic_goal_eps,
+        'intrinsic_reference_samples': args.intrinsic_reference_samples,
         'freeze_leg': freeze_leg,
         'freeze_arm': freeze_arm,
         'side_lying': side_lying,
@@ -973,6 +1079,7 @@ An example is '251206_prone_linear_1e6_test'
         'episode_steps': episode_steps,
         # Stability knobs. 'lr' above is the base rate; with a schedule it is the value at step 0.
         'lr_schedule': args.lr_schedule,
+        'lr_decay_start': args.lr_decay_start if args.lr_schedule == 'linear_tail' else None,
         'target_entropy': args.target_entropy,
         'eval_every': args.eval_every,
         'eval_episodes': args.eval_episodes,
@@ -1000,7 +1107,11 @@ An example is '251206_prone_linear_1e6_test'
             touch_params=ROLL_OVER_TOUCH_PARAMS if touch else None,
             achieved_goal_in_observation=achieved_goal_in_observation,
             proprio_params=proprio_params, pbrs_w=pbrs_w, pen_factor=pen_factor,
-            intrinsic_goal=intrinsic_goal, intrinsic_goal_w=intrinsic_goal_w,
+            intrinsic_goal_joints=intrinsic_goal_joints,
+            intrinsic_acc_axes=args.intrinsic_acc_axes,
+            intrinsic_acc_w=args.intrinsic_acc_w,
+            intrinsic_goal_eps=args.intrinsic_goal_eps,
+            intrinsic_reference_samples=args.intrinsic_reference_samples,
             freeze_leg=freeze_leg, freeze_arm=freeze_arm,
             success_at_side_lying=False,
             sparse_reward=sparse_reward,
@@ -1043,7 +1154,8 @@ An example is '251206_prone_linear_1e6_test'
              action_sigma=args.action_sigma,
              action_seq_len=args.action_seq_len,
              action_noise_seed=args.action_noise_seed,
-             action_beta=args.action_beta)
+             action_beta=args.action_beta,
+             log_obs=args.log_obs)
 
     env.close()
 

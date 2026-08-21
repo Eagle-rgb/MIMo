@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% block title %}Jobs &middot; MIMo Lab{% endblock %}
+
+{% block body %}
+<main class="main" style="max-width:82rem;margin:0 auto">
+  <div class="pagehead">
+    <div>
+      <h1>Jobs</h1>
+      <p class="sub">Training runs on the RBI pool and evaluations on this host.
+        Killing sends <code>SIGTERM</code> to one PID &mdash; never <code>killall python</code>.</p>
+    </div>
+    <div class="actions">
+      <a class="btn primary sm" href="/launch">Launch training</a>
+    </div>
+  </div>
+
+  {% if settings.offline %}
+    <div class="notice"><b>Offline mode.</b> Launching, killing and evaluating are disabled.
+      Start without <code>--offline</code> on a cluster host to enable them.</div>
+  {% endif %}
+
+  {% if yaml_gaps %}
+    <div class="notice bad"><b>Config drift.</b> These flags define an experiment but are not stored
+      in <code>data.yml</code>, so a model trained with them would reload with different settings:
+      <code>{{ yaml_gaps|join(', ') }}</code>. Add them to <code>yaml_data</code> in
+      <code>illustrations.py</code> before using them.</div>
+  {% endif %}
+
+  <div class="panel">
+    <h2>Hosts</h2>
+    <p class="sub">Probed live. One run per host &mdash; a MIMo env is ~3.6&nbsp;GB and four in
+      parallel were OOM-killed.</p>
+    <div id="hosts" hx-get="/fragments/hosts" hx-trigger="load, every 60s" hx-indicator="#hosts">
+      <div class="empty">Probing the pool&hellip;</div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2>Activity</h2>
+    <p class="sub">Refreshes every 10 seconds; state is reconciled against what is actually running.</p>
+    <div id="jobs" hx-get="/fragments/jobs" hx-trigger="load, every 10s">
+      <div class="empty">Loading&hellip;</div>
+    </div>
+  </div>
+</main>
+{% endblock %}

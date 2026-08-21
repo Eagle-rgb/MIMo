@@ -17,3 +17,10 @@ scikit-image==0.24.0
 tensorboard==2.19.0
 requests==2.32.5
 seaborn
+
+# mimolab (the run browser / launcher / evaluation UI). Versions pinned like everything else.
+# Do NOT relax the gymnasium pin above while touching these -- MIMoEnv._initialize_simulation
+# has version-dependent behaviour that has broken repeatedly.
+fastapi==0.141.1
+uvicorn[standard]==0.52.4
+python-multipart==0.0.32
