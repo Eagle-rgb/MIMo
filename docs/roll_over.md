@@ -488,6 +488,120 @@ python mimoEnv/illustrations.py --env=roll_over --algorithm=SAC \
 ```
 
 
+### 3.5 The `gravity` goal function -- the successor to `intrinsic`
+
+Added 20.08.2026, after the measurements in 3.4 showed `intrinsic` to be unfixable by tuning.
+
+The idea is to stop reading a *posture* off an *acceleration* sensor. The accelerometer can only
+do that at rest; the gyroscope measures rotation directly and is structurally untouched by linear
+acceleration. So the gravity direction is **integrated**, not measured:
+
+```
+t = 0, MIMo demonstrably at rest:  g_site <- normalize(accelerometer)
+every step, gyroscope only:        g_site <- rotate(g_site, -omega * dt)     # Rodrigues
+goal:                              [ (R_body^T R_site @ g_site)[0]
+                                     for body in GRAVITY_GOAL_BODIES ]       # hip, chest
+```
+
++1 supine, -1 prone per body -- the same scale as `get_dot_local_x_to_global_z(body)`, but
+reconstructed from what MIMo senses. `R_body^T R_site` depends only on the joints between that
+body and the head, so the root free joint cancels (measured residual 0.017 deg) and the goal stays
+non-extrinsic. Configured by `--goal_achievement_function=gravity`; `--intrinsic_goal_eps` is
+reused as the success radius, where `eps = 2*(1 - rho_target)` per body.
+
+Why each defect of `intrinsic` disappears: shaking has no purchase because linear acceleration
+never enters the integration; head turning cancels as an *identity* rather than being
+counterweighted (the gyro rotates `g_site` by exactly the amount that leaves `R_rel @ g_site`
+fixed); and the joints stop being goal dimensions, so the anti-correlation of 3.4 is gone.
+
+**Validated offline before implementation**, replaying recorded rollouts: correlation with the
+truth 0.9991 (min 0.9978) on a policy that rolls, and 0.004 drift over a full 250-step episode on
+the policy that games the old goal. Re-measured on the trained policy afterwards: mean |error|
+0.0355 over 6x250 steps with no accumulation (0.036 / 0.040 / 0.045 / 0.036 / 0.022 per 50-step
+block). **Sensing is not the bottleneck.**
+
+#### Results
+
+*(supine, age 9/9, PPO + PBRS(100), pen 0.02, 250-step episodes, matched to
+`26-08-19_supine_age9_ep250` in everything but the goal function)*
+
+| run | steps | rho_max | success | side | hip | chest | gap |
+|---|---|---|---|---|---|---|---|
+| `intrinsic` (3.4) | 1M | 0.019 | 0.014 | 0.00 | 5.2 | 10.3 | -5.1 |
+| `gravity`, hip only | 1M | 0.385 | 0.000 | 0.00 | 101.9 | 42.5 | **59.4** |
+| `gravity`, hip+chest | 1M | 0.482 | 0.012 | 0.19 | 107.4 | 60.5 | 46.9 |
+| `cos` baseline | 1M | 0.952 | 0.984 | 0.99 | 161.0 | 151.0 | 10.0 |
+
+rho per 200k steps:
+
+```
+gravity hip+chest   0.162  0.369  0.387  0.397  0.444   <- still rising at 1M
+gravity hip only    0.185  0.372  0.384  0.386  0.384   <- plateau from 400k
+cos baseline        0.212  0.826  0.933  0.948  0.952
+```
+
+Two findings worth keeping:
+
+- **The hip-only version reproduced a failure this fork already knew about.** Measuring only the
+  hip made MIMo twist the pelvis and leave the torso lying -- a 59 deg gap. That is exactly why
+  `cos` averages hip *and* chest; see the `compute_reward_v1` docstring. Adding the chest closed a
+  third of the gap and lifted rho by 25%.
+- **Two dimensions, not their average.** An average cannot distinguish (hip -1, chest +1) from
+  (hip 0, chest 0); the vector distance penalises the gap directly.
+
+The `gravity` hip+chest run above was deleted by accident on 22.08.2026 and only these summary
+numbers survive -- the event file is gone, so it cannot be re-plotted.
+
+#### It works: the non-extrinsic goal matches the extrinsic baseline
+
+Once the potential is normalised (below), `gravity` solves the task.
+
+| | rho_max | success | side | hip | chest | gap |
+|---|---|---|---|---|---|---|
+| **`gravity` hip+chest, normalised, 2M** | **0.938** | **0.997** | **1.00** | 165.9 | 141.3 | 24.6 |
+| `cos` baseline, 1M | 0.952 | 0.984 | 0.99 | 161.0 | 151.0 | 10.0 |
+
+Under the fixed protocol of section 6 (`eval_rollover.py`, 50 deterministic episodes, ISR off):
+
+| | full roll | rho_max mean/min | steps to roll |
+|---|---|---|---|
+| **`gravity`** | **100 %** | 0.995 / 0.985 | **41.2 +- 8.7** |
+| `cos` baseline | 100 % | 0.995 / 0.988 | 51.3 +- 8.9 |
+
+**MIMo learns to roll from a goal built only out of what he can sense** -- no privileged access to
+the root free joint -- as reliably as from the hand-designed extrinsic one, and in ~20 % fewer
+steps.
+
+rho per 250k steps shows the normalisation, not the extra million steps, was the fix:
+
+```
+gravity normalised   0.229  0.696  0.928  0.930  0.928  0.932  0.938  0.938
+cos baseline         0.308  0.897  0.944  0.952  0.958    -      -      -
+```
+
+It is at 0.928 by **750k** steps, where the un-normalised version stood at 0.482 after a full 1M.
+The second million bought nothing; 1M is enough for this configuration.
+
+Caveats, because none of these are covered yet:
+
+- **One seed per configuration.** The fork's convention elsewhere is 6-18 seeds (`*_run_N`). The
+  20 % speed advantage in particular rests on a single pair of runs.
+- **PPO + PBRS only.** The sparse `{0,-1}` + SAC + HER configuration that motivated the whole
+  intrinsic-goal line has not been run against `gravity`.
+- **`--obs_noise` untested.** `GaussianNoiseObsWrapper` perturbs the observation, not
+  `data.sensordata`, so the goal computation inside the env does not currently see any noise at
+  all. Whether it should is a design decision nobody has taken.
+
+#### The potential is normalised
+
+`cos` measures progress in [0, 1]; `gravity` runs from +1 to -1 per body, so with two bodies a
+reset sits at distance 2.83. With `--pbrs_w=100` and `reward_success=500` unchanged, the shaping
+term was 2.83x larger than in the baseline while the terminal bonus was not -- i.e. the +500
+attractor was relatively 2.83x weaker, which fits a policy that farms shaping reward to rho 0.48
+and does not pay for the last part of the roll. `_potential_scale` divides by the reset distance
+`2*sqrt(n_bodies)`, so the two goal functions are finally comparable. It deliberately does **not**
+scale `--intrinsic_goal_eps`, which stays in the readable +-1 units of the goal.
+
 ---
 
 ## 4. The GoalEnv / HER stack

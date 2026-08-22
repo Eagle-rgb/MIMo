@@ -123,8 +123,8 @@ TEST_INTRINSIC_GOALS_CREATION=False
 # 21.08.2026 Which body frames the gravity direction is expressed in. Both, not just the hip:
 # a hip-only version was trained for 1M steps and plateaued at rho 0.385 with the hip at 101.9 deg
 # and the chest at 42.5 deg -- MIMo twists the pelvis and leaves the torso lying. That is the same
-# failure the 'cos' goal ran into historically and fixed the same way; see the 'compute_reward_v1'
-# docstring. Kept as two separate dimensions rather than averaged, because an average cannot tell
+# failure the 'cos' goal ran into historically and fixed the same way; Kept as two separate dimensions
+# rather than averaged, because an average cannot tell
 # (hip -1, chest +1) from (hip 0, chest 0), while the vector distance penalises the gap directly.
 GRAVITY_GOAL_BODIES = ("hip", "chest")
 
@@ -1157,36 +1157,6 @@ class MIMoRollOverEnv(MIMoEnv):
     def compute_penalization(self):
         return 0 if self.nopen else self.pen_factor * np.square(self.data.ctrl).sum()
 
-    def compute_reward_v1(self, achieved_goal, desired_goal, info):
-        """
-        Computes the reward.
-
-        Note this function is archived. We now only want to return a negative
-        reward when the goal is not reached.
-
-        The reward consists of the standardized hip and chest rotation with a
-        penalty of the square of the control signal.
-
-        Before, we were only using the hip rotation, but this led to MIMo only
-        turning the hip and not the chest - not performing a full roll over.
-        
-        Arguments:
-            achieved_goal (float): The achieved hip and chest rotation.
-            desired_goal (float): This parameter is ignored.
-            info (dict): This parameter is ignored.
-
-        Returns:
-            float: The reward as described above.
-        """
-
-        # Use the hip and chest rotation as the main reward.
-        reward = achieved_goal  # [0, 1]
-
-        # Penalize excessive use of force.
-        reward -= self.compute_penalization()
-
-        return reward
-
     def compute_reward(self, achieved_goal, desired_goal, info):
         """ Computes the reward.
 
@@ -1290,7 +1260,29 @@ class MIMoRollOverEnv(MIMoEnv):
         0.45 to 0.38, which drives SAC's critic loss to ~4e7 within a few thousand steps.
         Terminating episodes do not help, because they only ever terminate on the real goal.
         """
-        return -np.linalg.norm(desired - achieved, axis=-1)
+        return -np.linalg.norm(desired - achieved, axis=-1) * self._potential_scale
+
+    @property
+    def _potential_scale(self):
+        """ Puts the shaping potential of every goal function on the same [0, 1] scale.
+
+        21.08.2026 'cos' measures progress in [0, 1], so a reset sits at potential -1 and the goal
+        at 0. The 'gravity' goal runs from +1 to -1 per body, so with two bodies a reset sits at
+        -2.83 -- the PBRS term was 2.83x larger than in the baseline while 'reward_success' stayed
+        at 500, i.e. the terminal bonus was relatively 2.83x weaker. Measured consequence: the
+        policy happily farmed shaping reward up to rho 0.48 and had little incentive to pay for
+        the expensive last part of the roll.
+
+        Dividing by the reset distance (2*sqrt(n_bodies)) makes '--pbrs_w' and 'reward_success'
+        mean the same thing for 'gravity' as for 'cos', which is what makes the two comparable.
+
+        Note this deliberately does NOT scale ':attr:`.intrinsic_goal_eps`': the success radius
+        stays in the readable +-1 units of the goal itself, where eps = 2*(1 - rho_target) per
+        body -- eps 0.21 for two bodies is about rho 0.925.
+        """
+        if self.goal_function == 'gravity':
+            return 1.0 / (2.0 * np.sqrt(len(GRAVITY_GOAL_BODIES)))
+        return 1.0
 
     @staticmethod
     def _info_column(info, key, default, n):
