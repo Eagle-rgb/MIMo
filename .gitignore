@@ -34,6 +34,11 @@ icdl26
 pdf
 csv
 
+results/intrinsic
+results/horizon
+results/curriculum
+*.log
+
 # Exclude composer for now, because it is not working.
 mimoComposer
 results/composer

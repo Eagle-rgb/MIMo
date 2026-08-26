@@ -1,0 +1,159 @@
+{% extends "base.html" %}
+{% from "_macros.html" import rho_meter with context %}
+{% block title %}{{ exp.model_name }} &middot; MIMo Lab{% endblock %}
+
+{% block body %}
+<main class="main" style="max-width:80rem;margin:0 auto">
+
+  <div class="pagehead">
+    <div>
+      <h1>{{ exp.model_name }}</h1>
+      <p class="sub">
+        <span class="chip {{ exp.posture }}">{{ exp.posture }}</span>
+        <span class="chip muted">{{ exp.algorithm or '?' }}</span>
+        {% if exp.her %}<span class="chip ok">her</span>{% endif %}
+        <span class="chip muted">{{ exp.reward_shape }}</span>
+        {% if exp.goal_fn and exp.goal_fn != 'cos' %}<span class="chip goalfn">{{ exp.goal_fn }}</span>{% endif %}
+        &nbsp;{{ exp.n_seeds }} seed{{ '' if exp.n_seeds == 1 else 's' }} &middot; {{ exp.date or 'no date' }}
+      </p>
+    </div>
+    <div class="actions">
+      <a class="btn sm" href="/analysis?{% for r in run_ids %}run={{ r|urlencode }}&amp;{% endfor %}">Analyse curves</a>
+      <button class="btn sm" type="button" data-tb-runs="{{ run_ids|join(' ') }}">TensorBoard</button>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2>Evaluate the whole experiment</h2>
+    <p class="sub">Runs <code>eval_rollover.py --group</code> over every seed &mdash; the
+      <b>last</b> checkpoint of each, never <code>model_best.zip</code>, with identical episode
+      seeds so the runs are paired. One environment for the batch; ~3.6&nbsp;GB, so it is queued.</p>
+
+    {% if not exp.group_spec %}
+      <div class="notice bad">
+        <b>No safe <code>--group</code> path for this experiment.</b>
+        Its seeds do not share one directory and a common prefix, so any path wide enough to catch
+        them all would also pull in runs from other experiments and evaluate the wrong set.
+        Evaluate the seeds individually from their run pages instead.
+        <div class="mono" style="margin-top:.4rem;font-size:.66rem;color:var(--ink-faint)">
+          {% for r in exp.runs %}{{ r.path }}<br>{% endfor %}
+        </div>
+      </div>
+    {% else %}
+    <pre class="log" style="max-height:none">eval_rollover.py --group {{ exp.group_spec }}</pre>
+
+    <form class="form" data-group-form>
+      <input type="hidden" name="posture" value="{{ exp.posture }}">
+      <input type="hidden" name="name" value="{{ exp.model_name }}">
+      <input type="hidden" name="date" value="{{ exp.date or '' }}">
+      <div class="fieldrow">
+        <div class="field">
+          <label for="ep">Episodes per run</label>
+          <input id="ep" type="number" name="episodes" value="40" min="1" max="500">
+        </div>
+        <div class="field">
+          <label for="ck">Checkpoint</label>
+          <select id="ck" name="checkpoint">
+            <option value="last">last (end of training)</option>
+            <option value="best">best (EvalCallback's pick)</option>
+            {% for c in exp.checkpoints %}<option value="{{ c }}">{{ c }}</option>{% endfor %}
+          </select>
+        </div>
+        <div class="field">
+          <label for="th">Success threshold</label>
+          <input id="th" type="number" name="success_threshold" value="0.75" step="0.05" min="0" max="1">
+        </div>
+      </div>
+      <div>
+        <button class="btn primary sm" type="submit">Evaluate {{ exp.n_seeds }} seed{{ '' if exp.n_seeds == 1 else 's' }}</button>
+        <span class="mono" style="font-size:.7rem;color:var(--ink-faint)" data-group-msg></span>
+      </div>
+    </form>
+
+    {% endif %}
+
+    <div id="grouplog" hidden>
+      <div class="chartbar" style="margin-top:.8rem"><span class="label">Output</span></div>
+      <pre class="log" data-group-log>&hellip;</pre>
+    </div>
+  </div>
+
+  {% if summary %}
+  <div class="panel">
+    <h2>Result</h2>
+    <p class="sub">A run counts as successful above {{ (summary.success_threshold * 100)|round|int }}&nbsp;% rolls
+      &mdash; the thesis convention. Roll rate is &rho;<sub>max</sub> &ge; 0.95 per episode.</p>
+    <div class="statrow">
+      <div class="stat"><b>{{ summary.successful }} / {{ summary.runs }}</b><span>successful seeds</span></div>
+      <div class="stat"><b>{{ (summary.roll_rate_mean * 100)|round|int }}%</b><span>mean roll rate</span></div>
+      <div class="stat"><b>{{ '%.3f'|format(summary.rho_mean) }}</b><span>mean <span class="caseless">&rho;</span></span></div>
+      <div class="stat"><b>{{ summary.steps_mean|round|int if summary.steps_mean else '--' }}</b><span>steps to roll</span></div>
+      <div class="stat"><b>{{ summary.band_successful_90 }} / {{ summary.band_not_successful_10 }}</b><span>&gt;90% / &lt;10%</span></div>
+    </div>
+  </div>
+  {% endif %}
+
+  <div class="panel">
+    <h2>Seeds</h2>
+    <p class="sub">Best <span class="caseless">&rho;</span> is from training; roll rate is from the last evaluation.</p>
+    <div class="tablewrap">
+    <table class="runs">
+      <thead><tr>
+        <th style="width:3px"></th><th>Seed</th><th>Steps</th><th>best <span class="caseless">&rho;</span></th>
+        <th>Roll rate</th><th>Ckpt</th><th>State</th><th></th>
+      </tr></thead>
+      <tbody>
+      {% for r in exp.runs %}
+        {% set ev = (summary.rows | selectattr('run_id', 'equalto', r.run_id) | list | first) if summary else None %}
+        <tr data-posture="{{ r.posture }}">
+          <td class="stripe"><i></i></td>
+          <td><a class="runname" href="/run/{{ r.run_id }}">#{{ r.seed_idx if r.seed_idx is not none else '--' }}</a></td>
+          <td class="num runmeta">{{ human_steps(r.last_step) }}</td>
+          <td>{{ rho_meter(r.best_rho) }}</td>
+          <td class="num">{% if ev %}<b>{{ (ev.rolled * 100)|round|int }}%</b>{% else %}<span class="runmeta">--</span>{% endif %}</td>
+          <td class="num runmeta">{{ r.n_checkpoints }}</td>
+          <td><span class="chip {{ r.state }}">{{ r.state }}</span></td>
+          <td><a class="btn sm" href="/api/config/{{ r.run_id }}" target="_blank" rel="noopener">data.yml</a></td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    </div>
+  </div>
+
+  {% if exp.differing %}
+  <div class="panel">
+    <h2>Where the seeds differ</h2>
+    <p class="sub">Seeds of one experiment should differ only by the random seed. These keys do not
+      agree &mdash; either a deliberate sub-sweep, or a mistake.</p>
+    <div class="tablewrap">
+    <table class="runs">
+      <thead><tr><th>Key</th><th>Values by seed</th></tr></thead>
+      <tbody>
+      {% for key, pairs in exp.differing.items() %}
+        <tr>
+          <td class="mono"><b>{{ key }}</b></td>
+          <td class="mono runmeta">{% for seed, value in pairs %}#{{ seed if seed is not none else '?' }}={{ value }}{% if not loop.last %} &middot; {% endif %}{% endfor %}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    </div>
+  </div>
+  {% endif %}
+
+  <div class="panel">
+    <h2>Configuration</h2>
+    <p class="sub">{{ exp.shared|length }} key{{ '' if exp.shared|length == 1 else 's' }} shared by all
+      {{ exp.n_seeds }} seed{{ '' if exp.n_seeds == 1 else 's' }}, as recorded in <code>data.yml</code>
+      (with the <code>age</code> shim applied).
+      <a href="/api/config/{{ exp.runs[0].run_id }}" target="_blank" rel="noopener">View the raw file</a>.</p>
+    <dl class="kv wide">
+      {% for key, value in exp.shared.items() %}
+        <dt>{{ key }}</dt><dd>{{ value }}</dd>
+      {% endfor %}
+    </dl>
+  </div>
+
+</main>
+{% endblock %}

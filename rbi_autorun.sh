@@ -9,7 +9,7 @@ fi
 USERNAME=$1
 HOSTPREFIXES=("adrastos" "alkmene" "ajax" "anaxo" "achilles" "axylos" "aktor"
 	"admeta" "amata" "agylla" "adamas" "arabia" "adonis" "aither" "apate"
-	"atropos" "aletheia" "acheloos" "anemoi")
+	"atropos" "aletheia" "acheloos" "ares")
 NUMBER_OF_RUNS=$3
 MODEL_NAME=$2
 
@@ -37,7 +37,7 @@ for i in $(seq 0 $((NUMBER_OF_RUNS-1))); do
 		"--roll_over_starting_position=prone" \
 		"--algorithm=PPO" \
 		"--pen_factor=0.02" \
-		"--episode_steps=100" \
+		"--episode_steps=250" \
 		"--eval_every=25000" \
 		"--eval_episodes=20" \
 		"--roll_over_model_path_auto" \

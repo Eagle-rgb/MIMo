@@ -18,6 +18,15 @@ Before the Phase 1 rewrite every one of these calls returned the identical value
 
 which would have made HER a silent no-op: every virtual transition would have carried the reward
 of the real one.
+
+**Memory: run the sections in separate processes on a 16 GB machine.** One MIMo env is ~3.8 GB
+RSS, and closing it does not return all of it to the OS -- a section that builds three envs peaks
+at 5.8 GB, and running every section in a single process OOM-kills the machine. Pass section names to run
+them one at a time::
+
+    for t in $(MUJOCO_GL=osmesa python mimoEnv/goalenv_check.py --list); do
+        MUJOCO_GL=osmesa python mimoEnv/goalenv_check.py $t
+    done
 """
 import os
 
@@ -228,47 +237,173 @@ def test_pbrs_bounded_under_relabelling():
     env.close()
 
 
-def test_goal_curriculum():
-    """The curriculum must start narrow, follow what is achieved, and never exceed goal_high."""
-    print("\n10. Goal curriculum")
+def test_goal_tolerance():
+    """--goal_tolerance: the scalar success test as a band instead of a threshold.
 
-    env = make_env(goal_low=0.25, goal_high=0.95, goal_curriculum=True,
-                   goal_curriculum_window=10, goal_curriculum_margin=0.1)
-    unwrapped = env.unwrapped
+    The point of the flag is that it changes the reward of *relabelled* goals while leaving the
+    real task alone. Both halves of that claim are checked here, because either one silently
+    breaking would invalidate the experiment it exists for: if the real task moved, the numbers
+    would not be comparable with every run trained before it; if the relabelled goals did not
+    change, the flag would do nothing at all.
 
-    # Before any episode has finished the range is just [goal_low, goal_low + margin].
-    goals = [float(env.reset(seed=s)[0]['desired_goal'][0]) for s in range(10)]
-    check("starts narrow, not at goal_high", max(goals) <= 0.35 + 1e-9,
-          f"max sampled {max(goals):.3f}, cap 0.350")
+    One environment for the whole section, with the rule flipped by assignment where the two
+    have to be compared. Building a second one costs another 3.6 GB of RSS -- four live envs
+    OOM-killed a 16 GB machine while this check was being written.
+    """
+    print("\n10. Goal tolerance (--goal_tolerance)")
 
-    # Feed the statistics directly: the point under test is the mapping from achieved rotations
-    # to the sampled range, not whether MIMo can produce those rotations.
-    unwrapped._recent_episode_max.extend([0.60] * 10)
-    goals = [float(env.reset(seed=s)[0]['desired_goal'][0]) for s in range(10)]
-    check("follows what was achieved", 0.60 < max(goals) <= 0.70 + 1e-9,
-          f"max sampled {max(goals):.3f}, expected in (0.60, 0.70]")
+    # Rejected combinations first: all three raise in the constructor, before the MuJoCo model is
+    # built, so they cost nothing.
+    for name, kwargs in (("intrinsic", dict(goal_function='intrinsic', goal_tolerance=0.05)),
+                         ("a non-positive radius", dict(goal_tolerance=0.0))):
+        try:
+            make_env(**kwargs).close()
+            refused = False
+        except ValueError:
+            refused = True
+        check(f"refuses {name}", refused)
 
-    unwrapped._recent_episode_max.clear()
-    unwrapped._recent_episode_max.extend([0.99] * 10)
-    goals = [float(env.reset(seed=s)[0]['desired_goal'][0]) for s in range(10)]
-    check("never exceeds goal_high", max(goals) <= 0.95 + 1e-9,
-          f"max sampled {max(goals):.3f}, cap 0.950")
+    env = make_env(goal_tolerance=0.05, sparse_reward=True, pbrs=False, done_active=False)
+
+    check("the fixed goal moves to 1.0", float(env.sample_goal()[0]) == 1.0,
+          f"got {float(env.sample_goal()[0])}")
+
+    # 1. The real task is unchanged: rho is capped at 1.0, so |rho - 1.0| <= 0.05 is rho >= 0.95.
+    rho = np.array([0.0, 0.5, 0.9, 0.94, 0.96, 0.99, 1.0]).reshape(-1, 1)
+    band_hits = env.is_success(rho, np.full_like(rho, 1.0))
+    env.goal_tolerance = None
+    check("threshold is the default rule", float(env.sample_goal()[0]) == 0.95)
+    threshold_hits = env.is_success(rho, np.full_like(rho, 0.95))
+    overshoot_threshold = bool(env.is_success(np.array([0.60]), np.array([0.40])))
+    undershoot_threshold = bool(env.is_success(np.array([0.30]), np.array([0.40])))
+    env.goal_tolerance = 0.05
+
+    check("identical success at the real goal", np.array_equal(band_hits, threshold_hits),
+          f"band={band_hits} threshold={threshold_hits}")
+
+    # 2. Relabelled goals -- the half that is supposed to change. Under the threshold, any
+    #    achieved goal at or above the relabelled one scores 0 no matter how far past it; under
+    #    the band only the ones close to it do. That difference is the whole mechanism.
+    check("overshooting a relabelled goal succeeds under the threshold", overshoot_threshold)
+    check("overshooting a relabelled goal fails under the band",
+          not bool(env.is_success(np.array([0.60]), np.array([0.40]))))
+    check("landing on a relabelled goal succeeds under the band",
+          bool(env.is_success(np.array([0.42]), np.array([0.40]))))
+    check("undershooting fails under both",
+          not bool(env.is_success(np.array([0.30]), np.array([0.40])))
+          and not undershoot_threshold)
+
+    # 3. The sparse reward follows the mask, purely from the arguments, batched.
+    ag = np.array([[0.42], [0.60], [0.30]])
+    dg = np.full_like(ag, 0.40)
+    rewards = env.compute_reward(ag, dg, [{'ctrl_cost': 0.0}] * 3)
+    check("sparse reward follows the band", np.array_equal(rewards, np.array([0.0, -1.0, -1.0])),
+          f"got {rewards}")
+    check("compute_reward stays vectorized", np.asarray(rewards).shape == (3,))
+
+    # 4. Same goal, different achieved goals -> different rewards. This is the purity property
+    #    the whole file exists for, re-checked on the new branch.
+    lo = env.compute_reward(np.array([0.30]), np.array([0.40]), {'ctrl_cost': 0.0})
+    hi = env.compute_reward(np.array([0.42]), np.array([0.40]), {'ctrl_cost': 0.0})
+    check("relabelling actually changes the reward", lo != hi, f"{lo} vs {hi}")
+
+    # 5. Distance shaping is unaffected: the potential was already a distance, so the band only
+    #    moves where the terminal bonus is paid.
+    env.sparse_reward = False
+    p_far = env.compute_reward(np.array([0.30]), np.array([0.40]), {'ctrl_cost': 0.0})
+    check("distance shaping still reads as a distance", np.isclose(p_far, -0.1, atol=1e-9),
+          f"got {p_far}")
+    env.sparse_reward = True
+
+    # 6. Side lying keeps its value -- but note it then means "stop there", not "reach at least".
+    env.success_at_side_lying = True
+    check("side lying keeps 0.5", float(env.sample_goal()[0]) == 0.5)
+    env.success_at_side_lying = False
     env.close()
+    del env
 
-    # Off by default: the flag must not change any existing run.
-    env = make_env(goal_low=0.25, goal_high=0.95)
-    goals = [float(env.reset(seed=s)[0]['desired_goal'][0]) for s in range(20)]
-    check("off by default -- full range still sampled", max(goals) > 0.5,
-          f"max sampled {max(goals):.3f}")
-    env.close()
+    # 7. Round-trip. A flag that does not reach data.yml would evaluate reloaded models against
+    #    the other success rule, which is the failure mode the yaml_data dict exists to prevent.
+    import re
+    source = open(os.path.join(os.path.dirname(__file__), 'illustrations.py')).read()
+    check("goal_tolerance is in the yaml_data dict",
+          re.search(r"'goal_tolerance':\s*args\.goal_tolerance", source) is not None)
 
-    # A run without a goal range must be refused rather than silently ignoring the flag.
-    try:
-        make_env(goal_curriculum=True).close()
-        refused = False
-    except ValueError:
-        refused = True
-    check("refused without a goal range", refused)
+    from mimoEnv.eval_rollover import env_kwargs, FULL_ROLL_GOAL
+    kwargs = env_kwargs({'goal_tolerance': 0.05}, 'supine', FULL_ROLL_GOAL)
+    check("eval_rollover forwards the tolerance", kwargs['goal_tolerance'] == 0.05)
+    check("eval_rollover pins the goal the policy was trained on",
+          kwargs['goal_low'] == 1.0 and kwargs['goal_high'] == 1.0)
+    check("a run without the flag is unaffected",
+          env_kwargs({}, 'supine', 0.95)['goal_tolerance'] is None)
+
+
+def test_early_stop():
+    """--stop_at_roll_rate must need consecutive hits, and must not fire when it is off.
+
+    25.08.2026 Stub-driven: the logic under test is the counter, and the only thing a live env
+    would add is 20 deterministic rollouts per case at 3.6 GB. '_run_episodes' is replaced with a
+    scripted sequence of roll rates, which is also the only way to test the "hit, miss, hit"
+    case -- a real policy will not produce it on demand.
+    """
+    print("\n11. Early stopping on the evaluation roll rate")
+
+    from mimoEnv.envs.roll_over_callback import RollOverEvalCallback
+
+    class FakeLogger:
+        def __init__(self):
+            self.values = {}
+
+        def record(self, key, value):
+            self.values[key] = value
+
+    class FakeModel:
+        # 'BaseCallback.logger' is a read-only property returning 'self.model.logger', so the
+        # stub logger has to hang off the model rather than off the callback.
+        def __init__(self):
+            self.num_timesteps = 0
+            self.logger = FakeLogger()
+
+    def drive(rates, stop_at, patience):
+        """Feed a sequence of roll rates through the callback; return (returns, cb)."""
+        cb = RollOverEvalCallback(eval_env=None, eval_every=1, n_episodes=20,
+                                  save_dir=None, episode_steps=200,
+                                  stop_at_roll_rate=stop_at, stop_patience=patience)
+        cb.model = FakeModel()
+        cb._next_eval = 0
+        returns = []
+        for i, rate in enumerate(rates):
+            cb.model.num_timesteps = (i + 1) * 25000
+            rolled = np.array([1.0] * int(round(rate * 20)) + [0.0] * (20 - int(round(rate * 20))))
+            cb._run_episodes = lambda r=rolled: (np.where(r > 0, 0.99, 0.30), r, r, np.full(20, 50.0))
+            returns.append(cb._on_step())
+        return returns, cb
+
+    returns, cb = drive([0.8, 0.9], stop_at=1.0, patience=2)
+    check("below threshold does not stop", all(returns) and not cb.stop_requested)
+
+    returns, cb = drive([1.0], stop_at=1.0, patience=2)
+    check("one hit is not enough", all(returns) and not cb.stop_requested,
+          f"hits {cb._consecutive_hits}")
+
+    returns, cb = drive([1.0, 1.0], stop_at=1.0, patience=2)
+    check("two consecutive hits stop the run", cb.stop_requested and returns[-1] is False)
+    check("the stop step is recorded", cb.stop_step == 50000, f"got {cb.stop_step}")
+
+    # The reason patience exists: a policy hovering under the threshold crosses it by chance.
+    returns, cb = drive([1.0, 0.9, 1.0], stop_at=1.0, patience=2)
+    check("a miss resets the counter", not cb.stop_requested and all(returns),
+          f"hits {cb._consecutive_hits}")
+
+    returns, cb = drive([0.85, 0.85], stop_at=0.75, patience=2)
+    check("a threshold below 1.0 works", cb.stop_requested, "0.85 >= 0.75 twice")
+
+    returns, cb = drive([1.0, 1.0, 1.0], stop_at=None, patience=2)
+    check("off by default -- never stops", all(returns) and not cb.stop_requested)
+    check("no stop counter is logged when off", 'eval/stop_hits' not in cb.model.logger.values)
+
+    returns, cb = drive([1.0], stop_at=1.0, patience=1)
+    check("patience 1 stops on the first hit", cb.stop_requested and returns[-1] is False)
 
 
 def test_episode_horizon():
@@ -279,7 +414,7 @@ def test_episode_horizon():
     would be invisible in training: episodes would just keep their old length while data.yml
     claims otherwise.
     """
-    print("\n11. Episode horizon (--episode_steps)")
+    print("\n12. Episode horizon (--episode_steps)")
 
     def run_to_truncation(env, limit):
         """Step with zero actions until the wrapper ends the episode. Returns the step count."""
@@ -315,7 +450,35 @@ def test_episode_horizon():
     env.close()
 
 
+SECTIONS = [
+    'test_sb3_env_checker', 'test_purity', 'test_vectorization', 'test_pbrs_regression',
+    'test_sparse_reward', 'test_goal_sampling', 'test_info_contract',
+    'test_her_relabel_end_to_end', 'test_pbrs_bounded_under_relabelling',
+    'test_goal_tolerance', 'test_early_stop', 'test_episode_horizon',
+]
+
+
 if __name__ == '__main__':
+    import sys
+
+    argv = sys.argv[1:]
+    if argv == ['--list']:
+        print("\n".join(SECTIONS))
+        raise SystemExit(0)
+    if argv:
+        unknown = [name for name in argv if name not in SECTIONS]
+        if unknown:
+            raise SystemExit(f"Unknown section(s) {unknown}. Use --list to see the names.")
+        print(f"GoalEnv acceptance checks for MIMoRollOver-v0 -- {', '.join(argv)}")
+        for name in argv:
+            globals()[name]()
+        print()
+        if FAILURES:
+            print(f"FAILED ({len(FAILURES)}): " + ", ".join(FAILURES))
+            raise SystemExit(1)
+        print("Section(s) passed.")
+        raise SystemExit(0)
+
     print("GoalEnv acceptance checks for MIMoRollOver-v0")
     test_sb3_env_checker()
     test_purity()
@@ -326,7 +489,8 @@ if __name__ == '__main__':
     test_info_contract()
     test_her_relabel_end_to_end()
     test_pbrs_bounded_under_relabelling()
-    test_goal_curriculum()
+    test_goal_tolerance()
+    test_early_stop()
     test_episode_horizon()
 
     print()

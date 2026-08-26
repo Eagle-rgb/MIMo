@@ -18,7 +18,8 @@
       <td class="stripe"><i></i></td>
       <td><input type="checkbox" data-pick-group value="{{ g.run_ids|join(' ') }}"
                  aria-label="Select all seeds of {{ g.model_name }}"></td>
-      <td><span class="runname" title="{{ g.model_name }}">{{ g.model_name }}</span>
+      <td><a class="runname" title="{{ g.model_name }}"
+             href="/experiment?posture={{ g.posture|urlencode }}&amp;name={{ g.model_name|urlencode }}{% if g.date %}&amp;date={{ g.date }}{% endif %}">{{ g.model_name }}</a>
           <span class="runmeta">{{ g.collection }}{% if g.episode_steps %} &middot; {{ g.episode_steps }} steps{% endif %}</span></td>
       <td class="num runmeta">{{ g.date or '--' }}</td>
       <td>
@@ -26,6 +27,7 @@
         <span class="chip muted">{{ g.algorithm or '?' }}</span>
         {% if g.her %}<span class="chip ok">her</span>{% endif %}
         <span class="chip muted">{{ g.reward_shape }}</span>
+        {% if g.goal_fn and g.goal_fn != 'cos' %}<span class="chip goalfn">{{ g.goal_fn }}</span>{% endif %}
       </td>
       <td class="num runmeta">n={{ g.n_seeds }}</td>
       <td>{{ rho_meter(g.rho_mean) }}</td>

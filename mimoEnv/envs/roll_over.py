@@ -24,7 +24,6 @@ the path to the scene XML is defined in :data:`ROLL_OVER_XML`.
 from mimoEnv.envs.mimo_env import MIMoEnv, SCENE_DIRECTORY, \
     DEFAULT_PROPRIOCEPTION_PARAMS, DEFAULT_VESTIBULAR_PARAMS
 from mimoActuation.actuation import SpringDamperModel
-import collections
 import mujoco
 import numpy as np
 import os
@@ -93,62 +92,18 @@ TEST_INTRINSIC_GOALS_CREATION=False
 # Deliberately NOT the actuator state ('actuation_model.observations()'): that is the motor
 # command, not the sensed configuration, so a goal defined on it could be reached by emitting the
 # right control signal while lying perfectly still.
-# 20.08.2026 The 'gravity' goal function -- the successor to 'intrinsic', which does not work
-# (see docs/roll_over.md 3.4 for the measurements that killed it).
+# 26.08.2026 The 'gravity' goal function was REMOVED here. It was a second goal function that
+# reconstructed 'get_dot_local_x_to_global_z(body)' from the gyroscope and the joint chain instead
+# of from the root free joint, and it worked: 100 % roll rate under 'eval_rollover.py', matching
+# the 'cos' baseline (docs/roll_over.md 3.5). The point it was built to make -- that the extrinsic
+# goal is computable from what MIMo senses -- does not need a second training configuration to be
+# made, and carrying one cost a goal dimension, a per-episode integration state, a reset hook and a
+# potential rescale through every code path here.
 #
-# It estimates the direction of gravity in MIMo's HIP frame and takes its x component. That is the
-# same quantity 'get_dot_local_x_to_global_z("hip")' returns (+1 supine, -1 prone), but
-# reconstructed from things MIMo can sense instead of read off the root free joint:
-#
-#     t = 0, MIMo demonstrably at rest:  g_site <- normalize(accelerometer)
-#     every step, gyroscope only:        g_site <- rotate(g_site, -omega * dt)
-#     goal:                              (R_hip^T R_site @ g_site)[0]
-#
-# Why each of the three defects of 'intrinsic' disappears:
-#
-#   * Shaking. Linear acceleration does not enter the integration at all, so there is nothing to
-#     forge. The old goal could be driven 77% of the way to the target while lying still.
-#   * Head turning. Self-cancelling rather than merely counterweighted: turning the head makes the
-#     gyroscope rotate 'g_site' by exactly the amount that leaves 'R_rel @ g_site' unchanged. The
-#     joint-angle targets that used to serve this purpose were measured to be ~2x too weak.
-#   * Anti-correlation. The joints are no longer goal dimensions; they appear only in the frame
-#     transform, which is where they belong.
-#
-# The root free joint cancels out of 'R_hip^T R_site' (measured residual 0.017 deg), so this stays
-# non-extrinsic. Validated offline before implementation over 14 recorded episodes: correlation
-# with the truth 0.9991 on a policy that rolls, drift 0.004 over a full 250-step episode, and the
-# estimate stays at +0.995 for the policy that games the old goal.
-
-
-# 21.08.2026 Which body frames the gravity direction is expressed in. Both, not just the hip:
-# a hip-only version was trained for 1M steps and plateaued at rho 0.385 with the hip at 101.9 deg
-# and the chest at 42.5 deg -- MIMo twists the pelvis and leaves the torso lying. That is the same
-# failure the 'cos' goal ran into historically and fixed the same way; Kept as two separate dimensions
-# rather than averaged, because an average cannot tell
-# (hip -1, chest +1) from (hip 0, chest 0), while the vector distance penalises the gap directly.
-GRAVITY_GOAL_BODIES = ("hip", "chest")
-
-
-def rotate_by_angular_velocity(v, omega, dt):
-    """ Rotate 'v' by '-omega * dt' (Rodrigues), keeping it a unit vector.
-
-    'v' is a WORLD-fixed direction expressed in a ROTATING frame, so the transport theorem gives
-    dv/dt = -omega x v: if the frame turns by +omega, the coordinates of a fixed vector in it turn
-    by -omega. MuJoCo's gyro reports omega of the site in the site's own frame, which is exactly
-    the omega this needs -- no conversion.
-
-    Rodrigues is the closed-form exact solution for constant omega over the interval, not an Euler
-    step; the only error left is that omega is not really constant within one 10 ms sample.
-    """
-    magnitude = np.linalg.norm(omega)
-    theta = magnitude * dt
-    if theta < 1e-12:
-        return v
-    k = -omega / magnitude
-    rotated = (v * np.cos(theta) + np.cross(k, v) * np.sin(theta)
-               + k * np.dot(k, v) * (1.0 - np.cos(theta)))
-    return rotated / np.linalg.norm(rotated)
-
+# The demonstration now lives in 'results/intrinsic/intrinsic_rho_check.py', which measures the
+# reconstruction against the truth along real rollouts of 'cos'-trained policies. Training uses
+# 'cos'. Models trained with '--goal_achievement_function=gravity' (26-08-20 and 26-08-22) can no
+# longer be loaded against this environment; their evaluation numbers are in docs/roll_over.md.
 
 INTRINSIC_GOAL_JOINTS = [
     "robot:head_swivel",
@@ -249,6 +204,32 @@ class MIMoRollOverEnv(MIMoEnv):
                  # would pin the goal to whatever 'head_swivel' happened to settle at under the
                  # initial joint noise, and MIMo would then be asked to reproduce that draw.
                  intrinsic_reference_samples=20,
+                 # 25.08.2026 Turns the scalar success test from the threshold
+                 # 'achieved >= desired' into the band '|achieved - desired| <= goal_tolerance',
+                 # i.e. the same ball criterion the vector goals already use. None keeps the
+                 # threshold, so every stored 'data.yml' reloads unchanged.
+                 #
+                 # Why this exists: under a sparse reward HER relabels onto goals the policy
+                 # actually reached, and early in training those sit inside the jitter band of
+                 # rho (measured: rho spans 0..0.007 under a random policy). A threshold sitting
+                 # inside that band is a coin flip -- 41 % of relabelled transitions score 0 --
+                 # so 'close to the goal' does not look any better to the critic than 'far from
+                 # it', and there is no gradient in goal space to climb. The band labels every
+                 # nearby goal 0 and only the distant real goal -1, which is what forces the
+                 # critic to represent the distance to the goal. That is the mechanism the
+                 # (since removed) 'gravity' goal function got for free from
+                 # 'intrinsic_goal_eps' (100 % of its relabelled transitions scored 0 at the start
+                 # of training), and it is the leading hypothesis for why 'gravity' trained without
+                 # --goal_low/--goal_high while 'cos' needs them: 14/16 seeds versus 3/16.
+                 #
+                 # 0.05 is the matched radius: 'gravity' used 0.15 over two bodies, i.e. 0.106
+                 # per body in its +-1 units, and rho is that quantity halved.
+                 #
+                 # At the real goal this changes nothing. 'sample_goal' returns 1.0 instead of
+                 # 0.95 when a tolerance is set, and rho never exceeds 1.0, so
+                 # '|rho - 1.0| <= 0.05' is exactly 'rho >= 0.95'. Only the *relabelled* goals
+                 # see a different rule -- which is what makes this a clean A/B.
+                 goal_tolerance=None,
                  freeze_arm=False,
                  freeze_leg=False,
                  success_at_side_lying=False,
@@ -261,13 +242,6 @@ class MIMoRollOverEnv(MIMoEnv):
                  # relabelled transitions teach goals that are never queried.
                  goal_low=None,
                  goal_high=None,
-                 # Move the upper end of the sampled goal range along with what has actually been
-                 # achieved recently, instead of sampling the full [goal_low, goal_high] from the
-                 # start. See ':meth:`._effective_goal_high`' for why this matters under HER.
-                 goal_curriculum=False,
-                 goal_curriculum_window=50,
-                 goal_curriculum_quantile=0.8,
-                 goal_curriculum_margin=0.1,
                  # Terminate the episode on success. Must be False for HER -- see the note in
                  # 'compute_reward'.
                  done_active=True,
@@ -278,9 +252,9 @@ class MIMoRollOverEnv(MIMoEnv):
             msg += "Needs to be 'prone', 'supine' or 'alternating'."
             raise ValueError(msg)
 
-        if goal_function not in ['angle', 'cos', 'intrinsic', 'gravity']:
+        if goal_function not in ['angle', 'cos', 'intrinsic']:
             msg = f"Unknown reward function '{goal_function}'. "
-            msg += "Needs to be 'angle', 'cos', 'intrinsic' or 'gravity'."
+            msg += "Needs to be 'angle', 'cos' or 'intrinsic'."
             raise ValueError(msg)
         
         # 19.08.2026 The 'intrinsic_goal' sub-modes ('all', 'vesti', 'vesti_acc',
@@ -293,6 +267,15 @@ class MIMoRollOverEnv(MIMoEnv):
         if intrinsic_reference_samples < 1:
             raise ValueError("'intrinsic_reference_samples' must be at least 1, got "
                              f"{intrinsic_reference_samples}.")
+        if goal_tolerance is not None:
+            if goal_tolerance <= 0.0:
+                raise ValueError(f"'goal_tolerance' must be positive, got {goal_tolerance}.")
+            if goal_function == 'intrinsic':
+                # That is already a point goal with a radius; a second one would be ambiguous.
+                raise ValueError(
+                    "'goal_tolerance' applies to the scalar goal functions ('cos', 'angle') "
+                    f"only, got '{goal_function}'. The vector goals are point goals already -- "
+                    "use 'intrinsic_goal_eps' to set their success radius.")
         
         # Instead of supplying 'age' as a parameter to the environment directly, we beforehand created the
         # appropriate age scene. So we manually specify the scene location.
@@ -332,13 +315,7 @@ class MIMoRollOverEnv(MIMoEnv):
         # Per-dimension spread of the recorded reference, kept for diagnostics: a dimension with a
         # large std across resets carries no posture information and is a candidate for dropping.
         self.intrinsic_goal_std = {}
-        # 'gravity' goal function: the running estimate of the gravity direction in the vestibular
-        # site's frame, and the sim time it was last advanced to. Reset to None on every episode so
-        # the next read re-seeds it from the accelerometer while MIMo is still settled.
-        self._g_site = None
-        self._g_site_time = None
-        self._vestibular_site_id = None
-        self._gravity_body_ids = None
+        self.goal_tolerance=goal_tolerance
         self.success_at_side_lying=success_at_side_lying
         self.sparse_reward=sparse_reward
         self.goal_low=goal_low
@@ -347,27 +324,11 @@ class MIMoRollOverEnv(MIMoEnv):
         if (goal_low is None) != (goal_high is None):
             raise ValueError("Provide both 'goal_low' and 'goal_high', or neither.")
 
-        self.goal_curriculum=goal_curriculum
-        self.goal_curriculum_quantile=goal_curriculum_quantile
-        self.goal_curriculum_margin=goal_curriculum_margin
-
-        if goal_curriculum and goal_low is None:
-            raise ValueError("'goal_curriculum' needs a goal range: set 'goal_low' and "
-                             "'goal_high'. The curriculum moves the upper end of that range, so "
-                             "there is nothing for it to do with a fixed goal.")
-        if not 0.0 <= goal_curriculum_quantile <= 1.0:
-            raise ValueError("'goal_curriculum_quantile' must lie in [0, 1].")
-        if goal_curriculum_margin <= 0.0:
-            raise ValueError("'goal_curriculum_margin' must be positive: it is what keeps the "
-                             "sampled range from degenerating to a single point, and what lets "
-                             "the curriculum reach beyond what has already been achieved.")
-
-        # Highest rotation reached during the episode that is currently running, and the same
-        # quantity for the last 'goal_curriculum_window' finished episodes. Only read by
-        # '_effective_goal_high'; maintained unconditionally so the statistics are available for
-        # logging even when the curriculum is off.
+        # Highest rotation reached during the episode that is currently running. Reported
+        # through info['episode_rho_max'], which is what the callbacks and the evaluation
+        # protocol read; reset to None at the start of every episode.
         self._episode_max_achieved = None
-        self._recent_episode_max = collections.deque(maxlen=goal_curriculum_window)
+
 
         # Achieved goal at the start of the current step. Cached so that the potential-based
         # shaping term can be recomputed from the arguments alone (it needs two consecutive
@@ -405,11 +366,11 @@ class MIMoRollOverEnv(MIMoEnv):
         self.init_position=self.data.qpos.copy()
         self.put_in_starting_position()
 
-        if self.goal_function in ('intrinsic', 'gravity'):
-            print(f"Creating prone and supine reference goals ('{self.goal_function}').")
+        if self.goal_function == 'intrinsic':
+            print("Creating prone and supine reference goals ('intrinsic').")
             self.create_prone_and_supine_intrinsic_goal()
         self.intrinsic_goals_created = True
-        if self.goal_function in ('intrinsic', 'gravity'):
+        if self.goal_function == 'intrinsic':
             # 19.08.2026 Re-sample now that the references exist. 'initialize()' already set
             # 'self.goal', but it ran before this point, so 'sample_goal' took its
             # not-yet-created fallback branch and stored the constructor-time *achieved* goal.
@@ -441,13 +402,6 @@ class MIMoRollOverEnv(MIMoEnv):
         range-normalised space, and joint ranges are the same across the four age scenes, so it
         stays comparable across an MGC embodiment swap.
         """
-        if self.goal_function == 'gravity':
-            self._vestibular_site_id = self.model.site('vestibular').id
-            self._gravity_body_ids = [self.model.body(name).id
-                                      for name in GRAVITY_GOAL_BODIES]
-            self._g_site = None
-            self._g_site_time = None
-
         if self.goal_function == 'intrinsic':
             ids = [self.model.joint(name).id for name in self.intrinsic_goal_joints]
             for name, jid in zip(self.intrinsic_goal_joints, ids):
@@ -550,8 +504,6 @@ class MIMoRollOverEnv(MIMoEnv):
 
     def intrinsic_goal_labels(self):
         """ Names of the intrinsic goal dimensions, in order. For logging and diagnostics. """
-        if self.goal_function == 'gravity':
-            return [f'gravity_x_in_{name}_frame' for name in GRAVITY_GOAL_BODIES]
         labels = [name.replace('robot:', '') for name in self.intrinsic_goal_joints]
         labels += [f'vestibular_acc_{axis}' for axis in self.intrinsic_acc_axes]
         return labels
@@ -573,24 +525,30 @@ class MIMoRollOverEnv(MIMoEnv):
         """ Length of a single goal. 1 for the scalar rotation goals. """
         if self.goal_function == 'intrinsic':
             return self.intrinsic_goal_dim
-        if self.goal_function == 'gravity':
-            return len(GRAVITY_GOAL_BODIES)
         return 1
 
     def _success_mask(self, achieved, desired):
         """ Success as a (N,) boolean array, from goals already shaped (N, goal_dim).
 
-        For the scalar goal functions success is 'achieved >= desired': the goal is a rotation
-        threshold, and overshooting it is still success.
+        Three rules, all of them pure functions of the two arguments:
 
-        For the intrinsic posture goal it is '||achieved - desired|| <= intrinsic_goal_eps'. A
-        threshold comparison makes no sense on a vector, and equality never happens on continuous
-        sensor readings, so the goal is a point and success is a ball around it.
+        * scalar goal functions, default: 'achieved >= desired'. The goal is a rotation
+          threshold, and overshooting it is still success.
+        * scalar goal functions with 'goal_tolerance' set: '|achieved - desired| <= tolerance'.
+          The threshold becomes a band, so overshooting a goal is no longer success. See the
+          constructor for why -- it is what gives the critic a distance to climb under HER.
+        * the intrinsic posture goal: '||achieved - desired|| <= intrinsic_goal_eps'.
+          A threshold comparison makes no sense on a vector, and equality never happens on
+          continuous sensor readings, so the goal is a point and success is a ball around it.
+
+        The last two are the same rule; they differ only in which radius they read, because the
+        two are calibrated on different scales (rho in [0, 1] against the posture vector's own).
         """
-        if self.goal_function in ('intrinsic', 'gravity'):
-            # Both are point goals, not thresholds: 'gravity' runs from +1 (supine) to -1 (prone),
-            # so 'achieved >= desired' would be satisfied at the start of a prone->supine episode.
+        if self.goal_function == 'intrinsic':
+            # A point goal, not a threshold.
             return np.linalg.norm(desired - achieved, axis=-1) <= self.intrinsic_goal_eps
+        if self.goal_tolerance is not None:
+            return np.linalg.norm(desired - achieved, axis=-1) <= self.goal_tolerance
         return (achieved >= desired).reshape(-1)
 
     def is_success(self, achieved_goal, desired_goal):
@@ -742,11 +700,6 @@ class MIMoRollOverEnv(MIMoEnv):
         #
         # It must also come after the alternating-position flip above, so that the goal matches
         # the position MIMo is actually starting from.
-        #
-        # Retire the episode that just ended into the curriculum statistics first, so the goal for
-        # the new episode already accounts for it.
-        if self._episode_max_achieved is not None:
-            self._recent_episode_max.append(self._episode_max_achieved)
         self._episode_max_achieved = None
 
         self.goal = self.sample_goal()
@@ -754,15 +707,6 @@ class MIMoRollOverEnv(MIMoEnv):
 
         # self.set_state(self.init_qpos, self.init_qvel)
         self.put_in_starting_position()
-
-        # Drop the gravity estimate so the first read below re-seeds it from the accelerometer.
-        # This has to come AFTER 'put_in_starting_position': that method drops MIMo onto the floor
-        # and runs 'steps_after_reset' settle steps, and only once those are done is he at rest,
-        # which is the single condition under which specific force equals gravity. Seeding before
-        # it would both read a moving accelerometer and integrate the settle steps as if they were
-        # part of the episode.
-        self._g_site = None
-        self._g_site_time = None
 
         return self._get_obs()
     
@@ -786,6 +730,10 @@ class MIMoRollOverEnv(MIMoEnv):
         a full roll, 0.5 under 'success_at_side_lying'. Moving the threshold from the success
         check into the goal is what lets the success check be a pure function of its arguments.
 
+        With 'goal_tolerance' set the fixed full-roll target is 1.0 rather than 0.95, because
+        success is then a band around the goal rather than a threshold. The two describe the same
+        task -- rho is capped at 1.0 -- but the band is what changes the *relabelled* goals.
+
         If 'goal_low'/'goal_high' are set, the target is instead drawn uniformly from that range
         on every reset. HER needs this: with a constant desired_goal the policy has no reason to
         condition on the goal input, and the relabelled transitions describe goals that are never
@@ -796,12 +744,12 @@ class MIMoRollOverEnv(MIMoEnv):
         Returns:
             np.array[float]: The target rotation, shape (1,).
         """
-        if self.goal_function in ("intrinsic", "gravity"):
+        if self.goal_function == "intrinsic":
             # The intrinsic goal is the reference posture recorded in the *opposite* position, so
             # it is fixed per starting position rather than sampled. HER still sees plenty of goal
             # variation, because every relabelled goal is an achieved posture vector from the
-            # trajectory -- which is why this goal function needs neither --goal_low/--goal_high
-            # nor the goal curriculum that the scalar goals do.
+            # trajectory -- which is why this goal function does not need the
+            # --goal_low/--goal_high range that the scalar goals do.
             #
             # The references are recorded at the very end of the constructor. Observation calls
             # before that point reach this function while they do not exist yet, so fall back to
@@ -815,58 +763,26 @@ class MIMoRollOverEnv(MIMoEnv):
                 return self.get_achieved_goal()
 
         if self.goal_low is not None:
-            high = self._effective_goal_high()
             # A degenerate range means a fixed goal. Return it without drawing: consuming a
             # random number would shift every later draw from the same generator, in particular
             # the initial joint randomisation in 'put_in_starting_position', which changes which
             # episodes you get. That made evaluation results depend on whether the goal was
             # pinned via goal_low/goal_high or left at the default (measured: 94% vs 98% on the
             # same policy and the same seeds).
-            if self.goal_low == high:
+            if self.goal_low == self.goal_high:
                 return np.array([float(self.goal_low)])
-            return np.array([self.np_random.uniform(self.goal_low, high)])
+            return np.array([self.np_random.uniform(self.goal_low, self.goal_high)])
+
+        if self.goal_tolerance is not None:
+            # With the band criterion the target is the *end* of the rotation, not the point at
+            # which the threshold is crossed. rho never exceeds 1.0, so '|rho - 1.0| <= 0.05' is
+            # exactly the old 'rho >= 0.95' and the task is unchanged -- see the constructor.
+            # Under '--side_lying' the value stays 0.5, but note it then means "stop at side
+            # lying" rather than "reach at least side lying".
+            return np.array([0.5 if self.success_at_side_lying else 1.0])
 
         return np.array([0.5 if self.success_at_side_lying else 0.95])
 
-    def _effective_goal_high(self):
-        """ Upper end of the goal range for the episode that is about to start.
-
-        Without the curriculum this is simply 'goal_high'. With it, the range only extends a
-        little past what MIMo has recently managed:
-
-            high = clip(quantile(recent episode maxima) + margin, goal_low + margin, goal_high)
-
-        The reason is a measured failure mode of HER, not a general curriculum argument. **HER
-        only ever relabels onto goals that were actually reached.** A run that plateaus at, say,
-        rho ~ 0.6 therefore has no relabelled transition anywhere above 0.6; with
-        'n_sampled_goal=4' four out of five sampled transitions are relabelled, so the region
-        above the plateau is trained almost exclusively on the original transitions, and those
-        all carry the sparse reward -1. The policy does not merely fail to learn high goals -- it
-        learns something actively wrong there. Measured on the third E3b seed (2026-08-14),
-        deterministic, 30 episodes each:
-
-            goal 0.25 -> rho_max 0.546     goal 0.75 -> rho_max 0.091
-            goal 0.50 -> rho_max 0.786     goal 0.95 -> rho_max 0.092
-
-        A policy that ignored 'desired_goal' entirely would score 0.786 everywhere, so
-        conditioning on an out-of-distribution goal is worse than not conditioning at all. Keeping
-        the sampled goals inside the region HER can actually relabel into is what this avoids.
-
-        Returns:
-            float: The upper end of the range to sample the goal from.
-        """
-        if not self.goal_curriculum:
-            return self.goal_high
-
-        floor = min(self.goal_low + self.goal_curriculum_margin, self.goal_high)
-        if not self._recent_episode_max:
-            # No finished episode yet, e.g. the observation calls during construction.
-            return floor
-
-        reached = np.quantile(np.asarray(self._recent_episode_max, dtype=np.float64),
-                              self.goal_curriculum_quantile)
-        return float(np.clip(reached + self.goal_curriculum_margin, floor, self.goal_high))
-    
     def get_rotation_degrees_to_goal_z_axis(self, body_name):
         """ Returns the rotation in degrees of the body part 'body_name' local x axis
         to the global z axis using rotation around y axis (i.e. rolling). Respects
@@ -1009,51 +925,6 @@ class MIMoRollOverEnv(MIMoEnv):
             / INTRINSIC_ACC_SCALE * self.intrinsic_acc_w
         return np.concatenate([scaled, acc]).astype(np.float64)
 
-    def get_achieved_goal_gravity(self):
-        """ The gravity direction in each of 'GRAVITY_GOAL_BODIES', x component.
-
-        One entry per body, all on the same scale: +1 supine, -1 prone -- the same scale as
-        'get_dot_local_x_to_global_z(body)', but
-        reconstructed from the gyroscope and the proprioceptive joint chain instead of from the
-        root free joint that proprioception does not report.
-
-        The estimate is a running one, advanced lazily: the first read after a reset seeds it from
-        the accelerometer (the one moment MIMo is demonstrably at rest, so specific force IS
-        gravity), and every later read integrates the gyroscope forward to the current 'data.time'.
-        Keying on the simulation clock rather than on a step counter makes this idempotent -- the
-        environment reads the achieved goal several times per step (observation, reward, info) and
-        all of them must see the same value.
-
-        Note this makes 'get_achieved_goal' history-dependent, unlike the other goal functions.
-        'compute_reward' stays pure -- it only ever sees the stored achieved/desired pair -- so HER
-        relabelling is unaffected.
-        """
-        self._advance_gravity_estimate()
-        R_site = self.data.site_xmat[self._vestibular_site_id].reshape(3, 3)
-        # R_body^T @ R_site depends only on the joints between that body and the head; the root
-        # rotation cancels, which is what keeps this quantity non-extrinsic.
-        return np.array([float(((self.data.xmat[body_id].reshape(3, 3).T @ R_site)
-                                @ self._g_site)[0])
-                         for body_id in self._gravity_body_ids])
-
-    def _advance_gravity_estimate(self):
-        """ Seed or integrate ':attr:`._g_site`' up to the current simulation time. """
-        now = float(self.data.time)
-        if self._g_site is None or self._g_site_time is None:
-            acc = self.get_vestibular_obs()[:3]
-            norm = np.linalg.norm(acc)
-            # A degenerate reading would be free fall, which cannot happen at reset; fall back to
-            # the site's own +x rather than dividing by zero.
-            self._g_site = acc / norm if norm > 1e-9 else np.array([1.0, 0.0, 0.0])
-            self._g_site_time = now
-            return
-        dt = now - self._g_site_time
-        if dt <= 0.0:
-            return
-        self._g_site = rotate_by_angular_velocity(
-            self._g_site, self.get_vestibular_obs()[3:6], dt)
-        self._g_site_time = now
-
     def get_achieved_goal(self):
         """ Returns the goal calculated from either of the tree goal functions.
         """
@@ -1063,8 +934,6 @@ class MIMoRollOverEnv(MIMoEnv):
             return self.get_achieved_goal_cos()
         elif self.goal_function=='intrinsic':
             return self.get_achieved_goal_intrinsic()
-        elif self.goal_function=='gravity':
-            return self.get_achieved_goal_gravity()
         
         raise NotImplementedError
 
@@ -1130,7 +999,7 @@ class MIMoRollOverEnv(MIMoEnv):
         # report -- cf. the rho_max ISR artefact that invalidated the earlier COMPOSER logs.
         info['rolled_over'] = 1.0 if achieved_goal >= 0.95 else 0.0
 
-        # Running maximum for the goal curriculum. Retired into '_recent_episode_max' on reset.
+        # Running maximum over the episode, reset to None in 'reset_model'.
         rho = float(np.asarray(achieved_goal).reshape(-1)[0])
         self._episode_max_achieved = (rho if self._episode_max_achieved is None
                                       else max(self._episode_max_achieved, rho))
@@ -1138,8 +1007,6 @@ class MIMoRollOverEnv(MIMoEnv):
         # evaluation protocol reports. Note that 'side_lying' and 'rolled_over' above describe the
         # *final* step instead, so the two disagree whenever MIMo rolls and then rolls back.
         info['episode_rho_max'] = self._episode_max_achieved
-        info['goal_high_effective'] = self._effective_goal_high() if self.goal_low is not None \
-            else float('nan')
 
         # Goal-INDEPENDENT reward terms, stored so HER can reuse them verbatim for the virtual
         # transitions it builds. Requires HerReplayBuffer(copy_info_dict=True).
@@ -1267,21 +1134,16 @@ class MIMoRollOverEnv(MIMoEnv):
         """ Puts the shaping potential of every goal function on the same [0, 1] scale.
 
         21.08.2026 'cos' measures progress in [0, 1], so a reset sits at potential -1 and the goal
-        at 0. The 'gravity' goal runs from +1 to -1 per body, so with two bodies a reset sits at
-        -2.83 -- the PBRS term was 2.83x larger than in the baseline while 'reward_success' stayed
-        at 500, i.e. the terminal bonus was relatively 2.83x weaker. Measured consequence: the
-        policy happily farmed shaping reward up to rho 0.48 and had little incentive to pay for
-        the expensive last part of the roll.
+        at 0. The removed 'gravity' goal ran from +1 to -1 per body, so with two bodies a reset sat
+        at -2.83: the PBRS term was 2.83x larger than in the baseline while 'reward_success' stayed
+        at 500, i.e. the terminal bonus was relatively 2.83x weaker, and the policy farmed shaping
+        reward up to rho 0.48 rather than paying for the expensive last part of the roll. Dividing
+        by the reset distance fixed it.
 
-        Dividing by the reset distance (2*sqrt(n_bodies)) makes '--pbrs_w' and 'reward_success'
-        mean the same thing for 'gravity' as for 'cos', which is what makes the two comparable.
-
-        Note this deliberately does NOT scale ':attr:`.intrinsic_goal_eps`': the success radius
-        stays in the readable +-1 units of the goal itself, where eps = 2*(1 - rho_target) per
-        body -- eps 0.21 for two bodies is about rho 0.925.
+        Every remaining goal function already sits on that scale, so this is 1.0 throughout. It is
+        kept as a hook rather than inlined because the next goal function on a different scale will
+        need it again, and the failure above is what it is here to prevent.
         """
-        if self.goal_function == 'gravity':
-            return 1.0 / (2.0 * np.sqrt(len(GRAVITY_GOAL_BODIES)))
         return 1.0
 
     @staticmethod

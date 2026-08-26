@@ -44,8 +44,7 @@ hyperparameters (`data.yml`), the training history (the TensorBoard event file) 
 | `indexer.py` | Walks `models/`, parses `data.yml` + event files into SQLite |
 | `queries.py` | Filtering, faceting, grouping by experiment |
 | `plots.py` | matplotlib charts (light and dark), rendered server-side |
-| `fleet.py` | Host probing, detached launch over SSH, PID registry, kill |
-| `evals.py` | The serial evaluation queue around `eval_rollover.py` |
+| `evals.py` | The serial evaluation queue around `eval_rollover.py`, single runs and `--group` |
 | `tb.py` | On-demand TensorBoard for a selection |
 | `app.py` | Routes |
 
@@ -63,18 +62,6 @@ in `eval_rollover.py`; it now falls back to the path.)
 ~100 s; the steady state is a directory walk plus 800 `stat` calls, about 1.3 s. Scalars are
 stored as packed blobs per `(run, tag)` — row-per-point cost 4.3 M rows and 800 MB for the same
 data that now fits in 40 MB.
-
-**One run per host, one evaluation at a time.** A MIMo env is ~3.6 GB RSS and four parallel runs
-were OOM-killed. The queue depth of 1 is a correctness constraint, not a tunable.
-
-**Launching is detached and kills are by PID.** `rbi_autorun*.sh` backgrounds the `ssh` itself, so
-stdout dies with the terminal and no PID is recorded — which is why the only kill available there
-is `killall python`, ending every Python process the user owns on that host. Here the remote
-process is started under `setsid nohup`, logged into the shared home, and its PID stored.
-
-**The launch form is checked against `yaml_data`.** `fleet.check_yaml_coverage()` reads
-`illustrations.py` and reports any experiment-defining flag the form can set that would not
-round-trip through `data.yml`. The UI shows it as a blocking notice; the selfcheck asserts it.
 
 **Dates are a timeline, every other facet is a set.** The date facet is ordered newest-first by
 value; every other facet is ordered by count, because there the useful question is where the data
@@ -98,6 +85,43 @@ request htmx made -- `/fragments/runs?<filters>`, which renders no navigation --
 stranded the user on a bare table. The fragment sends an `HX-Push-Url` header naming the page URL
 instead, and any plain browser navigation to a `/fragments/*` route is redirected to the page that
 renders it properly. That is what makes Refresh, bookmarking and the back button work.
+
+**Experiments are evaluated as a group, and the `--group` path is verified before it is used.**
+The experiment page runs `eval_rollover.py --group` over every seed -- the *last* checkpoint of
+each, never `model_best.zip`, with identical episode seeds so the runs are paired. The spec is the
+run path with the `_run_<i>` tail removed, but that prefix is expanded and compared against the
+experiment's own runs before being offered: some experiments were sorted by hand into
+subdirectories (`intrinsic_only_vesti/bad/..._run_7` next to `good/..._run_11`), and a path wide
+enough to catch those would also evaluate other experiments living in the same parent. 90 of 94
+experiments get an exact spec; the other 4 are refused with an explanation rather than quietly
+evaluating the wrong set. Results are folded back into `evals` keyed by run directory, so the
+group summary and the per-run pages cannot disagree.
+
+**One evaluation at a time.** A MIMo env is ~3.6 GB RSS, so the queue depth of 1 is a correctness
+constraint, not a tunable. Subprocesses are launched with `sys.executable`, not `"python"` -- the
+server runs inside the `mimo` env but a subprocess inherits `PATH`, where `python` can be the base
+interpreter with no numpy, and that only fails when an evaluation is finally launched.
+
+**The tag list describes the selection, not the archive.** The corpus spans a year of changing
+callbacks, so the union of all tags offers curriculum and eval metrics that most selections never
+recorded -- picking one drew an empty chart. `tags_for()` restricts the dropdown to tags the
+selected runs actually logged: 30 instead of 63 for a typical experiment.
+
+**The configuration is shown three ways.** A key/value table, the raw `data.yml` verbatim
+(`/api/config/<run_id>`), and -- on an experiment -- split into what all seeds agree on and where
+they disagree. Seeds should differ only by the random seed; anything else that varies is either a
+deliberate sub-sweep or a mistake, and either way it is the first thing worth seeing.
+
+**Charts export as vector PDF, re-laid-out rather than re-encoded.** Every chart has an Export PDF
+control; the link is the chart's own URL with `.png` swapped for `.pdf`, so the figure you export
+is the figure you are looking at. The PDF is not the screen figure in another container: it is
+rendered again in the paper style from `results/icdlplot.py` (STIX serif, 10 pt, `pdf.fonttype 42`
+so no Type 3 fonts reach a thesis template), always light, at a real column width -- 3.5 in single
+or 7.0 in double. That needs `layout="constrained"` and *no* `bbox_inches="tight"`: tight cropping
+grows the page to whatever the legend needs, which turned a 3.5 in request into 7.65 in. In paper
+mode the on-screen caption and the right-hand direct labels are dropped, and the legend moves to
+`loc="outside lower center"` so constrained layout reserves room instead of letting it land on the
+x-axis label.
 
 **TensorBoard is spawned, not proxied**, with `--logdir_spec` so each run gets a legible legend
 name instead of one invented from a shared parent path.

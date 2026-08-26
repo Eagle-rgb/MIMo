@@ -42,6 +42,8 @@
         <span class="chip muted">{{ r.algorithm or '?' }}</span>
         {% if r.her %}<span class="chip ok">her</span>{% endif %}
         <span class="chip muted">{{ r.reward_shape }}</span>
+        {# 'cos' is the default and would be on almost every row; only the exceptions are worth ink. #}
+        {% if r.goal_fn and r.goal_fn != 'cos' %}<span class="chip goalfn">{{ r.goal_fn }}</span>{% endif %}
       </td>
       <td class="num runmeta">{% if r.morph_age is not none %}{{ r.morph_age }}/{{ r.physio_age }}{% else %}--{% endif %}</td>
       <td>{{ rho_meter(r.best_rho) }}</td>

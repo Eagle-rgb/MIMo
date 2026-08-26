@@ -205,7 +205,7 @@ def groups(params, limit=200):
     """Collapse runs into experiments: one row per (date, posture, model_name) with seed stats."""
     where, binds = build_where(params)
     rows = db.query(f"""
-        SELECT date, posture, model_name, algorithm, reward_shape, her,
+        SELECT date, posture, model_name, algorithm, reward_shape, her, goal_fn,
                morph_age, physio_age, episode_steps, collection,
                COUNT(*)        AS n_seeds,
                AVG(best_rho)   AS rho_mean,
@@ -215,7 +215,7 @@ def groups(params, limit=200):
                SUM(n_checkpoints) AS n_checkpoints,
                GROUP_CONCAT(run_id, char(10)) AS run_ids
         FROM runs {where}
-        GROUP BY date, posture, model_name
+        GROUP BY date, posture, model_name, goal_fn
         ORDER BY date DESC, model_name
         LIMIT ?""", binds + [limit])
     out = []
@@ -264,6 +264,129 @@ def stats():
     running = db.one("SELECT COUNT(*) AS n FROM runs WHERE state='running'")["n"]
     return {"runs": row["runs"] or 0, "checkpoints": row["ckpts"] or 0,
             "experiments": row["experiments"] or 0, "evals": evals, "running": running}
+
+
+def tags_for(run_ids):
+    """Only the tags these runs actually logged.
+
+    The corpus spans a year of changing callbacks, so the union over everything offers curriculum
+    and eval tags that most selections never recorded -- picking one yields an empty chart. The
+    dropdown must describe the selection, not the archive.
+    """
+    if not run_ids:
+        return all_tags()
+    marks = ",".join("?" * len(run_ids))
+    return [r["tag"] for r in db.query(
+        f"""SELECT tag, COUNT(*) AS n FROM scalars WHERE run_id IN ({marks})
+            GROUP BY tag ORDER BY n DESC, tag""", list(run_ids))]
+
+
+def experiment(date, posture, model_name):
+    """One experiment: its seeds, its shared configuration, and where the seeds disagree."""
+    rows = db.query(
+        """SELECT * FROM runs WHERE model_name=? AND date IS ? AND posture=?
+           ORDER BY seed_idx, run_id""", (model_name, date, posture))
+    if not rows:
+        return None
+    runs = [dict(r) for r in rows]
+    for run in runs:
+        run["yaml_parsed"] = json.loads(run["yaml"] or "{}")
+        run["checkpoint_list"] = json.loads(run["checkpoints"] or "[]")
+
+    shared, differing = config_diff(runs)
+    return {
+        "date": date, "posture": posture, "model_name": model_name,
+        "runs": runs, "shared": shared, "differing": differing,
+        "group_spec": group_spec(runs),
+        "algorithm": runs[0].get("algorithm"),
+        "reward_shape": runs[0].get("reward_shape"),
+        "goal_fn": runs[0].get("goal_fn"),
+        "her": runs[0].get("her"),
+        "collection": runs[0].get("collection"),
+        "n_seeds": len(runs),
+        "checkpoints": sorted({c for r in runs for c in r["checkpoint_list"]}),
+    }
+
+
+def config_diff(runs):
+    """Split the seeds' data.yml into what they agree on and what they do not.
+
+    Seeds of one experiment are supposed to differ only by the random seed. Anything else that
+    varies is either a deliberate sub-sweep or a mistake, and either way it is the first thing
+    worth seeing -- so it is separated out rather than buried in a shared listing.
+    """
+    configs = [r.get("yaml_parsed") or {} for r in runs]
+    keys = sorted({k for c in configs for k in c})
+    shared, differing = {}, {}
+    for key in keys:
+        values = [c.get(key) for c in configs]
+        rendered = {repr(v) for v in values}
+        if len(rendered) == 1 and len(values) == len(configs):
+            shared[key] = values[0]
+        else:
+            differing[key] = [
+                (r.get("seed_idx"), c.get(key, "\u2014 missing \u2014"))
+                for r, c in zip(runs, configs)]
+    return shared, differing
+
+
+def group_spec(runs):
+    """The --group argument for eval_rollover.py, or None when no safe one exists.
+
+    The prefix form ('<...>/<date>_<posture>_<name>' without the '_run_<i>' tail) is what
+    --roll_over_model_path_auto builds and what expand_group() globs back. But seeds are not
+    always laid out that way -- some experiments have been sorted by hand into subdirectories
+    ('.../intrinsic_only_vesti/bad/..._run_7' and '.../good/..._run_11'). Falling back to the
+    common parent there would hand eval_rollover a directory holding *other* experiments too, and
+    silently evaluate the wrong set. So the derived spec is expanded here and only returned when
+    it names exactly the runs of this experiment.
+    """
+    import glob as globlib
+    import os
+    import re as _re
+
+    paths = [r["path"] for r in runs if r.get("path")]
+    if not paths:
+        return None
+    if len(paths) == 1 and runs[0].get("seed_idx") is None:
+        return paths[0]                      # a lone run that never had a _run_<i> suffix
+
+    stems = {_re.sub(r"_run_\d+$", "", p) for p in paths}
+    if len(stems) != 1:
+        return None
+    stem = stems.pop()
+    expanded = {os.path.abspath(d) for d in globlib.glob(stem + "_run_*") if os.path.isdir(d)}
+    return stem if expanded == {os.path.abspath(p) for p in paths} else None
+
+
+def group_eval_summary(run_ids, threshold=0.75):
+    """Aggregate the stored per-run evaluations the way eval_rollover --group reports them."""
+    if not run_ids:
+        return None
+    marks = ",".join("?" * len(run_ids))
+    rows = db.query(
+        f"""SELECT e.* FROM evals e
+            JOIN (SELECT run_id, MAX(created_at) AS newest FROM evals
+                  WHERE policy_goal IS NULL AND run_id IN ({marks}) GROUP BY run_id) latest
+              ON e.run_id = latest.run_id AND e.created_at = latest.newest
+            WHERE e.policy_goal IS NULL""", list(run_ids))
+    rows = [dict(r) for r in rows]
+    if not rows:
+        return None
+    rolled = [r["rolled"] for r in rows]
+    steps = [r["steps_mean"] for r in rows if r["steps_mean"] is not None]
+    return {
+        "rows": rows,
+        "runs": len(rows),
+        "success_threshold": threshold,
+        # eval_rollover --group counts a run successful at *strictly above* the threshold.
+        "successful": sum(1 for v in rolled if v > threshold),
+        "roll_rate_mean": sum(rolled) / len(rolled),
+        "rho_mean": sum(r["rho_mean"] for r in rows) / len(rows),
+        "steps_mean": (sum(steps) / len(steps)) if steps else None,
+        "band_successful_90": sum(1 for v in rolled if v > 0.9),
+        "band_not_successful_10": sum(1 for v in rolled if v < 0.1),
+    }
 
 
 def all_tags():

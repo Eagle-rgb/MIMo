@@ -9,8 +9,11 @@ slots that sit below 3:1 on the surface are covered by the relief rule -- every 
 labelled and a legend is always present, so identity is never carried by colour alone.
 """
 
+import contextlib
+import contextvars
 import io
 import math
+import re
 
 import matplotlib
 matplotlib.use("Agg")
@@ -38,6 +41,57 @@ THEMES = {
 }
 
 HEADLINE_TAG = "rollout/ep_rho_max_mean"
+
+# Paper style for exported figures, mirroring results/icdlplot.py so a figure exported here and a
+# figure produced by the analysis scripts sit on the same page without looking like two documents.
+# fonttype 42 embeds TrueType rather than matplotlib's default Type 3, which several thesis and
+# journal templates reject outright.
+PAPER_RC = {
+    "font.family": "serif",
+    "font.serif": ["STIXGeneral", "DejaVu Serif"],
+    "font.size": 10,
+    "mathtext.fontset": "stix",
+    "axes.labelsize": 10,
+    "xtick.labelsize": 9,
+    "ytick.labelsize": 9,
+    "legend.fontsize": 8,
+    "pdf.fonttype": 42,
+    "ps.fonttype": 42,
+}
+
+# results/icdlplot.py: single column is 3.5 in wide. A chart on screen is much wider than that,
+# so the export is not the screen figure re-encoded -- it is re-laid out at the target width.
+COLUMN_WIDTHS = {"single": (3.5, 2.6), "double": (7.0, 3.9)}
+
+# Render options for the request being served. A ContextVar rather than module state because
+# matplotlib's rcParams are global and FastAPI serves sync handlers on a threadpool: two
+# concurrent exports would otherwise fight over the style.
+_OPTS = contextvars.ContextVar("mimolab_render_opts", default=None)
+
+
+def _opts():
+    return _OPTS.get() or {"fmt": "png", "paper": False, "size": None}
+
+
+@contextlib.contextmanager
+def render_as(fmt="png", column=None):
+    """Render everything inside this block as 'fmt', optionally at a fixed column width."""
+    paper = fmt == "pdf"
+    size = COLUMN_WIDTHS.get(column) if column else None
+    token = _OPTS.set({"fmt": fmt, "paper": paper, "size": size})
+    try:
+        if paper:
+            with plt.rc_context(PAPER_RC):
+                yield
+        else:
+            yield
+    finally:
+        _OPTS.reset(token)
+
+
+def slug(text):
+    return re.sub(r"[^a-z0-9]+", "_", (text or "chart").lower()).strip("_")
+
 
 # Model names in this fork run long ("sac_her_sparse_goal_lohi_curriculum_nodone_entropy92_
 # lrlinearsched"). Untruncated they drag the figure to three times its width, because
@@ -104,7 +158,7 @@ TAG_NOTES = {
     "rollout/ep_rho_max_mean":
         "episode maximum rotation; the quantity comparable to eval_rollover.py",
     "rollout/goal_high_effective":
-        "the curriculum itself: flat means it stalled",
+        "goal curriculum, removed 25.08.2026 -- only runs trained before then have this curve",
     "rollout/side_lying_success_rate":
         "final step of the episode, not the maximum",
 }
@@ -112,7 +166,15 @@ TAG_NOTES = {
 
 def _figure(theme, width=9.0, height=4.6):
     t = THEMES[theme]
-    fig, ax = plt.subplots(figsize=(width, height), dpi=110)
+    size = _opts()["size"]
+    if size:
+        # Keep the caller's aspect ratio, but honour the requested column width.
+        width, height = size[0], size[0] * (height / width)
+    # Paper figures are laid out constrained so everything fits *inside* the requested size.
+    # With bbox_inches="tight" the page grows to whatever the legend and labels need, and a
+    # figure asked for at 3.5 in comes out at 7.65 in -- useless for a column.
+    fig, ax = plt.subplots(figsize=(width, height), dpi=110,
+                           layout="constrained" if _opts()["paper"] else None)
     fig.patch.set_alpha(0.0)
     ax.set_facecolor("none")
     for side in ("top", "right"):
@@ -127,8 +189,14 @@ def _figure(theme, width=9.0, height=4.6):
 
 
 def _emit(fig):
+    opts = _opts()
     buf = io.BytesIO()
-    fig.savefig(buf, format="png", transparent=True, bbox_inches="tight", pad_inches=0.25)
+    if opts["fmt"] == "pdf":
+        # Opaque white, not transparent: a transparent PDF dropped into a document picks up
+        # whatever is behind it, and the axis labels are near-black.
+        fig.savefig(buf, format="pdf", dpi=300, facecolor="white", edgecolor="none")
+    else:
+        fig.savefig(buf, format="png", transparent=True, bbox_inches="tight", pad_inches=0.25)
     plt.close(fig)
     return buf.getvalue()
 
@@ -185,16 +253,28 @@ def curve(run_ids, tag, theme="light", aggregate=False, smooth=1, title=None):
             groups.setdefault(key, []).append((steps, vals))
         items = list(groups.items())
         names = distinguish([k[2] for k in groups])
-        # Two experiments can share a model_name across dates ('age9_ep250' run in August and
-        # again later). Distinguishing on the name alone then paints two different experiments
-        # with the same label, which is worse than a long label.
+        # A model_name can repeat across dates ('ep100' on 26-08-21 and 26-08-22) and across
+        # postures ('ep100_18' prone and supine on the same day). Labelling on the name alone
+        # paints two different experiments identically, which is worse than a long label -- so
+        # append whichever key components actually vary inside each colliding set, and nothing
+        # more. A group key is (date, posture, model_name).
         seen = {}
         for key in groups:
             seen.setdefault(names.get(key[2], key[2]), []).append(key)
         labels = {}
         for base, keys in seen.items():
+            if len(keys) == 1:
+                labels[keys[0]] = base
+                continue
+            vary_posture = len({k[1] for k in keys}) > 1
+            vary_date = len({k[0] for k in keys}) > 1
             for key in keys:
-                labels[key] = f"{base} {key[0]}" if len(keys) > 1 else base
+                extra = []
+                if vary_posture:
+                    extra.append(key[1])
+                if vary_date:
+                    extra.append(key[0] or "?")
+                labels[key] = " ".join([base] + extra) if extra else base
         # A 9th series is never a generated hue: fold the tail rather than cycling the palette.
         folded = items[len(colors):]
         items = items[:len(colors)]
@@ -203,12 +283,15 @@ def curve(run_ids, tag, theme="light", aggregate=False, smooth=1, title=None):
             if grid is None:
                 continue
             mean = _smooth(stacked.mean(axis=0), smooth)
-            label = f"{labels[key]} ({key[1]}, n={len(members)})"
+            # 'ep100_18 prone' already says prone; only add the posture when it is not there.
+            base_label = labels[key]
+            detail = f"n={len(members)}" if key[1] in base_label else f"{key[1]}, n={len(members)}"
+            label = f"{base_label} ({detail})"
             ax.fill_between(grid, stacked.min(axis=0), stacked.max(axis=0),
                             color=colors[i], alpha=0.15, linewidth=0)
             ax.plot(grid, mean, color=colors[i], linewidth=2.0, label=label,
                     solid_capstyle="round")
-            if len(items) <= 4:
+            if len(items) <= 4 and not _opts()["paper"]:
                 ax.annotate(labels[key], xy=(grid[-1], mean[-1]),
                             xytext=(6, 0), textcoords="offset points",
                             color=colors[i], fontsize=8, va="center", fontweight="semibold")
@@ -234,11 +317,14 @@ def curve(run_ids, tag, theme="light", aggregate=False, smooth=1, title=None):
             ax.plot([], [], color=t["faint"], linewidth=1.8,
                     label=f"+{len(series) - len(shown)} more runs not shown")
 
-    ax.set_xlabel("environment steps", color=t["muted"], fontsize=9)
-    ax.set_ylabel(tag.split("/")[-1], color=t["muted"], fontsize=9)
+    paper = _opts()["paper"]
+    ax.set_xlabel("environment steps", color=t["muted"], fontsize=None if paper else 9)
+    ax.set_ylabel(tag.split("/")[-1], color=t["muted"], fontsize=None if paper else 9)
     ax.margins(x=0.02)
-    note = TAG_NOTES.get(tag)
-    ax.set_title(title or tag, color=t["ink"], fontsize=11.5, loc="left",
+    # The italic caption is on-screen guidance about how to read the metric. A figure in a
+    # document gets its caption from the document, and at 3.5 in the line runs off the page.
+    note = None if paper else TAG_NOTES.get(tag)
+    ax.set_title(title or tag, color=t["ink"], fontsize=None if paper else 11.5, loc="left",
                  pad=26 if note else 12, fontweight="semibold")
     if note:
         ax.text(0, 1.015, note, transform=ax.transAxes, color=t["muted"], fontsize=8.2,
@@ -251,11 +337,20 @@ def curve(run_ids, tag, theme="light", aggregate=False, smooth=1, title=None):
                 color=t["muted"], fontsize=8, va="bottom", ha="right")
 
     # Legend below the axes, never over the data.
-    handles, labels = ax.get_legend_handles_labels()
+    handles, legend_labels = ax.get_legend_handles_labels()
     if handles:
-        legend = ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.16), fontsize=8.2,
-                           frameon=False, ncols=min(4, len(handles)), handlelength=1.6,
-                           columnspacing=1.6, borderaxespad=0)
+        if paper:
+            # "outside" is what makes constrained layout *reserve* room for the legend. With the
+            # axes-anchored version it lands on top of the x-axis label at column width.
+            # A single column stacks the entries; at double width they fit side by side.
+            wide = (_opts()["size"] or (7.0,))[0] >= 6.0
+            legend = fig.legend(handles, legend_labels, loc="outside lower center", frameon=False,
+                                ncols=min(3, len(handles)) if wide else 1,
+                                handlelength=1.4, columnspacing=1.0)
+        else:
+            legend = ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.16), fontsize=8.2,
+                               frameon=False, ncols=min(4, len(handles)), handlelength=1.6,
+                               columnspacing=1.6, borderaxespad=0)
         for text in legend.get_texts():
             text.set_color(t["muted"])
     return _emit(fig)

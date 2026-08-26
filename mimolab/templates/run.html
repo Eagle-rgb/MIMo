@@ -13,6 +13,9 @@
     <div class="actions">
       <span class="chip {{ run.posture }}">{{ run.posture }}</span>
       <span class="chip {{ run.state }}">{{ run.state }}</span>
+      {% if run.model_name %}
+      <a class="btn sm" href="/experiment?posture={{ run.posture|urlencode }}&amp;name={{ run.model_name|urlencode }}{% if run.date %}&amp;date={{ run.date }}{% endif %}">Experiment</a>
+      {% endif %}
       <a class="btn sm" href="/analysis?run={{ run.run_id|urlencode }}">Analyse</a>
       <button class="btn sm" type="button" data-tb-runs="{{ run.run_id }}">TensorBoard</button>
     </div>
@@ -35,12 +38,24 @@
 
       <div class="panel">
         <h2>Configuration</h2>
-        <p class="sub">As recorded in <code>data.yml</code>, with the <code>age</code> shim applied.</p>
-        <dl class="kv">
+        <p class="sub">{{ run.yaml_parsed|length }} keys, as recorded in <code>data.yml</code>
+          (with the <code>age</code> shim applied).</p>
+        <div class="segmented" role="group" aria-label="Configuration view" style="margin-bottom:.7rem">
+          <button type="button" data-cfg="table" aria-pressed="true">Table</button>
+          <button type="button" data-cfg="raw" aria-pressed="false">Raw data.yml</button>
+        </div>
+        <dl class="kv" data-cfg-panel="table">
           {% for key, value in run.yaml_parsed.items()|sort %}
             <dt>{{ key }}</dt><dd>{{ value }}</dd>
           {% endfor %}
         </dl>
+        <div data-cfg-panel="raw" hidden>
+          <pre class="log" style="max-height:34rem"
+               data-cfg-src="/api/config/{{ run.run_id }}">Loading&hellip;</pre>
+          <div class="chartbar end">
+            <a class="btn sm" href="/api/config/{{ run.run_id }}" target="_blank" rel="noopener">Open raw file</a>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -108,6 +123,7 @@
         <h2>Goal response</h2>
         <p class="sub">What the policy does when fed a <code>desired_goal</code> it was not asked for.</p>
         <div class="chart"><img data-chart="/api/plot/goal_response.png?run={{ run.run_id|urlencode }}&amp;checkpoint={{ run.checkpoint_list[-1] }}" alt="Goal response curve"></div>
+        <div class="chartbar end"><a class="btn sm" data-export download href="#">Export PDF</a></div>
       </div>
       {% endif %}
     </div>
@@ -119,8 +135,11 @@
     <div class="chartgrid">
       {% for tag in ['rollout/ep_rho_max_mean', 'rollout/ep_rew_mean'] %}
         {% if tag in run.tags %}
-        <div class="chart"><img alt="{{ tag }}"
-          data-chart="/api/plot/curve.png?tag={{ tag|urlencode }}{% for s in siblings %}&amp;run={{ s.run_id|urlencode }}{% endfor %}"></div>
+        <div>
+          <div class="chart"><img alt="{{ tag }}"
+            data-chart="/api/plot/curve.png?tag={{ tag|urlencode }}&amp;aggregate=1{% for s in siblings %}&amp;run={{ s.run_id|urlencode }}{% endfor %}"></div>
+          <div class="chartbar end"><a class="btn sm" data-export download href="#">Export PDF</a></div>
+        </div>
         {% endif %}
       {% endfor %}
     </div>

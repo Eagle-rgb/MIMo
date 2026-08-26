@@ -5,6 +5,7 @@ job state then survives an app restart and stays greppable from any host without
 """
 
 import os
+import sys
 from pathlib import Path
 
 # The RBI host pool, in the order used by rbi_autorun*.sh. 'anemoi' is last and is the suggested
@@ -34,7 +35,7 @@ class Settings:
 
     def __init__(self, mimo_root=None, models_root=None, offline=False,
                  ssh_user=None, remote_root=None, conda_env="mimo",
-                 tb_port=8771, python="python"):
+                 tb_port=8771, python=None):
         self.mimo_root = Path(mimo_root or os.environ.get("MIMO_ROOT") or Path.cwd()).resolve()
         self.models_root = Path(models_root or self.mimo_root / "models").resolve()
         # 'offline' disables everything that spawns a process: launching, killing, evaluating.
@@ -45,7 +46,10 @@ class Settings:
         self.remote_root = remote_root or os.environ.get("MIMO_REMOTE_ROOT") or "~/MIMo"
         self.conda_env = conda_env
         self.tb_port = tb_port
-        self.python = python
+        # sys.executable, not "python": the server runs inside the mimo conda env, but the
+        # subprocess inherits PATH, where "python" can be the base interpreter with no numpy.
+        # That failure surfaces only when an evaluation is launched, long after startup.
+        self.python = python or sys.executable
 
         self.state_dir = self.mimo_root / ".mimolab"
         self.log_dir = self.state_dir / "logs"

@@ -36,9 +36,28 @@
     return base + sep + 'theme=' + currentTheme();
   }
 
+  /* The export link is the chart's own URL with .png swapped for .pdf, so the two can never
+     describe different figures. Column width is a PDF-only concern; the server ignores it on PNG. */
+  function exportHref(base) {
+    var column = (document.getElementById('column') || {}).value || 'double';
+    var url = base.replace('/curve.png', '/curve.pdf')
+                  .replace('/age_grid.png', '/age_grid.pdf')
+                  .replace('/goal_response.png', '/goal_response.pdf');
+    return url + (url.indexOf('?') === -1 ? '?' : '&') + 'column=' + column;
+  }
+
+  function syncExport(scope, base) {
+    var link = scope && scope.querySelector('[data-export]');
+    if (link) link.setAttribute('href', exportHref(base));
+  }
+
   function refreshCharts() {
     document.querySelectorAll('img[data-chart]').forEach(function (img) {
-      img.src = chartUrl(img.getAttribute('data-chart'));
+      var base = img.getAttribute('data-chart');
+      img.src = chartUrl(base);
+      /* the export link sits beside the .chart wrapper, so look one level up */
+      var scope = img.closest('.chart') && img.closest('.chart').parentElement;
+      syncExport(scope, base);
     });
     var main = document.getElementById('mainchart');
     if (main) drawMain();
@@ -51,13 +70,19 @@
     var tag = (document.getElementById('tagsel') || {}).value || 'rollout/ep_rho_max_mean';
     var agg = (document.getElementById('agg') || {}).checked ? 1 : 0;
     var smooth = (document.getElementById('smooth') || {}).value || 1;
-    img.src = chartUrl(base + 'tag=' + encodeURIComponent(tag) + '&aggregate=' + agg +
-                       '&smooth=' + smooth);
+    var query = base + 'tag=' + encodeURIComponent(tag) + '&aggregate=' + agg +
+                '&smooth=' + smooth;
+    img.src = chartUrl(query);
+    var link = document.getElementById('exportmain');
+    if (link) link.setAttribute('href', exportHref(query));
   }
 
-  ['tagsel', 'agg', 'smooth'].forEach(function (id) {
+  ['tagsel', 'agg', 'smooth', 'column'].forEach(function (id) {
     document.addEventListener('change', function (e) {
-      if (e.target && e.target.id === id) drawMain();
+      if (e.target && e.target.id === id) {
+        drawMain();
+        if (e.target.id === 'column') refreshCharts();
+      }
     });
   });
 
@@ -191,6 +216,74 @@
     submitFilters();
   });
 
+  /* ---------- configuration view --------------------------------------------------------- */
+
+  function loadRawConfig() {
+    var pre = document.querySelector('[data-cfg-src]');
+    if (!pre || pre.dataset.loaded) return;
+    pre.dataset.loaded = '1';
+    fetch(pre.getAttribute('data-cfg-src'))
+      .then(function (r) { return r.text(); })
+      .then(function (text) { pre.textContent = text; })
+      .catch(function (err) { pre.textContent = 'Could not read data.yml: ' + err; });
+  }
+
+  document.addEventListener('click', function (e) {
+    var toggle = e.target.closest('[data-cfg]');
+    if (!toggle) return;
+    var wanted = toggle.getAttribute('data-cfg');
+    document.querySelectorAll('[data-cfg]').forEach(function (b) {
+      b.setAttribute('aria-pressed', b === toggle ? 'true' : 'false');
+    });
+    document.querySelectorAll('[data-cfg-panel]').forEach(function (panel) {
+      panel.hidden = panel.getAttribute('data-cfg-panel') !== wanted;
+    });
+    if (wanted === 'raw') loadRawConfig();
+  });
+
+  /* ---------- group evaluation ------------------------------------------------------------ */
+
+  var groupPoll = null;
+
+  function watchGroup(jobId, msg) {
+    var box = document.getElementById('grouplog');
+    var pre = document.querySelector('[data-group-log]');
+    if (box) box.hidden = false;
+    clearInterval(groupPoll);
+    groupPoll = setInterval(function () {
+      fetch('/api/evals/' + jobId + '/log?lines=60')
+        .then(function (r) { return r.text(); })
+        .then(function (text) { if (pre) { pre.textContent = text; pre.scrollTop = pre.scrollHeight; } });
+      fetch('/api/evals/jobs').then(function (r) { return r.json(); }).then(function (data) {
+        var job = (data.jobs || []).filter(function (j) { return j.job_id === jobId; })[0];
+        if (!job) return;
+        if (msg) msg.textContent = job.note ? job.state + ' \u2014 ' + job.note : job.state;
+        if (job.state === 'finished' || job.state === 'failed') {
+          clearInterval(groupPoll);
+          if (job.state === 'finished') setTimeout(function () { window.location.reload(); }, 1200);
+        }
+      });
+    }, 3000);
+  }
+
+  document.addEventListener('submit', function (e) {
+    var form = e.target.closest('[data-group-form]');
+    if (!form) return;
+    e.preventDefault();
+    var msg = form.querySelector('[data-group-msg]');
+    var button = form.querySelector('button[type=submit]');
+    button.disabled = true;
+    msg.textContent = 'Queueing\u2026';
+    post('/api/evals/group', new FormData(form)).then(function (data) {
+      button.disabled = false;
+      msg.textContent = 'Queued. This runs one environment at a time.';
+      watchGroup(data.job.job_id, msg);
+    }).catch(function (err) {
+      button.disabled = false;
+      msg.textContent = err.message;
+    });
+  });
+
   /* ---------- actions -------------------------------------------------------------------- */
 
   function post(url, body) {
@@ -221,30 +314,6 @@
         reindex.textContent = label;
         alert('Refresh failed: ' + (err.message || err));
       });
-    }
-
-    var kill = e.target.closest('[data-kill]');
-    if (kill) {
-      var jobId = kill.getAttribute('data-kill');
-      if (!window.confirm('Send SIGTERM to this run? Training stops at its current step.')) return;
-      kill.disabled = true;
-      post('/api/jobs/' + jobId + '/kill').then(function () {
-        if (window.htmx) htmx.trigger(document.getElementById('jobs'), 'load');
-      });
-    }
-
-    var log = e.target.closest('[data-log]');
-    if (log) {
-      var id = log.getAttribute('data-log');
-      var row = document.querySelector('[data-logrow="' + id + '"]');
-      var body = document.querySelector('[data-logbody="' + id + '"]');
-      if (!row) return;
-      row.hidden = !row.hidden;
-      if (!row.hidden) {
-        fetch('/api/jobs/' + id + '/log?lines=300')
-          .then(function (r) { return r.text(); })
-          .then(function (text) { body.textContent = text || '(log is empty)'; });
-      }
     }
 
     var tbSel = e.target.closest('[data-tb-selected]');
@@ -299,89 +368,12 @@
     });
   });
 
-  /* ---------- launch form ---------------------------------------------------------------- */
-
-  function launchValues() {
-    var form = document.getElementById('launchform');
-    if (!form) return null;
-    return new FormData(form);
-  }
-
-  /* The preview is rendered by the server, by the same build_command the launcher calls. Doing
-     it here would mean a second implementation of the flag rules that can silently disagree with
-     the one that actually runs -- and a preview that lies is worse than no preview. */
-  var previewPending = null;
-
-  function renderPreview() {
-    var form = document.getElementById('launchform');
-    var preview = document.getElementById('preview');
-    if (!form || !preview) return;
-    clearTimeout(previewPending);
-    previewPending = setTimeout(function () {
-      post('/api/jobs/preview', new FormData(form)).then(function (data) {
-        preview.textContent = data.command.replace(/ --/g, ' \\\n    --');
-        var box = document.getElementById('launcherrors');
-        if (!box) return;
-        box.innerHTML = '';
-        /* Errors block the launch; warnings are things illustrations.py only prints or silently
-           corrects, so they inform and must never disable the button. */
-        [['bad', data.errors || []], ['', data.warnings || []]].forEach(function (pair) {
-          pair[1].forEach(function (message) {
-            var div = document.createElement('div');
-            div.className = 'notice ' + pair[0];
-            div.style.marginTop = '.6rem';
-            div.textContent = message;
-            box.appendChild(div);
-          });
-        });
-        var submit = form.querySelector('button[type=submit]');
-        if (submit) submit.disabled = (data.errors || []).length > 0;
-      }).catch(function (err) { preview.textContent = String(err.message || err); });
-    }, 150);
-  }
-
-  document.addEventListener('input', function (e) {
-    if (e.target.closest('#launchform')) renderPreview();
-  });
-  document.addEventListener('change', function (e) {
-    if (e.target.closest('#launchform')) renderPreview();
-  });
-
-  document.addEventListener('click', function (e) {
-    var preset = e.target.closest('[data-preset]');
-    if (!preset) return;
-    var values = JSON.parse(preset.getAttribute('data-values'));
-    var form = document.getElementById('launchform');
-    form.querySelectorAll('input[type=checkbox]').forEach(function (b) { b.checked = false; });
-    Object.keys(values).forEach(function (key) {
-      var field = form.querySelector('[name="' + key + '"]');
-      if (!field) return;
-      if (field.type === 'checkbox') field.checked = Boolean(values[key]);
-      else field.value = values[key];
-    });
-    renderPreview();
-  });
-
-  document.addEventListener('submit', function (e) {
-    var form = e.target.closest('#launchform');
-    if (!form) return;
-    e.preventDefault();
-    var msg = document.getElementById('launchmsg');
-    var seeds = form.querySelector('[name=seeds]').value;
-    if (!window.confirm('Launch ' + seeds + ' run(s) on the RBI pool?')) return;
-    msg.textContent = 'Allocating hosts…';
-    post('/api/jobs/launch', new FormData(form)).then(function (data) {
-      msg.textContent = 'Launched ' + data.jobs.length + ' run(s).';
-      setTimeout(function () { window.location.href = '/jobs'; }, 800);
-    }).catch(function (err) { msg.textContent = err.message; });
-  });
-
   /* ---------- boot ----------------------------------------------------------------------- */
 
   function boot() {
     paintSelection();
     refreshCharts();
-    renderPreview();
+    loadRawConfig();
   }
 
   document.addEventListener('DOMContentLoaded', boot);

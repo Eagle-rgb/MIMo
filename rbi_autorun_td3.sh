@@ -35,16 +35,20 @@ for i in $(seq 0 $((NUMBER_OF_RUNS-1))); do
 		"--train_for=1000000" \
 		"--save_every=200000" \
 		"--roll_over_starting_position=supine" \
-		"--algorithm=SAC" \
+		"--algorithm=TD3" \
+		"--her" \
 		"--sparse_reward" \
 		"--eval_every=25000" \
 		"--eval_episodes=20" \
 		"--pen_factor=0.02" \
 		"--no_done_active" \
+		"--episode_steps=200" \
 		"--goal_low=0.25" \
 		"--goal_high=0.95" \
-		"--episode_steps=200" \
 		"--roll_over_model_path_auto" \
+		# 26.08.2026 Was '--goal_achievement_function=gravity --intrinsic_goal_eps=0.15'.
+		# The gravity goal was removed; this sweep already passes --goal_low/--goal_high, which
+		# is the goal variation 'cos' needs under HER, so it runs as the scalar baseline now.
 		"--goal_achievement_function=cos" \
 		"--save_model=${MODEL_NAME}_run_$((i))" \
 		"--morph_age=9" \

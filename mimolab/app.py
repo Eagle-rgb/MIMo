@@ -16,7 +16,7 @@ from fastapi.responses import (HTMLResponse, JSONResponse, PlainTextResponse,
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from . import db, evals, fleet, indexer, plots, queries, tb
+from . import db, evals, indexer, plots, queries, tb
 from .config import AGES, SETTINGS
 
 HERE = Path(__file__).parent
@@ -68,8 +68,6 @@ def progress(run):
 
 templates.env.globals.update(human_steps=human_steps, human_age=human_age,
                              progress=progress, AGES=AGES, settings=SETTINGS,
-                             PRESETS=fleet.PRESETS, TRAIN_FLAGS=fleet.TRAIN_FLAGS,
-                             CHOICES=fleet.CHOICES, all_tags=queries.all_tags,
                              DATE_PRESETS=queries.DATE_PRESETS)
 
 
@@ -209,6 +207,57 @@ def page_run(request: Request, run_id: str):
     })
 
 
+@app.get("/experiment", response_class=HTMLResponse)
+def page_experiment(request: Request, date: str = Query(None), posture: str = Query(...),
+                    name: str = Query(...)):
+    experiment = queries.experiment(date, posture, name)
+    if experiment is None:
+        raise HTTPException(404, f"no experiment '{name}' ({posture}, {date})")
+    run_ids = [r["run_id"] for r in experiment["runs"]]
+    return templates.TemplateResponse(request, "experiment.html", {
+        "exp": experiment, "run_ids": run_ids, "stats": queries.stats(), "nav": "runs",
+        "summary": queries.group_eval_summary(run_ids),
+        "tags": queries.tags_for(run_ids),
+        "jobs": [j for j in evals.recent(12) if j["kind"] == "group"],
+    })
+
+
+@app.get("/api/config/{run_id:path}", response_class=PlainTextResponse)
+def api_config(run_id: str):
+    """The run's data.yml exactly as it sits on disk."""
+    run = db.one("SELECT path FROM runs WHERE run_id=?", (run_id,))
+    if run is None:
+        raise HTTPException(404, run_id)
+    path = Path(run["path"]) / "data.yml"
+    if not path.exists():
+        raise HTTPException(404, f"no data.yml in {run['path']}")
+    return PlainTextResponse(path.read_text(),
+                             headers={"Content-Disposition":
+                                      f'inline; filename="{Path(run_id).name}_data.yml"'})
+
+
+@app.post("/api/evals/group")
+def api_eval_group(posture: str = Form(...), name: str = Form(...), date: str = Form(""),
+                   episodes: int = Form(40), checkpoint: str = Form("last"),
+                   success_threshold: float = Form(0.75)):
+    try:
+        job = evals.submit_group(date or None, posture, name, episodes=episodes,
+                                 checkpoint=checkpoint, success_threshold=success_threshold)
+    except (KeyError, ValueError, RuntimeError) as exc:
+        raise HTTPException(400, str(exc))
+    return JSONResponse({"job": job, "queue": evals.status()})
+
+
+@app.get("/api/evals/{job_id}/log", response_class=PlainTextResponse)
+def api_eval_log(job_id: str, lines: int = 200):
+    return evals.tail_log(job_id, lines=lines) or "(no output yet)"
+
+
+@app.get("/api/evals/jobs")
+def api_eval_jobs():
+    return JSONResponse({"jobs": evals.recent(12), "queue": evals.status()})
+
+
 @app.get("/analysis", response_class=HTMLResponse)
 def page_analysis(request: Request):
     params = params_of(request)
@@ -219,46 +268,8 @@ def page_analysis(request: Request):
     return templates.TemplateResponse(request, "analysis.html", {
 "params": params, "selected": selected,
         "warning": plots.horizon_warning(selected), "stats": queries.stats(),
-        "tags": queries.all_tags(), "nav": "analysis",
+        "tags": queries.tags_for(selected), "nav": "analysis",
         "runs": [queries.get_run(r) for r in selected[:200]],
-    })
-
-
-@app.get("/jobs", response_class=HTMLResponse)
-def page_jobs(request: Request):
-    return templates.TemplateResponse(request, "jobs.html", {
-"jobs": fleet.jobs(), "stats": queries.stats(),
-        "eval_status": evals.status(), "nav": "jobs",
-        "yaml_gaps": fleet.check_yaml_coverage(),
-    })
-
-
-@app.get("/fragments/jobs", response_class=HTMLResponse)
-def fragment_jobs(request: Request):
-    redirect = whole_page_instead(request, "/jobs")
-    if redirect is not None:
-        return redirect
-    fleet.refresh()
-    return templates.TemplateResponse(request, "_jobs_table.html", {
-"jobs": fleet.jobs(), "eval_status": evals.status()})
-
-
-@app.get("/fragments/hosts", response_class=HTMLResponse)
-def fragment_hosts(request: Request):
-    redirect = whole_page_instead(request, "/jobs")
-    if redirect is not None:
-        return redirect
-    probes = [] if SETTINGS.offline else fleet.probe_all()
-    return templates.TemplateResponse(request, "_hosts.html", {
-"probes": probes})
-
-
-@app.get("/launch", response_class=HTMLResponse)
-def page_launch(request: Request):
-    return templates.TemplateResponse(request, "launch.html", {
-"stats": queries.stats(), "nav": "jobs",
-        "yaml_gaps": fleet.check_yaml_coverage(),
-        "preset": request.query_params.get("preset", "sac_her_sparse"),
     })
 
 
@@ -266,39 +277,76 @@ def page_launch(request: Request):
 # Charts
 # ---------------------------------------------------------------------------------------------
 
-def _png(data):
+def _chart(data, fmt, filename):
+    """Return a rendered chart. A PDF is sent as a download, a PNG is shown inline."""
+    if fmt == "pdf":
+        return Response(content=data, media_type="application/pdf",
+                        headers={"Cache-Control": "no-store",
+                                 "Content-Disposition": f'attachment; filename="{filename}"'})
     return Response(content=data, media_type="image/png",
                     headers={"Cache-Control": "no-store"})
 
 
+def _theme(value):
+    return value if value in ("light", "dark") else "light"
+
+
+def _export_name(stem, fmt, extra=None):
+    parts = ["mimolab", plots.slug(stem)]
+    if extra:
+        parts.append(str(extra))
+    parts.append(time.strftime("%Y-%m-%d"))
+    return "_".join(parts) + "." + fmt
+
+
 @app.get("/api/plot/curve.png")
+@app.get("/api/plot/curve.pdf")
 def plot_curve(request: Request,
                tag: str = Query("rollout/ep_rho_max_mean"),
                theme: str = Query("light"),
                aggregate: int = Query(0),
-               smooth: int = Query(1)):
+               smooth: int = Query(1),
+               column: str = Query("double")):
     run_ids = request.query_params.getlist("run")
     if not run_ids:
         params = params_of(request)
         rows, _ = queries.search(params, limit=60)
         run_ids = [r["run_id"] for r in rows]
-    return _png(plots.curve(run_ids, tag, theme=theme if theme in ("light", "dark") else "light",
-                            aggregate=bool(aggregate), smooth=max(1, min(51, smooth))))
+
+    fmt = "pdf" if request.url.path.endswith(".pdf") else "png"
+    # A PDF is going into a document, so it is always rendered light and in the paper style --
+    # a dark-mode figure pasted into a thesis is never what was wanted.
+    with plots.render_as(fmt, column if fmt == "pdf" else None):
+        data = plots.curve(run_ids, tag, theme="light" if fmt == "pdf" else _theme(theme),
+                           aggregate=bool(aggregate), smooth=max(1, min(51, smooth)))
+    return _chart(data, fmt, _export_name(tag.split("/")[-1], fmt, f"{len(run_ids)}runs"))
 
 
 @app.get("/api/plot/age_grid.png")
-def plot_age_grid(request: Request, theme: str = Query("light")):
+@app.get("/api/plot/age_grid.pdf")
+def plot_age_grid(request: Request, theme: str = Query("light"),
+                  column: str = Query("single")):
     params = params_of(request)
     run_ids = request.query_params.getlist("run")
-    return _png(plots.age_grid(queries.age_grid(params, run_ids=run_ids or None),
-                               theme=theme if theme in ("light", "dark") else "light"))
+    fmt = "pdf" if request.url.path.endswith(".pdf") else "png"
+    with plots.render_as(fmt, column if fmt == "pdf" else None):
+        data = plots.age_grid(queries.age_grid(params, run_ids=run_ids or None),
+                              theme="light" if fmt == "pdf" else _theme(theme))
+    return _chart(data, fmt, _export_name("embodiment_grid", fmt))
 
 
 @app.get("/api/plot/goal_response.png")
-def plot_goal_response(run: str, checkpoint: str, theme: str = Query("light")):
+@app.get("/api/plot/goal_response.pdf")
+def plot_goal_response(request: Request, run: str, checkpoint: str,
+                       theme: str = Query("light"), column: str = Query("single")):
     rows = evals.sweep_rows(run, checkpoint)
-    return _png(plots.goal_response(rows, theme=theme if theme in ("light", "dark") else "light",
-                                    title=f"Goal response -- {checkpoint}"))
+    fmt = "pdf" if request.url.path.endswith(".pdf") else "png"
+    with plots.render_as(fmt, column if fmt == "pdf" else None):
+        data = plots.goal_response(rows, theme="light" if fmt == "pdf" else _theme(theme),
+                                   title=f"Goal response -- {checkpoint}")
+    label = db.one("SELECT model_name FROM runs WHERE run_id=?", (run,))
+    stem = f"goal_response_{(label['model_name'] if label else 'run')}"
+    return _chart(data, fmt, _export_name(stem, fmt))
 
 
 # ---------------------------------------------------------------------------------------------
@@ -328,70 +376,6 @@ def api_eval(run_id: str = Form(...), checkpoint: str = Form(...),
 @app.get("/api/evals/status")
 def api_eval_status():
     return JSONResponse(evals.status())
-
-
-def _form_values(form):
-    """Form fields -> the values dict fleet.build_command expects.
-
-    Kinds come from TRAIN_FLAGS, never from the submitted value: a numeric field that happens to
-    hold "1" (train_freq, gradient_steps) is not a boolean, and treating it as one silently drops
-    the "=1".
-    """
-    values = {}
-    for flag, kind, _default, _group, _in_yaml in fleet.TRAIN_FLAGS:
-        if kind == "bool":
-            values[flag] = form.get(flag) in ("1", "on", "true")
-        elif flag in form and form[flag] not in ("", None):
-            values[flag] = form[flag]
-    return values
-
-
-@app.post("/api/jobs/preview")
-async def api_preview(request: Request):
-    """Render the exact command the launch would run, plus any guard-rail errors.
-
-    Served by the same build_command the launcher uses, so the preview cannot disagree with what
-    actually gets executed -- which is the only thing a preview is for.
-    """
-    form = dict(await request.form())
-    name = (form.get("name") or "").strip() or "<name>"
-    values = _form_values(form)
-    command, _ = fleet.build_command(values, f"{name}_run_0")
-    return JSONResponse({"command": command,
-                         "errors": fleet.errors(values),
-                         "warnings": fleet.warnings(values)})
-
-
-@app.post("/api/jobs/launch")
-async def api_launch(request: Request):
-    form = dict(await request.form())
-    name = (form.pop("name", "") or "").strip()
-    seeds = int(form.pop("seeds", 1) or 1)
-    if not name:
-        raise HTTPException(400, "Name the sweep -- it becomes the --save_model stem.")
-
-    values = _form_values(form)
-    blocking = fleet.errors(values)
-    if blocking:
-        raise HTTPException(400, " ".join(blocking))
-    try:
-        jobs = fleet.launch_sweep(values, name, seeds)
-    except (RuntimeError, ValueError) as exc:
-        raise HTTPException(400, str(exc))
-    return JSONResponse({"jobs": jobs})
-
-
-@app.post("/api/jobs/{job_id}/kill")
-def api_kill(job_id: str):
-    try:
-        return JSONResponse(fleet.kill_job(job_id))
-    except KeyError:
-        raise HTTPException(404, job_id)
-
-
-@app.get("/api/jobs/{job_id}/log", response_class=PlainTextResponse)
-def api_log(job_id: str, lines: int = 200):
-    return fleet.tail_log(job_id, lines=lines)
 
 
 @app.post("/api/tensorboard")

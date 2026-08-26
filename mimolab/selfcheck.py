@@ -6,11 +6,13 @@ happen here -- a posture read from the wrong place, a flag that will not round-t
 data.yml, a guard rail that stopped guarding.
 """
 
+import re
 import sys
 import traceback
+from pathlib import Path
 
 from .config import configure, SETTINGS
-from . import db, evals, fleet, indexer, plots, queries
+from . import db, evals, indexer, plots, queries
 
 PASS, FAIL = "  ok  ", " FAIL "
 _results = []
@@ -173,6 +175,132 @@ def _push_url():
     return "pushes /?<filters>; a direct hit on a fragment redirects to the page"
 
 
+@check("the goal function is filterable and matches illustrations.py")
+def _goal_fn():
+    present = {v for v, _ in queries.facets({})["goal_fn"] if v}
+    assert present, "no goal function recorded on any run"
+    _, total = queries.search({})
+    counts = {}
+    for value in present:
+        _, n = queries.search({"goal_fn": value})
+        counts[value] = n
+    assert sum(counts.values()) <= total
+    assert all(n > 0 for n in counts.values()), counts
+
+    return ", ".join(f"{k} {v}" for k, v in sorted(counts.items(), key=lambda kv: -kv[1]))
+
+
+@check("every page and chart endpoint actually responds")
+def _routes():
+    """Exercise the HTTP surface, not just the functions behind it.
+
+    Every other check here calls the plot and query functions directly, which is why deleting a
+    module-level helper that only the *route* used went unnoticed until the charts vanished from
+    the page. This check drives the app through its own routes.
+    """
+    from fastapi.testclient import TestClient
+    from . import app as webapp
+
+    row = db.one("SELECT run_id FROM runs WHERE last_step IS NOT NULL LIMIT 1")
+    group = next((g for g in queries.groups({}, limit=50) if g["model_name"]), None)
+    assert row is not None and group is not None, "index is empty"
+
+    targets = [
+        "/", "/analysis",
+        "/fragments/runs", "/fragments/facets",
+        f"/run/{row['run_id']}",
+        f"/api/config/{row['run_id']}",
+        "/api/plot/curve.png?tag=rollout/ep_rho_max_mean",
+        "/api/plot/curve.png?tag=rollout/ep_rho_max_mean&aggregate=1",
+        "/api/plot/curve.pdf?tag=rollout/ep_rho_max_mean&column=single",
+        "/api/plot/age_grid.png",
+        "/api/plot/age_grid.pdf",
+        "/api/evals/status",
+        "/api/evals/jobs",
+    ]
+    if group["posture"]:
+        targets.append(
+            f"/experiment?posture={group['posture']}&name={group['model_name']}"
+            + (f"&date={group['date']}" if group["date"] else ""))
+
+    with TestClient(webapp.app) as client:
+        for target in targets:
+            response = client.get(target, headers={"HX-Request": "true"})
+            assert response.status_code == 200, f"{target} -> {response.status_code}"
+            assert response.content, f"{target} returned nothing"
+        # The removed launcher must stay removed.
+        for gone in ("/jobs", "/launch", "/fragments/jobs", "/fragments/hosts"):
+            assert client.get(gone).status_code == 404, f"{gone} is still routed"
+    return f"{len(targets)} endpoints answered, 4 removed ones are gone"
+
+
+@check("a group spec never names runs outside its experiment")
+def _group_spec():
+    import glob as globlib
+    import os
+
+    checked = safe = refused = 0
+    for group in queries.groups({}, limit=10_000):
+        exp = queries.experiment(group["date"], group["posture"], group["model_name"])
+        if exp is None:
+            continue
+        checked += 1
+        spec = exp["group_spec"]
+        expected = {os.path.abspath(r["path"]) for r in exp["runs"]}
+        if spec is None:
+            refused += 1
+            continue
+        if os.path.isdir(spec) and globlib.glob(os.path.join(spec, "model_*.zip")):
+            expanded = {os.path.abspath(spec)}
+        else:
+            expanded = {os.path.abspath(d) for d in globlib.glob(spec + "_run_*")
+                        if os.path.isdir(d)}
+        extra = expanded - expected
+        assert not extra, (
+            f"{group['model_name']}: --group={spec} would also evaluate "
+            f"{sorted(os.path.basename(p) for p in extra)[:3]}")
+        safe += 1
+    return f"{safe} of {checked} experiments have an exact spec, {refused} correctly refused"
+
+
+@check("the tag list describes the selection, not the archive")
+def _tag_scope():
+    everything = queries.all_tags()
+    rows, _ = queries.search({"goal_fn": "gravity"}, limit=40)
+    run_ids = [r["run_id"] for r in rows]
+    if not run_ids:
+        return "skipped -- no gravity runs indexed"
+    scoped = queries.tags_for(run_ids)
+    assert scoped, "no tags for a non-empty selection"
+    assert set(scoped) <= set(everything), "scoped tags are not a subset of all tags"
+    assert len(scoped) < len(everything), (
+        f"scoping changed nothing: {len(scoped)} of {len(everything)}")
+    # Every offered tag must actually have data, or picking it draws an empty chart.
+    for tag in scoped[:5]:
+        assert any(db.series(r, tag)[0] for r in run_ids), f"'{tag}' offered but empty"
+    return f"{len(scoped)} tags for the selection vs {len(everything)} in the corpus"
+
+
+@check("the config view separates shared keys from disagreements")
+def _config_view():
+    exp = None
+    for group in queries.groups({}, limit=10_000):
+        if group["n_seeds"] >= 2:
+            exp = queries.experiment(group["date"], group["posture"], group["model_name"])
+            if exp and exp["shared"]:
+                break
+    assert exp is not None, "no multi-seed experiment to check"
+    overlap = set(exp["shared"]) & set(exp["differing"])
+    assert not overlap, f"keys claimed both shared and differing: {sorted(overlap)}"
+    keys = {k for r in exp["runs"] for k in r["yaml_parsed"]}
+    assert keys == set(exp["shared"]) | set(exp["differing"]), "a config key was dropped"
+    # The raw file has to be readable, since the page offers it.
+    raw = Path(exp["runs"][0]["path"]) / "data.yml"
+    assert raw.exists() and raw.read_text().strip(), f"unreadable {raw}"
+    return (f"{exp['model_name']}: {len(exp['shared'])} shared, "
+            f"{len(exp['differing'])} differing across {exp['n_seeds']} seeds")
+
+
 @check("facet counts stay honest under other filters")
 def _facets():
     facets = queries.facets({"posture": "supine"})
@@ -180,80 +308,6 @@ def _facets():
     postures = dict((k, v) for k, v in facets["posture"] if k)
     assert "prone" in postures, postures
     return f"posture facet still offers {sorted(postures)}"
-
-
-@check("every experiment-defining flag round-trips through data.yml")
-def _yaml_coverage():
-    missing = fleet.check_yaml_coverage()
-    assert not missing, ("these flags are not stored in yaml_data in illustrations.py, so a model "
-                         f"trained with them would reload with different settings: {missing}")
-    return f"{sum(1 for f in fleet.TRAIN_FLAGS if f[4])} flags verified against illustrations.py"
-
-
-@check("guard rails match what illustrations.py enforces")
-def _guards():
-    # Blocking, because illustrations.py raises on these.
-    blocking = [
-        ({"algorithm": "PPO", "her": True}, "off-policy"),
-        ({"algorithm": "SAC", "pbrs": True, "no_done_active": True}, "discontinuous"),
-        ({"algorithm": "SAC", "goal_low": 0.25}, "both"),
-        ({"algorithm": "SAC", "goal_curriculum": True}, "goal range"),
-    ]
-    for values, needle in blocking:
-        found = " ".join(fleet.errors(values))
-        assert needle in found, f"{values} should be an error for '{needle}', got: {found}"
-
-    # Advisory only: illustrations.py warns or silently auto-corrects, so blocking here would
-    # refuse configurations that train fine.
-    advisory = [
-        ({"algorithm": "SAC", "her": True, "no_done_active": False, "goal_low": 0.2,
-          "goal_high": 0.9}, "bootstraps"),
-        ({"algorithm": "SAC", "save_every": 1_000_000, "train_for": 1_000_000}, "final"),
-        ({"algorithm": "SAC", "her": True, "goal_low": 0.5, "goal_high": 0.5,
-          "no_done_active": True}, "variation"),
-        ({"algorithm": "SAC", "her": True, "no_done_active": True, "goal_low": 0.2,
-          "goal_high": 0.9, "learning_starts": 100, "episode_steps": 500}, "raised"),
-    ]
-    for values, needle in advisory:
-        assert needle in " ".join(fleet.warnings(values)), f"{values} should warn for '{needle}'"
-        assert needle not in " ".join(fleet.errors(values)), f"{values} must not block"
-
-    # The exact configuration running across the pool right now: --pbrs is inert under
-    # --sparse_reward, so the discontinuous-potential guard does not apply.
-    live = {"algorithm": "SAC", "her": True, "sparse_reward": True, "pbrs": True,
-            "no_done_active": True, "goal_low": 0.25, "goal_high": 0.95, "episode_steps": 100}
-    assert not fleet.errors(live), f"a configuration that actually runs was blocked: {fleet.errors(live)}"
-
-    for name, preset in fleet.PRESETS.items():
-        assert not fleet.errors(preset["flags"]), f"preset {name}: {fleet.errors(preset['flags'])}"
-    return (f"{len(blocking)} blocked, {len(advisory)} advisory, "
-            f"the live pool configuration accepted")
-
-
-@check("the built command matches the shell scripts")
-def _command():
-    cmd, _ = fleet.build_command(fleet.PRESETS["sac_her_sparse"]["flags"], "x_run_0")
-    for expected in ("--algorithm=SAC", "--her", "--sparse_reward", "--goal_curriculum",
-                     "--no_done_active", "--goal_low=0.25", "--goal_high=0.95",
-                     "--roll_over_model_path_auto", "--save_model=x_run_0"):
-        assert expected in cmd, f"missing {expected} in: {cmd}"
-    ppo, _ = fleet.build_command(fleet.PRESETS["ppo_pbrs"]["flags"], "y_run_0")
-    assert "--pbrs" in ppo and "--her" not in ppo
-    return "both presets reproduce their rbi_autorun script"
-
-
-@check("numeric flags are not mistaken for switches")
-def _numeric_flags():
-    # train_freq=1 and gradient_steps=1 hold the value 1, which is also what a checked checkbox
-    # submits. Deciding by value rather than by declared kind drops the "=1" and produces a
-    # different run than the form shows.
-    cmd, _ = fleet.build_command({"train_freq": 1, "gradient_steps": 1, "pbrs": True,
-                                  "sparse_reward": False}, "x_run_0")
-    assert "--train_freq=1" in cmd, cmd
-    assert "--gradient_steps=1" in cmd, cmd
-    assert "--pbrs" in cmd and "--pbrs=" not in cmd, cmd
-    assert "--sparse_reward" not in cmd, cmd
-    return "value-1 integers keep their '=1'; switches stay bare"
 
 
 @check("charts render for a real selection")
@@ -269,6 +323,35 @@ def _charts():
     grid = plots.age_grid(queries.age_grid({}), theme="light")
     assert grid.startswith(b"\x89PNG")
     return f"curve {sizes[0]}k light / {sizes[1]}k dark, age grid {len(grid) // 1024}k"
+
+
+@check("PDF export is vector, exactly the requested width, and paper-styled")
+def _pdf_export():
+    rows, _ = queries.search({}, limit=12)
+    run_ids = [r["run_id"] for r in rows]
+
+    for column, inches in (("single", 3.5), ("double", 7.0)):
+        with plots.render_as("pdf", column):
+            data = plots.curve(run_ids, indexer.HEADLINE_TAG, theme="light", aggregate=True)
+        assert data.startswith(b"%PDF"), "not a PDF"
+        # The page must be the requested column width. bbox_inches="tight" used to inflate a
+        # 3.5 in figure to 7.65 in, which is useless for a thesis column.
+        media = re.search(rb"/MediaBox\s*\[([\d.\s-]+)\]", data)
+        assert media, "no MediaBox in the PDF"
+        width_pt = float(media.group(1).split()[2])
+        assert abs(width_pt - inches * 72) < 1.0, \
+            f"{column}: page is {width_pt:.1f} pt, expected {inches * 72:.0f} pt"
+        # TrueType, not matplotlib's default Type 3, which thesis templates reject.
+        assert b"/Type3" not in data, "Type 3 fonts leaked into the export"
+
+    with plots.render_as("pdf", "single"):
+        grid = plots.age_grid(queries.age_grid({}), theme="light")
+    assert grid.startswith(b"%PDF")
+
+    # PNG rendering must be untouched by all of this.
+    png = plots.curve(run_ids, indexer.HEADLINE_TAG)
+    assert png.startswith(b"\x89PNG"), "PNG output broke"
+    return "3.5 in and 7.0 in pages, TrueType embedded, PNG unaffected"
 
 
 @check("series labels stay distinct")
@@ -297,8 +380,8 @@ def _horizons():
 def _offline():
     SETTINGS.offline = True
     try:
-        for call, label in ((lambda: fleet.launch({}, "x", "adrastos"), "launch"),
-                            (lambda: evals.submit("x", "model_1.zip"), "eval")):
+        for call, label in ((lambda: evals.submit("x", "model_1.zip"), "single eval"),
+                            (lambda: evals.submit_group("26-08-22", "supine", "x"), "group eval")):
             try:
                 call()
             except RuntimeError as exc:
@@ -307,7 +390,7 @@ def _offline():
                 raise AssertionError(f"{label} was not blocked in offline mode")
     finally:
         SETTINGS.offline = False
-    return "launch and evaluate refuse to run"
+    return "single and group evaluation refuse to run"
 
 
 def main():

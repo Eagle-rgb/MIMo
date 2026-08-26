@@ -72,11 +72,6 @@ class RollOverCallback(BaseCallback):
                 if 'episode_rho_max' in info:
                     self.episode_rho_max.append(info['episode_rho_max'])
                     self.logger.record("rollout/ep_rho_max_mean", np.mean(self.episode_rho_max))
-                # Upper end of the goal range actually in use. Constant without
-                # '--goal_curriculum'; with it, this curve is the curriculum itself and shows
-                # whether it advanced or stalled.
-                if not np.isnan(info.get('goal_high_effective', np.nan)):
-                    self.logger.record("rollout/goal_high_effective", info['goal_high_effective'])
 
         # Save intermediate model - if specified.
         # We need the 'len(self.side....) > 0' to prevent in the first step callbacks accessing
@@ -103,8 +98,8 @@ class RollOverEvalCallback(BaseCallback):
     saved whenever rho_max improves, so the peak is kept rather than reconstructed afterwards.
 
     The evaluation environment must be built with the protocol already applied -- ISR off, goal
-    pinned, no curriculum, episodes not terminating on success -- and must be the unwrapped
-    environment, since the horizon is enforced here.
+    pinned, episodes not terminating on success -- and must be the unwrapped environment, since
+    the horizon is enforced here.
 
     Args:
         eval_env: Unwrapped MIMoRollOverEnv configured per the evaluation protocol.
@@ -120,7 +115,7 @@ class RollOverEvalCallback(BaseCallback):
     SIDE_LYING_THRESHOLD = 0.5
 
     def __init__(self, eval_env, eval_every, n_episodes=20, save_dir=None, episode_steps=500,
-                 seed0=1000):
+                 seed0=1000, stop_at_roll_rate=None, stop_patience=2):
         super().__init__()
         self.eval_env = eval_env
         self.eval_every = eval_every
@@ -131,6 +126,21 @@ class RollOverEvalCallback(BaseCallback):
         self.best_rho = -np.inf
         self.best_step = None
         self._next_eval = None
+
+        # 25.08.2026 Early stopping. The question it answers -- "how many steps to solve this" --
+        # is the quantity these experiments report, so a run that keeps going after it is solved
+        # is spending compute to measure nothing. It scores 'eval/roll_rate', the number that goes
+        # in the write-up, measured exactly as 'eval_rollover.py' measures it -- not the training
+        # success rate, which scores the *sampled* goal under *stochastic* actions and is neither
+        # the reported protocol nor a fixed target.
+        self.stop_at_roll_rate = stop_at_roll_rate
+        self.stop_patience = stop_patience
+        # Set once the criterion holds. Read by 'illustrations.train', which has to break its own
+        # checkpoint loop -- returning False from a callback only ends the current 'learn()' call,
+        # and the loop would otherwise start the next segment immediately.
+        self.stop_requested = False
+        self.stop_step = None
+        self._consecutive_hits = 0
 
     def _on_training_start(self):
         # Anchor on the current step count: 'train()' calls learn() once per checkpoint segment
@@ -182,6 +192,25 @@ class RollOverEvalCallback(BaseCallback):
             if self.save_dir is not None:
                 self.model.save(os.path.join(self.save_dir, "model_best"))
         self.logger.record("eval/rho_max_best", self.best_rho)
+
+        if self.stop_at_roll_rate is not None:
+            # Consecutive hits, not a single one: with 20 episodes a rate of 1.0 is 20 successes,
+            # and a policy hovering just under the threshold crosses it by chance often enough
+            # that stopping on one reading would report a solve step that another seed cannot
+            # reproduce. Patience turns "touched it" into "holds it".
+            if float(rolled.mean()) >= self.stop_at_roll_rate:
+                self._consecutive_hits += 1
+            else:
+                self._consecutive_hits = 0
+            self.logger.record("eval/stop_hits", self._consecutive_hits)
+
+            if self._consecutive_hits >= self.stop_patience:
+                self.stop_requested = True
+                self.stop_step = self.model.num_timesteps
+                print(f"RollOverEvalCallback: roll rate {rolled.mean():.2f} >= "
+                      f"{self.stop_at_roll_rate} for {self.stop_patience} consecutive "
+                      f"evaluations -- stopping at step {self.stop_step}.")
+                return False
         return True
 
     def _on_training_end(self):

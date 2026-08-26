@@ -19,7 +19,6 @@
   <nav class="tabs">
     <a href="{{ runs_href(request) }}" {% if nav == 'runs' %}aria-current="page"{% endif %}>Runs</a>
     <a href="/analysis" {% if nav == 'analysis' %}aria-current="page"{% endif %}>Analysis</a>
-    <a href="/jobs" {% if nav == 'jobs' %}aria-current="page"{% endif %}>Jobs</a>
   </nav>
   <span class="spacer"></span>
   {% if stats is defined %}

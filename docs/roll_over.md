@@ -122,8 +122,7 @@ directory name is vestigial.
 `reset_model()` (`:628`) runs, in this order:
 
 1. flip `starting_position` if `--roll_over_starting_position=alternating`;
-2. retire the finished episode's ρ maximum into the curriculum statistics
-   (`_recent_episode_max`);
+2. clear the running ρ maximum of the finished episode;
 3. `self.goal = self.sample_goal()` — **per episode**, see [§4.4](#44-goal-sampling-and-the-rng);
 4. clear `_prev_achieved_goal`;
 5. `put_in_starting_position()` (`:582`):
@@ -260,7 +259,6 @@ with `ctrl_cost = pen_factor * sum(data.ctrl²)` (`:1015`).
 | `--sparse_reward` | {0, −1} only | overrides `--pbrs` silently; the control cost still applies unless `--nopen` |
 | `--pen_factor` (default 0.02), `--nopen` | weight of the quadratic control cost | goal-*independent*, which is why it travels through `info` under HER (§4.2) |
 | `--goal_low` / `--goal_high` | sample the target per episode instead of a fixed 0.95 | both or neither, else `ValueError`; makes `rollout/success_rate` unreadable (§5) |
-| `--goal_curriculum` (+ `_window`, `_quantile`, `_margin`) | move the upper end of that range with recent achievement | requires `--goal_low`/`--goal_high` |
 | `--side_lying` | success at ρ ≥ 0.5 instead of 0.95, implemented by `sample_goal` returning 0.5 | ignored when `--goal_low`/`--goal_high` are set — the sampled range wins (`:722` is checked before `:734`) |
 
 `--pbrs_w` defaults to 100 because the raw potential difference between two consecutive steps is
@@ -304,8 +302,8 @@ removed on 19.08.2026: intrinsic goals are now flat vectors with a pure reward, 
 them is real (§3.4).
 
 The environment validates its own arguments — unknown posture, unknown goal function, an age
-outside `AGES`, a `goal_low`/`goal_high` mismatch, a curriculum without a range, a quantile
-outside [0, 1], a non-positive margin, a non-positive `intrinsic_goal_eps`, fewer than one
+outside `AGES`, a `goal_low`/`goal_high` mismatch, a non-positive `intrinsic_goal_eps`,
+a non-positive `goal_tolerance`, `goal_tolerance` on a vector goal, fewer than one
 reference sample, an accelerometer axis outside `xyz`, an intrinsic goal joint that is not a
 1-DoF hinge or has no usable range (`roll_over.py:116`, `:219`–`:299`, `:358`) — but it knows
 nothing about the combination above.
@@ -474,7 +472,7 @@ suggests.
 > itself needs rethinking (a posture recorded *mid-roll* rather than at rest, or dropping the
 > joints from the goal entirely).
 
-**HER works with this goal**, and needs neither `--goal_low`/`--goal_high` nor the goal curriculum
+**HER works with this goal**, and needs no `--goal_low`/`--goal_high` range
 (§4.5). Those exist for the scalar goals because a constant `desired_goal` gives the policy no
 reason to condition on it. Here every relabelled goal is an achieved posture vector from the
 trajectory, so goal variation is automatic. `--no_done_active` is still required (§4.6).
@@ -488,9 +486,15 @@ python mimoEnv/illustrations.py --env=roll_over --algorithm=SAC \
 ```
 
 
-### 3.5 The `gravity` goal function -- the successor to `intrinsic`
+### 3.5 The `gravity` goal function -- worked, then removed on 26.08.2026
 
-Added 20.08.2026, after the measurements in 3.4 showed `intrinsic` to be unfixable by tuning.
+Added 20.08.2026 after the measurements in 3.4 showed `intrinsic` to be unfixable by tuning;
+**removed from `roll_over.py` on 26.08.2026 once it had made its point.** The results below are
+the record of what it achieved and stay valid; what no longer exists is
+`--goal_achievement_function=gravity`, so the runs listed here can no longer be loaded against the
+current environment. The claim it was built to support is now carried by
+`results/intrinsic/intrinsic_rho_check.py` -- see "Removed, and what carries the claim now" at the
+end of this section.
 
 The idea is to stop reading a *posture* off an *acceleration* sensor. The accelerometer can only
 do that at rest; the gyroscope measures rotation directly and is structurally untouched by linear
@@ -506,8 +510,8 @@ goal:                              [ (R_body^T R_site @ g_site)[0]
 +1 supine, -1 prone per body -- the same scale as `get_dot_local_x_to_global_z(body)`, but
 reconstructed from what MIMo senses. `R_body^T R_site` depends only on the joints between that
 body and the head, so the root free joint cancels (measured residual 0.017 deg) and the goal stays
-non-extrinsic. Configured by `--goal_achievement_function=gravity`; `--intrinsic_goal_eps` is
-reused as the success radius, where `eps = 2*(1 - rho_target)` per body.
+non-extrinsic. It was configured by `--goal_achievement_function=gravity`, with
+`--intrinsic_goal_eps` reused as the success radius, where `eps = 2*(1 - rho_target)` per body.
 
 Why each defect of `intrinsic` disappears: shaking has no purchase because linear acceleration
 never enters the integration; head turning cancels as an *identity* rather than being
@@ -594,13 +598,129 @@ Caveats, because none of these are covered yet:
 
 #### The potential is normalised
 
-`cos` measures progress in [0, 1]; `gravity` runs from +1 to -1 per body, so with two bodies a
-reset sits at distance 2.83. With `--pbrs_w=100` and `reward_success=500` unchanged, the shaping
+`cos` measures progress in [0, 1]; `gravity` ran from +1 to -1 per body, so with two bodies a
+reset sat at distance 2.83. With `--pbrs_w=100` and `reward_success=500` unchanged, the shaping
 term was 2.83x larger than in the baseline while the terminal bonus was not -- i.e. the +500
 attractor was relatively 2.83x weaker, which fits a policy that farms shaping reward to rho 0.48
 and does not pay for the last part of the roll. `_potential_scale` divides by the reset distance
-`2*sqrt(n_bodies)`, so the two goal functions are finally comparable. It deliberately does **not**
-scale `--intrinsic_goal_eps`, which stays in the readable +-1 units of the goal.
+`2*sqrt(n_bodies)`, so the two goal functions are finally comparable. It deliberately did **not**
+scale `--intrinsic_goal_eps`, which stayed in the readable +-1 units of the goal.
+
+Since the removal `_potential_scale` returns 1.0 for every remaining goal function. It is kept as
+a hook rather than inlined, because the failure above is exactly what the next goal function on a
+different scale would walk into.
+
+#### Removed, and what carries the claim now
+
+The claim the goal function existed to make is a claim about *sensing*, not about training: the
+quantity rho is defined on -- `data.body(b).xmat[2,0]`, read off the root free joint -- is
+reconstructible from the vestibular sensors and the joint angles. A training configuration is an
+expensive way to state that. It cost a goal dimension, a per-episode integration state, a reset
+hook and a potential rescale threaded through every branch in `roll_over.py`, and it forked every
+code path that asks "which goal function is this".
+
+`results/intrinsic/intrinsic_rho_check.py` states it directly instead. It reimplements the
+estimator standalone -- nothing in it imports the environment's goal code -- and measures it
+against the truth step by step along real rollouts:
+
+* `g_site` is seeded from the accelerometer once, at reset, and afterwards integrated from the
+  gyroscope alone (Rodrigues), exactly as above;
+* `R_b^T R_site` comes from **forward kinematics on the joint angles alone**: `mj_kinematics` on a
+  scratch `MjData` whose root free joint is pinned to the identity pose. `qpos[7:]` is the
+  proprioceptive qpos block; `qpos[:7]` is overwritten and never read. This is stronger than the
+  original implementation, which took the same rotation out of the live simulation and argued that
+  the root cancels -- here it cannot enter at all.
+
+Measured 26.08.2026, 10 episodes per policy, `--episodes=10`:
+
+| policy | posture | steps | hip mean \|err\| | chest mean \|err\| | rho mean \|err\| | rho corr | rho_max mean \|err\| | same success call |
+|---|---|---|---|---|---|---|---|---|
+| `cos`, PPO+PBRS (`26-08-19_supine_age9_ep250_run_0`) | supine | 2510 | 0.0227 | 0.0154 | 0.0060 | 0.9998 | 0.0013 | 10/10 |
+| `cos`, SAC+HER sparse (`26-08-24_prone_sac_her_ep200_run_0`, `model_5`) | prone | 2010 | 0.0094 | 0.0095 | 0.0046 | 0.9998 | 0.0007 | 10/10 |
+| `gravity`, PPO+PBRS (`26-08-22_supine_gravity2n_ppo_pbrs`, `model_8`) | supine | 2510 | 0.0173 | 0.0095 | 0.0051 | 0.9997 | 0.0009 | 10/10 |
+
+`d_b` spans 2.0 from prone to supine, so a mean error of 0.02 is 1 % of the range. On rho the
+error is 0.005 and the worst single step across all three policies is 0.040. **The two signals
+make the same success call at the 0.95 roll threshold in every episode**, which is the only
+comparison that matters if the reconstruction is to stand in for the goal. Error does not
+accumulate: the last decile of each episode is no worse than the first (0.0041 vs 0.0107 supine,
+0.0015 vs 0.0018 prone). The two `cos` policies never saw the intrinsic signal in training, so
+this is not a policy that learned to make its own estimator look good.
+
+The script also runs the root-invariance check every step, comparing its forward-kinematics frames
+against the same relative rotation taken from the simulation: **max 0.0000 deg** over all three
+runs. Nothing about where MIMo lies in the world enters the estimate.
+
+> **Trap this measurement walked into first, worth knowing for any script here that reads
+> `data.xmat` after a step.** `mj_step` evaluates the forward dynamics at the state it is given
+> and integrates `qpos` afterwards, so on return `data.xmat`, the site frames and `data.sensordata`
+> describe the state *before* the last integration step while `data.qpos` describes the state
+> after it. Reading the truth from `xmat` and the estimate from `qpos` therefore compares two
+> instants one control step apart: it showed up as a 4.01 deg root-invariance residual that looked
+> exactly like a leak of root orientation, and it is almost certainly the source of the 0.017 deg
+> figure quoted above and of most of the 0.0355 mean error re-measured on the trained policy. One
+> `mj_forward` after each step -- a pure recomputation of derived quantities, which `mj_step` does
+> again at the start of the next step -- takes the residual to 4e-6 deg.
+
+### 3.6 `--goal_tolerance` -- the scalar success test as a band
+
+Added 25.08.2026, to test *why* `gravity` trains under SAC+HER without `--goal_low`/`--goal_high`
+while `cos` does not (14/16 seeds against 3/16, `26-08-22 ... sac_her_gravity` vs
+`26-08-23 ... sac_her_ep200_nolohi`).
+
+**The measurement it comes out of.** Roll out a policy, rebuild HER's `future` relabelling by
+hand, and count how many relabelled transitions score 0 (`_success_mask` is pure, so this needs no
+training):
+
+| | achieved-goal span | relabelled transitions scoring 0 |
+|---|---|---|
+| `cos`, random policy | rho 0 .. 0.007 | **41 %** (49 % at gap < 10 steps, 24 % at gap > 70) |
+| `cos`, 200k checkpoint | rho 0 .. 0.18 | 54 % |
+| `gravity`, random policy | 0.978 .. 1.0 per body | **100 %** |
+| `gravity`, 200k checkpoint | 0.95 .. 1.0 per body | **100 %** |
+| `gravity`, 1M checkpoint (rolls) | -1.0 .. 1.0 | 44 % |
+
+So HER's relabelling is *blind* for `gravity` until the policy already moves further than
+`intrinsic_goal_eps` -- and that run reaches rho 0.99 anyway. The relabelled batch is not where
+its advantage comes from, which kills the obvious explanation ("the vector goal gives HER
+automatic goal variation"; it does, but the variation carries no reward contrast).
+
+**The hypothesis that survives.** With 80 % of the batch relabelled onto goals near the current
+posture and scoring 0, and the remaining 20 % at the distant real goal scoring -1, the only
+feature separating the two classes is the distance to the goal -- so the critic has to represent
+it, and the actor climbing that estimate gets a dense, potential-like gradient out of a sparse
+reward. `cos` cannot build the same estimate: `achieved >= desired` is a knife edge sitting inside
+the jitter band of rho, so its near-goal labels are ~half 0 and half -1 and "close" does not look
+better than "far".
+
+`--goal_tolerance FLOAT` turns the scalar success test into `|achieved - desired| <= tolerance`
+and moves the fixed full-roll goal from 0.95 to **1.0**. At the real goal that is a no-op --
+rho is capped at 1.0, so `|rho - 1| <= 0.05` *is* `rho >= 0.95` -- and only the relabelled goals
+see a different rule, which is what makes it a controlled A/B. 0.05 is the matched radius:
+`gravity` uses 0.15 over two bodies, i.e. 0.106 per body in its +-1 units, and rho is that
+quantity halved.
+
+Scalar goal functions only; it refuses `intrinsic`, which is a point goal already and has
+`--intrinsic_goal_eps`. Under `--side_lying` the goal stays 0.5 but then means "stop at side
+lying" rather than "reach at least side lying". `_potential` is untouched -- it was a distance
+already.
+
+The experiment this exists for:
+
+```bash
+# 6 seeds, cos, sparse + HER, NO goal range -- against 26-08-23_supine_sac_her_ep200_nolohi
+python mimoEnv/illustrations.py --algorithm=SAC --her --sparse_reward --no_done_active \
+    --goal_achievement_function=cos --goal_tolerance=0.05 --episode_steps=200 ...
+```
+
+If it trains, the mechanism above is confirmed. The counter-test would have been `gravity` with
+`--intrinsic_goal_eps=0.02`, which should then collapse -- no longer runnable since the goal
+function was removed (3.5). Note the two groups compared above also differ in horizon (100 vs 200
+steps), so a `cos` run at 100 steps is still needed to rule that out.
+
+The reported numbers stay comparable either way: `eval_rollover.py` scores `rho_max >= 0.95`
+measured off the simulation and never calls `is_success` (`:168`). It does pin `desired_goal` to
+1.0 for a run trained with a tolerance, because the policy is conditioned on that input.
 
 ---
 
@@ -651,11 +771,15 @@ after any change here:
 MUJOCO_GL=osmesa python mimoEnv/goalenv_check.py
 ```
 
-Its eleven groups of checks are: SB3 `check_env`; purity (reward varies with each argument, and
-is invariant under stepping the sim); vectorization (batch matches elementwise); PBRS regression
+Its twelve sections are: SB3 `check_env`; purity (reward varies with each argument, and is
+invariant under stepping the sim); vectorization (batch matches elementwise); PBRS regression
 (the step reward still equals the original formula, so the 94 % baseline stays comparable);
 sparse reward; goal sampling; the `info` contract; end-to-end relabelling; PBRS boundedness under
-relabelling; the goal curriculum; and the episode horizon.
+relabelling; `--goal_tolerance` (§3.6); early stopping; and the episode horizon.
+
+**Run them one per process** — `goalenv_check.py --list` prints the names. One env is ~3.8 GB RSS
+and `close()` does not return all of it, so running every section in one process OOM-kills a
+16 GB machine.
 
 > **Known gap:** every one of them exercises the **scalar** goal functions only. The intrinsic
 > posture goal (§3.4) passes the same properties — verified by hand at the time it was written —
@@ -718,26 +842,16 @@ draw when the range is degenerate (`roll_over.py:730`):
 That is also why `eval_rollover.py` pins the goal by passing `goal_low = goal_high = goal` rather
 than by any other mechanism — it hits the no-draw path.
 
-### 4.5 The goal curriculum
+### 4.5 The goal-response cliff
 
-`_effective_goal_high()` (`:736`):
-
-```
-high = clip(quantile(recent episode maxima, q) + margin, goal_low + margin, goal_high)
-```
-
-with `q = --goal_curriculum_quantile` (0.8), `margin = --goal_curriculum_margin` (0.1) and the
-window `--goal_curriculum_window` (50 episodes). Before any episode has finished it returns the
-floor, so the range starts as `[goal_low, goal_low + margin]`.
-
-The reason is a measured failure mode of HER, not a general curriculum argument:
+A goal-conditioned policy trained under HER is only trustworthy inside the goal range it was
+actually trained on, and outside it it is worse than useless:
 
 > **HER only ever relabels onto goals that were actually reached.** A run plateauing at ρ ≈ 0.6
 > has no relabelled transition anywhere above 0.6. With `n_sampled_goal=4`, four of five sampled
 > transitions are relabelled, so the region above the plateau is trained almost entirely on
 > original transitions carrying −1 — the policy does not merely fail there, it learns something
-> actively wrong. Measured on the third E3b seed (2026-08-14, deterministic, 30 episodes per row,
-> `roll_over.py:742`):
+> actively wrong. Measured on the third E3b seed (2026-08-14, deterministic, 30 episodes per row):
 >
 > | `desired_goal` fed to the policy | resulting ρ_max |
 > |---|---|
@@ -751,8 +865,18 @@ The reason is a measured failure mode of HER, not a general curriculum argument:
 > (recorded in the project notes rather than in the code) was monotone up to ≈0.60 and fell off a
 > cliff between 0.65 and 0.70.
 
-Reproduce the table with `eval_rollover.py --policy_goal_sweep=0.25:0.95:0.05` (§6.2), and watch
-the curriculum during training on `rollout/goal_high_effective` (§5).
+Reproduce the table with `eval_rollover.py --policy_goal_sweep=0.25:0.95:0.05` (§6.2).
+
+This is the practical reason evaluation always pins the goal (§6): scoring a run at a goal it was
+never asked for measures the cliff, not the policy.
+
+> **A goal curriculum used to live here.** `--goal_curriculum` moved the upper end of the sampled
+> range along with recent achievement (`quantile` mode), and `--goal_curriculum_mode=alp` added an
+> absolute-learning-progress bandit over the range. Both were **removed on 25.08.2026** — they
+> carried a lot of code, state and logging for a mechanism that `--goal_tolerance` (§3.6) attacks
+> more directly. Runs trained before that date have the flags in their `data.yml` and a
+> `rollout/goal_high_effective` curve in their event file; `parser.set_defaults` ignores unknown
+> keys, so they still reload.
 
 ### 4.6 Known gap: SB3 does not relabel `dones`
 
@@ -788,7 +912,6 @@ from the base class:
 | `ctrl_cost` | `pen_factor · sum(data.ctrl²)` | `compute_reward` under HER |
 | `prev_achieved_goal` | ρ before this step | `compute_reward` under HER (PBRS) |
 | `episode_rho_max` | running episode maximum of ρ | `rollout/ep_rho_max_mean` |
-| `goal_high_effective` | current curriculum ceiling, `nan` without a goal range | `rollout/goal_high_effective` |
 
 `reset()` writes `chest_deg`, `hip_deg`, `side_lying`, `45_deg`, `ctrl_cost=0`.
 
@@ -809,7 +932,6 @@ happens. And note the disagreement by construction: `side_lying`/`rolled_over` d
 | `--n_sampled_goal` (4), `--goal_selection_strategy` (`future`) | relabelling ratio and strategy |
 | `--sparse_reward` | use this with HER, not `--pbrs` |
 | `--goal_low` / `--goal_high` | HER needs goal variation, otherwise the policy never learns to condition on the goal and the relabelled transitions describe goals nobody ever asks for |
-| `--goal_curriculum` + `_window`/`_quantile`/`_margin` | §4.5 |
 | `--no_done_active` | §4.6 |
 | `--buffer_size` (300 000), `--train_freq` (1), `--gradient_steps` (1), `--learning_starts` (100) | off-policy knobs; `--learning_starts` is auto-raised to 1000 under `--her` because `HerReplayBuffer.sample` needs at least one finished episode and the horizon is 500 steps (`illustrations.py:742`) |
 
@@ -837,7 +959,6 @@ writes `model_<n>.zip` after each chunk, `n` counting from 1. It composes up to 
   | `rollout/side_lying_success_rate` | fraction of episodes whose **final step** had ρ ≥ 0.5 |
   | `rollout/raw_ctrl_cost` | per-episode **sum** of `sum(action²)`, unweighted by `pen_factor` |
   | `rollout/ep_rho_max_mean` | mean over episodes of the episode **maximum** ρ — the quantity comparable to `eval_rollover.py` |
-  | `rollout/goal_high_effective` | current curriculum ceiling; only logged when a goal range is set |
 
   `rollout/raw_ctrl_cost` is a per-episode sum, not a mean: the mean rewarded long episodes, so
   a policy that rolled and then ran out the clock logged a *lower* control cost than one that
@@ -853,8 +974,7 @@ writes `model_<n>.zip` after each chunk, `n` counting from 1. It composes up to 
 > `info["is_success"]` at episode end (`stable_baselines3/common/base_class.py:454`), and
 > `is_success` scores against the *sampled* goal, which is as low as 0.25 under `--goal_low`. A
 > run logging 0.26 there can be at 0 % real rolls. Read `rollout/ep_rho_max_mean` instead, and
-> `rollout/goal_high_effective` alongside it — with a curriculum, that curve *is* the curriculum
-> and shows whether it advanced or stalled.
+> compare runs only through `eval_rollover.py`.
 
 TensorBoard output goes to `<save_dir>/<ALGO>_<n>/`, e.g. `PPO_0/` or `SAC_0/`.
 
@@ -896,6 +1016,37 @@ the one source of unseeded randomness in reset, is off (§2.6).
 
 Output: full-roll rate, side-lying rate, ρ_max mean/min, and mean steps to the first success.
 Recorded runtime ≈40 s per 50 episodes (not re-timed for this document).
+
+#### Whole batches: `--group`
+
+A sweep is launched as `<save_path>_run_0 … _run_n`, and a single run of it says nothing — the
+question is always how many of the seeds learned to roll. `--group` evaluates the batch:
+
+```bash
+MUJOCO_GL=osmesa python mimoEnv/eval_rollover.py \
+    --group=models/roll_over/26-08-23/supine/26-08-23_supine_sac_her_ep500 \
+    --episodes=40 --csv=26-08-23_supine_sac_her_ep500_test_success_rate.csv
+```
+
+The argument is the run directories' shared prefix (the save path without the `_run_<i>` tail), a
+directory holding them, or a glob. Every rule of the single-model protocol still applies, per run
+and from that run's own `data.yml`; two more rules are specific to the batch:
+
+| Rule | Why |
+|---|---|
+| **The last checkpoint** (highest-numbered `model_<n>.zip`), not `model_best.zip` | `best` is the `EvalCallback`'s pick under its own protocol, so a table of best checkpoints measures the checkpoint selection as much as the runs. `--checkpoint=best` or `--checkpoint=model_3.zip` when that is what you want |
+| **A run is successful when it rolls in more than 75 % of its episodes** (`--success_threshold`) | the convention used throughout the thesis; 40 episodes is its default sample size |
+| One environment for the whole batch | a MIMo env is ~3.6 GB RSS, so group mode holds exactly one alive and rebuilds it only if a run's `data.yml` actually changes the environment |
+| Identical episode seeds for every run | the comparison between seeds is paired |
+
+Alongside the per-run table it prints the >90 % / <10 % / in-between banding that
+`results/success_after_training_plot.py` draws, and `--csv` writes that script's input file
+(`Run,Success_Rate`) directly — so the stacked-bar figure no longer needs
+`results/success_after_training.py`, which loads `model_1.zip` with a hardcoded `PPO` and a
+hardcoded PBRS environment rather than each run's own configuration.
+
+`--policy_goal_sweep` is refused in group mode: it varies the fed goal for one model, which is a
+different question from how many seeds succeeded.
 
 ### 6.2 `--policy_goal` and `--policy_goal_sweep`
 
@@ -1025,7 +1176,7 @@ constant 0.95; fatal for goal sampling and HER. It now lives in `reset_model` (`
 ### `--no_done_active` is recommended, not enforced
 
 Despite being required for HER to be sound (§4.6), `illustrations.py:736` only prints a warning.
-`rbi_autorun.sh` in its current state launches `--her --sparse_reward --goal_curriculum` **without**
+Some of the `rbi_autorun*.sh` sweeps launched `--her --sparse_reward` **without**
 `--no_done_active`, while `run_her_sparse.sh` includes it. Check which script produced a run before
 comparing them.
 
@@ -1167,10 +1318,7 @@ purpose. "yaml" marks the flags that round-trip through `data.yml` (§7).
 | `--nopen` | flag | ✓ | control cost off |
 | `--side_lying` | flag, `False` | ✓ | success at ρ ≥ 0.5; ignored under a goal range |
 | `--goal_low`, `--goal_high` | float, `None` | ✓ | both or neither |
-| `--goal_curriculum` | flag | ✓ | needs a goal range |
-| `--goal_curriculum_window` | int, `50` | ✓ | episodes in the statistic |
-| `--goal_curriculum_quantile` | float, `0.8` | ✓ | follows the good episodes, not the median |
-| `--goal_curriculum_margin` | float, `0.1` | ✓ | also the initial range width |
+| `--goal_tolerance` | float, `None` | ✓ | band instead of threshold, §3.6 |
 | `--no_done_active` | flag | ✓ | never terminate early |
 
 ### The `intrinsic` goal function
@@ -1240,12 +1388,16 @@ Roughly:
 | `plot_her_goal_response.py` | goal-response curves from `eval_rollover.py --policy_goal_sweep` |
 | `collect_run_statistics.py`, `success_after_training.py` | re-run trained policies for success rate and roll duration |
 | `roll_time_stats*.py`, `laterality_index.py`, `actuation_plot*.py` | derived measures |
+| `results/intrinsic/intrinsic_rho_check.py` | the standalone proof that ρ is reconstructible from vestibular + proprioception (§3.5). Takes `--model` (or `--random`), `--episodes`, `--plot`, `--json`; the estimator is implemented in that file and imports nothing from the environment's goal code |
 | `results/cee/` | cross-embodiment evaluation (train at one age, evaluate at another) |
 | `results/kobayashi/` | limb velocities against Kobayashi et al. data |
 | `results/diss/`, `results/ctrl_cost/`, `results/proprio_ablations/` | the corresponding ablations |
 
 Any script here that collects a random rollout must call `env.action_space.seed(s)` in addition to
-`env.reset(seed=s)` — gymnasium keeps the two generators separate. And pin
+`env.reset(seed=s)` — gymnasium keeps the two generators separate. Any script that reads
+`data.xmat`, a site frame or `data.sensordata` after `mj_step`/`env.step` and compares it against
+`data.qpos` must call `mj_forward` first: `mj_step` integrates `qpos` *after* evaluating the
+dynamics, so the two describe instants one control step apart (§3.5). And pin
 `torch.set_num_threads(n)` if the numbers need to be reproducible across machines: a fixed thread
 count is bit-identical, different counts diverge because the matmul reduction order changes and
 training epochs compound it.

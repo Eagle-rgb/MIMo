@@ -20,6 +20,13 @@
       {{ facet('posture', 'Posture', params, facets) }}
       {{ facet('algorithm', 'Algorithm', params, facets) }}
       {{ facet('reward_shape', 'Reward', params, facets) }}
+      {{ facet('goal_fn', 'Goal function', params, facets, {
+           'cos': 'cos \u2014 baseline',
+           'gravity': 'gravity \u2014 proprio + vesti',
+           'angle': 'angle',
+           'intrinsic': 'intrinsic \u2014 broken',
+           'intrinsic_vesti': 'intrinsic_vesti \u2014 retired',
+         }) }}
       {{ tri('her', 'HER', params) }}
 
       <div class="facet">

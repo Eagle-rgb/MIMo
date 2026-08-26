@@ -322,6 +322,16 @@ def train(model, train_for, save_every, save_dir, isr, argparse_args, save_inter
 
         model.save(os.path.join(save_dir, "model_" + str(counter)))
 
+        # 25.08.2026 Early stop. A callback returning False only ends the current 'learn()' call,
+        # so without this the loop would immediately start the next checkpoint segment and train
+        # on regardless. The checkpoint above has already been written, so the stopped run ends
+        # with a normally-numbered final model and 'eval_rollover.py --group' picks it up as the
+        # last checkpoint like any other run.
+        if eval_callback is not None and getattr(eval_callback, 'stop_requested', False):
+            print(f"train(): stopping early at {eval_callback.stop_step} steps of "
+                  f"{train_for_total}, final checkpoint model_{counter}.zip.")
+            break
+
 def load_observation_normalization_dict(obs):
     """ Loads the dictionary containing values for obseration normalization.
     Returns 'None' on error. Requires 'obs' as parameter to check for matching
@@ -487,7 +497,7 @@ def main():
                         help='Choose the starting position of MIMo in the roll_over environment. Put '
                              'either \'supine\', \'prone\' or \'alternating\'. Default: \'prone\'.')
     parser.add_argument('--goal_achievement_function', required=False, # Previously: --roll_over_goal_function
-                        choices=['angle', 'cos', 'intrinsic', 'gravity'],
+                        choices=['angle', 'cos', 'intrinsic'],
                         default='cos',
                         help='Choose the function of achieved goal for the roll_over environment. Put '
                              'either \'angle\', \'cos\' or \'intrinsic\'. \'angle\' and \'cos\' are '
@@ -495,9 +505,10 @@ def main():
                              'sense. \'intrinsic\' is the non-scalar, non-extrinsic posture goal: a '
                              'vector of joint angles plus vestibular acc-z, all of it already in '
                              'the observation, but it does NOT work -- see docs/roll_over.md 3.4. '
-                             '\'gravity\' is its successor: the gravity direction in the hip frame, '
-                             'integrated from the gyroscope, +1 supine to -1 prone. '
-                             'Default: \'cos\'.')
+                             '26.08.2026 \'gravity\', which did work, was removed: that the '
+                             'extrinsic goal is computable from what MIMo senses is shown by '
+                             'results/intrinsic/intrinsic_rho_check.py without a training '
+                             'configuration of its own. Default: \'cos\'.')
     # --- 'intrinsic' goal function ---------------------------------------------------------
     # 19.08.2026 The old '--intrinsic_goal' sub-mode selector ('all', 'vesti', 'vesti_acc',
     # 'sparse_proprio') was removed: those goals were dicts of raw sensor readings, which cannot
@@ -524,6 +535,16 @@ def main():
                              "the task definition. Default: 0.15.")
     parser.add_argument('--intrinsic_reference_samples', default=20, type=int, required=False,
                         help="Resets averaged into the recorded reference posture. Default: 20.")
+    # 25.08.2026 See MIMoRollOverEnv.__init__ for the measurement this comes out of.
+    parser.add_argument('--goal_tolerance', default=None, type=float, required=False,
+                        help="Turn the scalar success test into a band: success is "
+                             "|achieved - desired| <= goal_tolerance instead of "
+                             "achieved >= desired, and the fixed full-roll goal becomes 1.0 "
+                             "instead of 0.95. The real task is unchanged (rho is capped at 1.0, "
+                             "so |rho-1|<=0.05 IS rho>=0.95); what changes is the reward of the "
+                             "goals HER relabels onto, which is the point. 0.05 matches the "
+                             "0.15 radius the removed 'gravity' goal used over two bodies. Scalar "
+                             "goal functions only. Default: unset (threshold).")
     parser.add_argument('--roll_over_model_path_auto', action='store_true',
                         help="""If set, the path of the model for the roll_over environment
 is automatically set to the following:
@@ -583,22 +604,6 @@ An example is '251206_prone_linear_1e6_test'
                              "condition on the goal. Evaluate with a fixed 0.95 regardless.")
     parser.add_argument('--goal_high', default=None, type=float,
                         help="Upper end of the sampled goal range. Must be given with --goal_low.")
-    parser.add_argument('--goal_curriculum', action='store_true',
-                        help="Raise the upper end of the sampled goal range along with what has "
-                             "recently been achieved, rather than sampling all of [--goal_low, "
-                             "--goal_high] from the start. HER only ever relabels onto goals that "
-                             "were actually reached, so goals above the current plateau are "
-                             "trained almost only on the original -1 transitions; a run stuck at "
-                             "rho ~ 0.6 then scores rho_max 0.09 when queried at 0.95, i.e. worse "
-                             "than ignoring the goal input altogether. Requires --goal_low/high.")
-    parser.add_argument('--goal_curriculum_window', default=50, type=int,
-                        help="How many finished episodes the curriculum averages over.")
-    parser.add_argument('--goal_curriculum_quantile', default=0.8, type=float,
-                        help="Quantile of the recent episode maxima the curriculum tracks. 0.8 "
-                             "follows the good episodes rather than the median one.")
-    parser.add_argument('--goal_curriculum_margin', default=0.1, type=float,
-                        help="How far the sampled goals may reach beyond that quantile. Also the "
-                             "width of the initial range, before any episode has finished.")
     parser.add_argument('--lr_schedule', default='constant',
                         choices=['constant', 'linear', 'linear_tail'],
                         help="Decay the learning rate so the endpoint is a frozen policy rather "
@@ -634,6 +639,19 @@ An example is '251206_prone_linear_1e6_test'
                              "(~3.6 GB RSS) and about 4 %% wall clock at the defaults.")
     parser.add_argument('--eval_episodes', default=20, type=int,
                         help="Episodes per evaluation when --eval_every is set.")
+    parser.add_argument('--stop_at_roll_rate', default=None, type=float,
+                        help="Stop training once --eval_every's roll rate reaches this value on "
+                             "--stop_patience consecutive evaluations. 1.0 means every "
+                             "evaluation episode rolled. The point is that 'steps to solve' is "
+                             "what a curriculum experiment reports, so training past the solve "
+                             "measures nothing. Needs --eval_every > 0. The checkpoint written "
+                             "at the stop is a normal model_<n>.zip, so --group evaluation is "
+                             "unaffected.")
+    parser.add_argument('--stop_patience', default=2, type=int,
+                        help="Consecutive evaluations that must hit --stop_at_roll_rate. One "
+                             "reading is not enough: a policy hovering below the threshold "
+                             "crosses it by chance, and the reported solve step would then not "
+                             "reproduce across seeds.")
     parser.add_argument('--episode_steps', default=None, type=int,
                         help=f"Episode horizon in steps, overriding the "
                              f"{ROLL_OVER_EPISODE_STEPS}-step TimeLimit that "
@@ -827,11 +845,12 @@ An example is '251206_prone_linear_1e6_test'
     if (goal_low is None) != (goal_high is None):
         raise ValueError("Provide both --goal_low and --goal_high, or neither.")
 
-    if args.goal_curriculum and goal_low is None:
-        raise ValueError(
-            "--goal_curriculum needs a goal range: pass --goal_low and --goal_high. The "
-            "curriculum moves the upper end of that range, so with a fixed goal it has nothing "
-            "to do.")
+    if args.stop_at_roll_rate is not None and args.eval_every <= 0:
+        raise ValueError("--stop_at_roll_rate scores the periodic evaluation, so it needs "
+                         "--eval_every > 0. Without it nothing ever measures the roll rate and "
+                         "the run would train to --train_for regardless.")
+    if args.stop_patience < 1:
+        raise ValueError(f"--stop_patience must be at least 1, got {args.stop_patience}.")
 
     if pbrs and not sparse_reward and not done_active:
         # The PBRS potential jumps to +reward_success at the goal. That is only safe while the
@@ -927,16 +946,13 @@ An example is '251206_prone_linear_1e6_test'
             intrinsic_acc_w=args.intrinsic_acc_w,
             intrinsic_goal_eps=args.intrinsic_goal_eps,
             intrinsic_reference_samples=args.intrinsic_reference_samples,
+            goal_tolerance=args.goal_tolerance,
             freeze_leg=freeze_leg,
             freeze_arm=freeze_arm,
             success_at_side_lying=side_lying,
             sparse_reward=sparse_reward,
             goal_low=goal_low,
             goal_high=goal_high,
-            goal_curriculum=args.goal_curriculum,
-            goal_curriculum_window=args.goal_curriculum_window,
-            goal_curriculum_quantile=args.goal_curriculum_quantile,
-            goal_curriculum_margin=args.goal_curriculum_margin,
             done_active=done_active,
             age_physio=physio_age,
             age_morph=morph_age)
@@ -1047,6 +1063,9 @@ An example is '251206_prone_linear_1e6_test'
         'intrinsic_acc_w': args.intrinsic_acc_w,
         'intrinsic_goal_eps': args.intrinsic_goal_eps,
         'intrinsic_reference_samples': args.intrinsic_reference_samples,
+        # Experiment-defining: it changes the success test and the value of the fixed goal, so a
+        # model reloaded without it would be evaluated against a different task.
+        'goal_tolerance': args.goal_tolerance,
         'freeze_leg': freeze_leg,
         'freeze_arm': freeze_arm,
         'side_lying': side_lying,
@@ -1069,10 +1088,6 @@ An example is '251206_prone_linear_1e6_test'
         'sparse_reward': sparse_reward,
         'goal_low': goal_low,
         'goal_high': goal_high,
-        'goal_curriculum': args.goal_curriculum,
-        'goal_curriculum_window': args.goal_curriculum_window,
-        'goal_curriculum_quantile': args.goal_curriculum_quantile,
-        'goal_curriculum_margin': args.goal_curriculum_margin,
         'no_done_active': args.no_done_active,
         # The horizon in force, not args.episode_steps: eval_rollover.py reads this to evaluate
         # a run at the length it was trained on, and 'None' would send it back to the default.
@@ -1083,6 +1098,8 @@ An example is '251206_prone_linear_1e6_test'
         'target_entropy': args.target_entropy,
         'eval_every': args.eval_every,
         'eval_episodes': args.eval_episodes,
+        'stop_at_roll_rate': args.stop_at_roll_rate,
+        'stop_patience': args.stop_patience,
         'achieved_goal_in_observation': achieved_goal_in_observation,
     }
     with open(f'{save_dir}/data.yml', 'w') as outfile:
@@ -1112,18 +1129,24 @@ An example is '251206_prone_linear_1e6_test'
             intrinsic_acc_w=args.intrinsic_acc_w,
             intrinsic_goal_eps=args.intrinsic_goal_eps,
             intrinsic_reference_samples=args.intrinsic_reference_samples,
+            goal_tolerance=args.goal_tolerance,
             freeze_leg=freeze_leg, freeze_arm=freeze_arm,
             success_at_side_lying=False,
             sparse_reward=sparse_reward,
-            goal_low=0.95, goal_high=0.95,
-            goal_curriculum=False,
+            # Pin the goal to the full roll. Under --goal_tolerance that value is 1.0, not 0.95:
+            # the policy is conditioned on 'desired_goal', so feeding it the number it was never
+            # trained on would evaluate an out-of-distribution query.
+            goal_low=(1.0 if args.goal_tolerance is not None else 0.95),
+            goal_high=(1.0 if args.goal_tolerance is not None else 0.95),
             done_active=False,
             age_physio=physio_age, age_morph=morph_age).unwrapped
         eval_callback = RollOverEvalCallback(eval_env=eval_env,
                                              eval_every=args.eval_every,
                                              n_episodes=args.eval_episodes,
                                              save_dir=save_dir,
-                                             episode_steps=episode_steps)
+                                             episode_steps=episode_steps,
+                                             stop_at_roll_rate=args.stop_at_roll_rate,
+                                             stop_patience=args.stop_patience)
 
     if train_for > 0:
         if model is None:

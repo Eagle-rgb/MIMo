@@ -37,9 +37,22 @@
     </div>
   </div>
 
-  <div class="chart" style="margin-top:.9rem">
-    <img id="mainchart" alt="Training curve"
-      data-chart-base="/api/plot/curve.png?{% for r in selected %}run={{ r|urlencode }}&amp;{% endfor %}">
+  <div class="panel" style="margin-top:.9rem">
+    <div class="chartbar">
+      <span class="label">Figure</span>
+      <span class="spacer"></span>
+      <label class="inline" for="column">PDF width</label>
+      <select id="column">
+        <option value="double">2 columns &middot; 7.0 in</option>
+        <option value="single">1 column &middot; 3.5 in</option>
+      </select>
+      <a class="btn sm" id="exportmain" download href="#"
+         title="Vector PDF in the paper style (serif, 300 dpi, TrueType fonts) at the chosen column width">Export PDF</a>
+    </div>
+    <div class="chart">
+      <img id="mainchart" alt="Training curve"
+        data-chart-base="/api/plot/curve.png?{% for r in selected %}run={{ r|urlencode }}&amp;{% endfor %}">
+    </div>
   </div>
 
   <div class="chartgrid" style="margin-top:.9rem">
@@ -47,6 +60,7 @@
       <h2>Embodiment grid</h2>
       <p class="sub">Best &rho; by morphological and physiological age, over the selection.</p>
       <div class="chart"><img data-chart="/api/plot/age_grid.png?{{ request.url.query }}" alt="Age grid"></div>
+      <div class="chartbar end"><a class="btn sm" data-export download href="#">Export PDF</a></div>
     </div>
     <div class="panel">
       <h2>Selection</h2>

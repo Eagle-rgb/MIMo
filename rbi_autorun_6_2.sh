@@ -29,20 +29,19 @@ for i in $(seq 0 5); do
 		"--algorithm=SAC" \
 		"--her" \
 		"--sparse_reward" \
-		"--goal_low=0.25" \
-		"--goal_high=0.95" \
 		"--eval_every=25000" \
 		"--eval_episodes=20" \
-		"--no_done_active" \
+		"--train_freq=8" \
 		"--pen_factor=0.02" \
-		"--target_entropy=-92" \
-		"--episode_steps=100" \
+		"--no_done_active" \
+		"--goal_low=0.0" \
+		"--goal_high=0.95" \
+		"--episode_steps=200" \
 		"--roll_over_model_path_auto" \
 		"--goal_achievement_function=cos" \
-		"--save_model=${MODEL_NAME}_run_${i}" \
+		"--save_model=${MODEL_NAME}_run_$((i))" \
 		"--morph_age=9" \
 		"--physio_age=9" \
-		"--pbrs_w=100" \
 		"--lr=0.0003" &
 done
 
