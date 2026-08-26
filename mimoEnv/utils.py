@@ -981,6 +981,14 @@ def load_model_yaml(load_model):
                           f"the intrinsic goal sub-modes were removed on 19.08.2026.")
                     del yaml_data[removed]
 
+            # These configured the shape of the 'intrinsic' goal vector only, and nothing reads
+            # them any more.
+            for removed in ('intrinsic_goal_joints', 'intrinsic_acc_axes', 'intrinsic_acc_w'):
+                if removed in yaml_data:
+                    print(f"Ignoring retired key '{removed}={yaml_data[removed]}' from data.yml: "
+                          f"the 'intrinsic' goal function was removed on 26.08.2026.")
+                    del yaml_data[removed]
+
             # Downwards-compatibility with flags 'proprio_only_qpos' and 'no_proprio'
             if 'proprio_only_qpos' in yaml_data:
                 if yaml_data['proprio_only_qpos']:

@@ -38,6 +38,50 @@
 
   /* The export link is the chart's own URL with .png swapped for .pdf, so the two can never
      describe different figures. Column width is a PDF-only concern; the server ignores it on PNG. */
+  /* An <a href="#"> that looks like a button is a trap: clicking it scrolls to the top and
+     exports nothing, which is indistinguishable from a silent failure. Export links carry their
+     state instead -- disabled until there is something to export, and they say so when clicked. */
+  function setExportLink(el, href) {
+    if (!el) return;
+    if (href) {
+      el.setAttribute('href', href);
+      el.removeAttribute('aria-disabled');
+      el.removeAttribute('title');
+    } else {
+      el.setAttribute('href', '#');
+      el.setAttribute('aria-disabled', 'true');
+      el.setAttribute('title', 'Nothing to export yet');
+    }
+  }
+
+  function flashExported(el) {
+    if (!el || el.dataset.flashing) return;
+    var original = el.textContent;
+    el.dataset.flashing = '1';
+    el.textContent = 'Saving\u2026';
+    setTimeout(function () {
+      el.textContent = original;
+      delete el.dataset.flashing;
+    }, 1400);
+  }
+
+  document.addEventListener('click', function (e) {
+    var link = e.target.closest('a[download]');
+    if (!link) return;
+    if (link.getAttribute('aria-disabled') === 'true' || link.getAttribute('href') === '#') {
+      /* Without this the browser follows "#" and jumps to the top of the page. */
+      e.preventDefault();
+      var hint = document.getElementById('barhint');
+      if (link.id === 'exportbars' && hint) {
+        hint.hidden = false;
+        hint.textContent = 'Tick at least one evaluation first, then export.';
+      }
+      return;
+    }
+    /* The response is an attachment, so the page does not change -- say that something happened. */
+    flashExported(link);
+  });
+
   function exportHref(base) {
     var column = (document.getElementById('column') || {}).value || 'double';
     var url = base.replace('/curve.png', '/curve.pdf')
@@ -48,7 +92,7 @@
 
   function syncExport(scope, base) {
     var link = scope && scope.querySelector('[data-export]');
-    if (link) link.setAttribute('href', exportHref(base));
+    setExportLink(link, exportHref(base));
   }
 
   function refreshCharts() {
@@ -63,6 +107,32 @@
     if (main) drawMain();
   }
 
+  /* The two palettes the renderer uses, mirrored so the swatch beside a label input matches the
+     line it will name. Thesis mode uses results/icdlplot.py's colours, darkened for the line. */
+  var SCREEN_COLORS = ['#2a78d6', '#eb6834', '#1baf7a', '#eda100',
+                       '#e87ba4', '#008300', '#4a3aa7', '#e34948'];
+  var THESIS_COLORS = ['#5e9e5e', '#9e5e5e', '#5e5e9e', '#626262', '#099491', '#88910b'];
+
+  function paintSwatches() {
+    var thesis = (document.getElementById('style') || {}).value === 'thesis';
+    var palette = thesis ? THESIS_COLORS : SCREEN_COLORS;
+    document.querySelectorAll('[data-swatch]').forEach(function (el) {
+      var i = parseInt(el.getAttribute('data-swatch'), 10);
+      el.style.background = palette[i % palette.length];
+    });
+  }
+
+  function labelParams() {
+    var parts = [];
+    document.querySelectorAll('.labelin').forEach(function (input) {
+      var text = (input.value || '').trim();
+      if (text) {
+        parts.push('glabel=' + encodeURIComponent(input.getAttribute('data-series') + '=' + text));
+      }
+    });
+    return parts.join('&');
+  }
+
   function drawMain() {
     var img = document.getElementById('mainchart');
     if (!img) return;
@@ -70,20 +140,85 @@
     var tag = (document.getElementById('tagsel') || {}).value || 'rollout/ep_rho_max_mean';
     var agg = (document.getElementById('agg') || {}).checked ? 1 : 0;
     var smooth = (document.getElementById('smooth') || {}).value || 1;
+    var style = (document.getElementById('style') || {}).value || 'screen';
+    var band = (document.getElementById('bandsel') || {}).value || 'std';
     var query = base + 'tag=' + encodeURIComponent(tag) + '&aggregate=' + agg +
-                '&smooth=' + smooth;
+                '&smooth=' + smooth + '&style=' + style + '&band=' + band;
+    ['ylabelin=ylabel', 'xlabelin=xlabel', 'legendloc=legend_loc'].forEach(function (pair) {
+      var bits = pair.split('=');
+      var el = document.getElementById(bits[0]);
+      var value = el && (el.value || '').trim();
+      if (value && !(bits[0] === 'legendloc' && value === 'best')) {
+        query += '&' + bits[1] + '=' + encodeURIComponent(value);
+      }
+    });
+    var labels = labelParams();
+    if (labels) query += '&' + labels;
+    paintSwatches();
     img.src = chartUrl(query);
-    var link = document.getElementById('exportmain');
-    if (link) link.setAttribute('href', exportHref(query));
+    setExportLink(document.getElementById('exportmain'), exportHref(query));
   }
 
-  ['tagsel', 'agg', 'smooth', 'column'].forEach(function (id) {
+  ['tagsel', 'agg', 'smooth', 'column', 'style', 'bandsel', 'legendloc'].forEach(function (id) {
     document.addEventListener('change', function (e) {
       if (e.target && e.target.id === id) {
         drawMain();
         if (e.target.id === 'column') refreshCharts();
       }
     });
+  });
+
+  /* ---------- evaluation bar chart -------------------------------------------------------- */
+
+  function drawBars() {
+    var img = document.getElementById('barchart');
+    var hint = document.getElementById('barhint');
+    if (!img) return;
+    var picked = Array.prototype.filter.call(
+      document.querySelectorAll('.barpick'), function (b) { return b.checked; });
+    if (!picked.length) {
+      img.hidden = true;
+      setExportLink(document.getElementById('exportbars'), null);
+      if (hint) { hint.hidden = false; hint.textContent = 'Tick at least one evaluation to draw the chart.'; }
+      return;
+    }
+    var query = picked.map(function (box) {
+      var input = document.querySelector('.barlabel[data-job="' + box.value + '"]');
+      var text = input && (input.value || '').trim();
+      return 'src=' + encodeURIComponent((text || '') + '=' + box.value);
+    }).join('&');
+    query += '&metric=' + ((document.getElementById('barmetric') || {}).value || 'successful');
+    query += '&column=' + ((document.getElementById('barcolumn') || {}).value || 'single');
+    if ((document.getElementById('barannotate') || {}).checked) query += '&annotate=1';
+    ['barx=xlabel', 'bary=ylabel'].forEach(function (pair) {
+      var bits = pair.split('=');
+      var el = document.getElementById(bits[0]);
+      var value = el && (el.value || '').trim();
+      if (value) query += '&' + bits[1] + '=' + encodeURIComponent(value);
+    });
+    img.hidden = false;
+    if (hint) hint.hidden = true;
+    img.src = '/api/plot/eval_bars.png?' + query;
+    setExportLink(document.getElementById('exportbars'), '/api/plot/eval_bars.pdf?' + query);
+  }
+
+  var barTimer = null;
+  document.addEventListener('change', function (e) {
+    if (e.target.matches && e.target.matches('.barpick, #barmetric, #barcolumn, #barannotate')) {
+      drawBars();
+    }
+  });
+  document.addEventListener('input', function (e) {
+    if (!e.target.matches || !e.target.matches('.barlabel, #barx, #bary')) return;
+    clearTimeout(barTimer);
+    barTimer = setTimeout(drawBars, 350);
+  });
+
+  var labelTimer = null;
+  document.addEventListener('input', function (e) {
+    if (!e.target.matches || !e.target.matches('.labelin, #ylabelin, #xlabelin')) return;
+    clearTimeout(labelTimer);
+    labelTimer = setTimeout(drawMain, 350);
   });
 
   /* ---------- selection ------------------------------------------------------------------ */
@@ -372,7 +507,9 @@
 
   function boot() {
     paintSelection();
+    paintSwatches();
     refreshCharts();
+    drawBars();          // settles the bar panel's export link into its disabled state
     loadRawConfig();
   }
 

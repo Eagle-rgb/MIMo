@@ -112,6 +112,23 @@ selected runs actually logged: 30 instead of 63 for a typical experiment.
 they disagree. Seeds should differ only by the random seed; anything else that varies is either a
 deliberate sub-sweep or a mistake, and either way it is the first thing worth seeing.
 
+**Thesis figures are rendered at their final size, with the legend you choose.** The Analysis page
+has a `thesis` style that follows `results/training_plot_no_sig.py` and the reference figure in
+`results/proprio_ablations/`: `results/icdlplot.py`'s palette, a mean ± std band clipped to [0, 1],
+a dashed grid, a framed legend inside the axes, and serif axis names taken from a lookup rather
+than the raw tag. Each series gets a free-text legend label, keyed on `date|posture|model_name`, so
+renaming one cannot move it onto another line; `series_of()` lists them in the order the renderer
+groups them, so the swatch beside an input is the colour of the line it names. The page is emitted
+at 3.4 x 3.2 in (one column) or 6.9 x 3.6 in (two), which is why `\includegraphics` needs no
+`width=` -- rescaling in LaTeX is what makes the type in one figure disagree with the next.
+
+**The evaluation bar chart is drawn by `results/plot_eval_success.py`, not reimplemented.** A
+`--group` run keeps its JSON in `.mimolab/evals/`, and the bar panel shells out to that script with
+the stored payloads. It is the script the thesis figures already come from, so a second
+implementation would only give the document two subtly different charts. Column width maps to
+`--panel_width`, divided by the number of postures the payload contains, because the script lays
+one panel out per posture and multiplies the width by their count.
+
 **Charts export as vector PDF, re-laid-out rather than re-encoded.** Every chart has an Export PDF
 control; the link is the chart's own URL with `.png` swapped for `.pdf`, so the figure you export
 is the figure you are looking at. The PDF is not the screen figure in another container: it is

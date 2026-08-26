@@ -382,11 +382,130 @@ def test_episode_horizon():
     env.close()
 
 
+def test_gravity_goal():
+    """--goal_achievement_function=gravity: a 2-vector goal with a ball success criterion.
+
+    'gravity' is the second goal function, and everything that separates it from 'cos' is a
+    branch in code the rest of this file exercises only at goal_dim 1: the width of the goal
+    space, the ball instead of the threshold, the fixed reference goal instead of a sampled
+    scalar, and the potential rescale that makes '--pbrs_w' mean the same thing for both. It was
+    removed on 26.08.2026 and readded the same day, so the branches are worth pinning down.
+
+    One environment for the whole section (3.6 GB), plus one constructor that raises before the
+    MuJoCo model is ever built.
+    """
+    print("\n12. The gravity goal function (--goal_achievement_function=gravity)")
+
+    from mimoEnv.envs.roll_over import GRAVITY_GOAL_BODIES
+
+    # Rejected first, and free: the guard runs before super().__init__.
+    try:
+        make_env(goal_function='gravity', goal_tolerance=0.05).close()
+        refused = False
+    except ValueError:
+        refused = True
+    check("refuses --goal_tolerance (it is a point goal already)", refused)
+
+    # Few reference samples: each one is a full reset with settle steps, and this section only
+    # needs the references to exist and to point the right way.
+    env = make_env(goal_function='gravity', gravity_reference_samples=3,
+                   sparse_reward=True, pbrs=False, done_active=False)
+
+    n = len(GRAVITY_GOAL_BODIES)
+    check("goal_dim is one per body", env.goal_dim == n, f"got {env.goal_dim}")
+    check("the goal space is (n,)", env.observation_space['desired_goal'].shape == (n,),
+          f"got {env.observation_space['desired_goal'].shape}")
+
+    obs, _ = env.reset(seed=0)
+    check("achieved_goal in the observation is (n,)", obs['achieved_goal'].shape == (n,),
+          f"got {obs['achieved_goal'].shape}")
+
+    # The references: prone is -1 per body, supine +1, on the same scale as the extrinsic
+    # 'get_dot_local_x_to_global_z'. If these ever come out near zero the accelerometer seeding
+    # is reading a moving MIMo.
+    prone = np.asarray(env.prone_reference_goal, dtype=np.float64)
+    supine = np.asarray(env.supine_reference_goal, dtype=np.float64)
+    check("the prone reference is about -1 per body", np.all(prone < -0.9),
+          np.array2string(prone, precision=3))
+    check("the supine reference is about +1 per body", np.all(supine > 0.9),
+          np.array2string(supine, precision=3))
+
+    # Starting supine, the target is the prone reference -- and it is fixed, not sampled.
+    check("the goal is the opposite posture's reference",
+          np.allclose(env.goal, prone), np.array2string(np.asarray(env.goal), precision=3))
+    env.reset(seed=1)
+    check("the goal does not change between episodes", np.allclose(env.goal, prone))
+
+    # The estimate against the truth it reconstructs. Zero actions, so MIMo barely moves and any
+    # gap here is the estimator rather than a real rotation.
+    for _ in range(30):
+        env.step(np.zeros(env.action_space.shape))
+    truth = np.array([env.get_dot_local_x_to_global_z(body) for body in GRAVITY_GOAL_BODIES])
+    estimate = env.get_achieved_goal_gravity()
+    check("the estimate tracks the extrinsic direction cosine",
+          np.max(np.abs(truth - estimate)) < 0.05,
+          f"truth {np.array2string(truth, precision=3)} vs "
+          f"{np.array2string(estimate, precision=3)}")
+
+    # Idempotence. The environment reads the achieved goal several times per step (observation,
+    # reward, info); keying the integration on 'data.time' rather than on a step counter is what
+    # keeps all of them seeing the same value.
+    check("repeated reads within a step agree",
+          np.array_equal(env.get_achieved_goal(), env.get_achieved_goal()))
+
+    # Success is a ball of radius 'gravity_goal_eps', not a threshold. The threshold rule would
+    # be satisfied at the *start* of a prone->supine episode, since the goal runs +1 to -1.
+    eps = env.gravity_goal_eps
+    desired = np.asarray(env.goal, dtype=np.float64)
+    direction = np.ones(n) / np.sqrt(n)
+    check("the goal itself is a success", env.is_success(desired, desired))
+    check("just inside the radius is a success",
+          env.is_success(desired + 0.9 * eps * direction, desired))
+    check("just outside the radius is not",
+          not env.is_success(desired + 1.1 * eps * direction, desired))
+    check("the start of the episode is not a success",
+          not env.is_success(supine, prone),
+          "a threshold rule would call this one succeeded")
+
+    # Vectorized and pure at goal_dim > 1, which is the property HER relabelling depends on.
+    ag = np.stack([desired, supine, desired + 0.9 * eps * direction])
+    dg = np.stack([desired, desired, desired])
+    rewards = env.compute_reward(ag, dg, [{}, {}, {}])
+    check("compute_reward is batched at goal_dim > 1", np.asarray(rewards).shape == (3,),
+          f"got {np.asarray(rewards).shape}")
+    check("the sparse reward separates the batch",
+          rewards[0] == rewards[2] and rewards[1] < rewards[0],
+          np.array2string(np.asarray(rewards), precision=3))
+
+    # The potential rescale. Without it a reset sits at -2*sqrt(n) instead of -1, so '--pbrs_w'
+    # and 'reward_success' would mean something different than they do for 'cos' -- measured
+    # consequence: the policy farmed shaping reward to rho 0.48 and never paid for the last part
+    # of the roll.
+    check("the potential is rescaled to the [0, 1] span",
+          np.isclose(env._potential_scale, 1.0 / (2.0 * np.sqrt(n))),
+          f"got {env._potential_scale}")
+    reset_potential = float(env._potential(env._as_goal_batch(supine),
+                                           env._as_goal_batch(prone))[0])
+    check("a reset sits at potential about -1", abs(reset_potential + 1.0) < 0.05,
+          f"got {reset_potential:.3f}")
+
+    # Recording the references must not consume from the generator that drives the initial joint
+    # noise: doing so would silently shift which episodes a run sees, the same failure that made
+    # evaluation depend on whether the goal was pinned (measured 94 % vs 98 %).
+    before = env.np_random.bit_generator.state
+    env.create_prone_and_supine_reference_goals()
+    check("recording the references restores the RNG state",
+          env.np_random.bit_generator.state == before)
+    check("the starting position survives the recording", env.starting_position == 'supine')
+
+    env.close()
+
+
 SECTIONS = [
     'test_sb3_env_checker', 'test_purity', 'test_vectorization', 'test_pbrs_regression',
     'test_sparse_reward', 'test_goal_sampling', 'test_info_contract',
     'test_her_relabel_end_to_end', 'test_pbrs_bounded_under_relabelling',
-    'test_goal_tolerance', 'test_episode_horizon',
+    'test_goal_tolerance', 'test_episode_horizon', 'test_gravity_goal',
 ]
 
 
@@ -423,6 +542,7 @@ if __name__ == '__main__':
     test_pbrs_bounded_under_relabelling()
     test_goal_tolerance()
     test_episode_horizon()
+    test_gravity_goal()
 
     print()
     if FAILURES:

@@ -6,6 +6,7 @@ cluster and adding a build step to a research tool is a maintenance cost with no
 
 import json
 import os
+import tempfile
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -269,6 +270,9 @@ def page_analysis(request: Request):
 "params": params, "selected": selected,
         "warning": plots.horizon_warning(selected), "stats": queries.stats(),
         "tags": queries.tags_for(selected), "nav": "analysis",
+        "series": queries.series_of(selected),
+        # Only evaluations of runs this page is actually showing.
+        "eval_files": evals.group_jsons(run_ids=selected),
         "runs": [queries.get_run(r) for r in selected[:200]],
     })
 
@@ -306,19 +310,42 @@ def plot_curve(request: Request,
                theme: str = Query("light"),
                aggregate: int = Query(0),
                smooth: int = Query(1),
-               column: str = Query("double")):
+               column: str = Query("double"),
+               style: str = Query("screen"),
+               band: str = Query("minmax"),
+               xlabel: str = Query(None),
+               ylabel: str = Query(None),
+               ymin: float = Query(None),
+               ymax: float = Query(None),
+               legend_title: str = Query(None),
+               legend_loc: str = Query(None)):
     run_ids = request.query_params.getlist("run")
     if not run_ids:
         params = params_of(request)
         rows, _ = queries.search(params, limit=60)
         run_ids = [r["run_id"] for r in rows]
 
+    # Legend text arrives as repeated 'glabel=<series key>=<text>'. The key is
+    # 'date|posture|model_name', which is what plots._series_key builds.
+    overrides = {}
+    for item in request.query_params.getlist("glabel"):
+        key, sep, text = item.partition("=")
+        if sep and text.strip():
+            overrides[key] = text.strip()
+
     fmt = "pdf" if request.url.path.endswith(".pdf") else "png"
-    # A PDF is going into a document, so it is always rendered light and in the paper style --
-    # a dark-mode figure pasted into a thesis is never what was wanted.
-    with plots.render_as(fmt, column if fmt == "pdf" else None):
-        data = plots.curve(run_ids, tag, theme="light" if fmt == "pdf" else _theme(theme),
-                           aggregate=bool(aggregate), smooth=max(1, min(51, smooth)))
+    thesis = style == "thesis"
+    # A PDF is going into a document, so it is always rendered light -- a dark-mode figure pasted
+    # into a thesis is never what was wanted. A thesis preview is light for the same reason.
+    with plots.render_as(fmt, column if (fmt == "pdf" or thesis) else None,
+                         style="thesis" if thesis else "screen"):
+        data = plots.curve(run_ids, tag,
+                           theme="light" if (fmt == "pdf" or thesis) else _theme(theme),
+                           aggregate=bool(aggregate), smooth=max(1, min(51, smooth)),
+                           label_overrides=overrides, band=band,
+                           xlabel=xlabel, ylabel=ylabel,
+                           ylim=(ymin, ymax) if ymin is not None and ymax is not None else None,
+                           legend_title=legend_title, legend_loc=legend_loc)
     return _chart(data, fmt, _export_name(tag.split("/")[-1], fmt, f"{len(run_ids)}runs"))
 
 
@@ -333,6 +360,44 @@ def plot_age_grid(request: Request, theme: str = Query("light"),
         data = plots.age_grid(queries.age_grid(params, run_ids=run_ids or None),
                               theme="light" if fmt == "pdf" else _theme(theme))
     return _chart(data, fmt, _export_name("embodiment_grid", fmt))
+
+
+@app.get("/api/plot/eval_bars.png")
+@app.get("/api/plot/eval_bars.pdf")
+def plot_eval_bars(request: Request,
+                   metric: str = Query("successful"),
+                   threshold: float = Query(0.75),
+                   xlabel: str = Query(""),
+                   ylabel: str = Query(None),
+                   annotate: int = Query(0),
+                   column: str = Query("single"),
+                   height: float = Query(3.0),
+                   title: str = Query(None),
+                   sort: str = Query("given")):
+    """Bars from stored --group payloads, drawn by results/plot_eval_success.py itself."""
+    sources = []
+    known = {j["job_id"]: j for j in evals.group_jsons()}
+    for item in request.query_params.getlist("src"):
+        label, sep, job_id = item.partition("=")
+        if not sep:
+            label, job_id = "", item
+        job = known.get(job_id)
+        if job:
+            sources.append((label.strip(), job["run_path"]))
+    if not sources:
+        raise HTTPException(400, "Select at least one evaluated experiment.")
+
+    fmt = "pdf" if request.url.path.endswith(".pdf") else "png"
+    with tempfile.TemporaryDirectory() as tmp:
+        out = os.path.join(tmp, f"bars.{fmt}")
+        try:
+            data = plots.eval_bars(sources, out, metric=metric, threshold=threshold,
+                                   xlabel=xlabel, ylabel=ylabel, annotate=bool(annotate),
+                                   column=column, height=height, title=title, sort=sort,
+                                   python=SETTINGS.python, cwd=SETTINGS.mimo_root)
+        except (ValueError, RuntimeError) as exc:
+            raise HTTPException(400, str(exc))
+    return _chart(data, fmt, _export_name("eval_success", fmt, f"{len(sources)}groups"))
 
 
 @app.get("/api/plot/goal_response.png")

@@ -62,21 +62,22 @@ flags that only make sense together:
 ./run_her_sparse.sh                  # or: ./run_her_sparse.sh <name> <n_seeds>
 ```
 
-The **intrinsic-goal** variant replaces the hand-designed rotation target with one MIMo can
-actually sense — six joint angles plus the vestibular accelerometer, instead of the root free
-joint that proprioception does not report:
+The **gravity-goal** variant replaces the scalar rotation target with one MIMo can actually
+sense: the gravity direction integrated from the gyroscope and expressed in the hip and chest
+frames, instead of the root free joint that proprioception does not report. It is a 2-vector with
+a ball success criterion, and under HER it trains without `--goal_low`/`--goal_high`:
 
 ```bash
 MUJOCO_GL=osmesa python mimoEnv/illustrations.py \
-    --algorithm=SAC --goal_achievement_function=intrinsic \
+    --algorithm=SAC --goal_achievement_function=gravity --gravity_goal_eps=0.15 \
     --her --sparse_reward --no_done_active \
     --roll_over_starting_position=prone --roll_over_model_path_auto \
-    --train_for=1000000 --save_every=200000 --save_model=intrinsic_her
+    --train_for=1000000 --save_every=200000 --save_model=gravity_her
 ```
 
-`--intrinsic_goal_eps` (the success radius) has **not** been calibrated yet; read
-[`docs/roll_over.md` §3.4](docs/roll_over.md#34-the-intrinsic-goal-function--a-non-scalar-non-extrinsic-goal)
-before trusting a number from it.
+Read [`docs/roll_over.md` §3.5](docs/roll_over.md#35-the-gravity-goal-function) for the results and
+for why it is a separate goal function rather than a relabelling of `cos`. Its predecessor
+`intrinsic` (§3.4) did **not** work and was removed.
 
 Models land in
 `models/roll_over/<yy-mm-dd>/<prone|supine>/<yy-mm-dd>_<prone|supine>_<save_model>/`, next to a

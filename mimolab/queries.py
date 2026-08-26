@@ -389,6 +389,34 @@ def group_eval_summary(run_ids, threshold=0.75):
     }
 
 
+def series_of(run_ids):
+    """The aggregated series a selection produces, in the order the chart draws them.
+
+    Grouping follows the run order, exactly as plots.curve() builds its dict, so row i of the
+    label editor is series i of the legend and carries colour i. Grouping in SQL instead would
+    return them in table order, and the editor would list the series in an order the figure does
+    not use -- every label still lands on the right series, because the key is
+    date|posture|model_name, but the list would read as shuffled.
+    """
+    if not run_ids:
+        return []
+    out, seen = [], {}
+    for run_id in run_ids:
+        row = db.one("SELECT date, posture, model_name FROM runs WHERE run_id=?", (run_id,))
+        if row is None:
+            continue
+        key = "|".join("" if v is None else str(v)
+                       for v in (row["date"], row["posture"], row["model_name"]))
+        if key in seen:
+            seen[key]["n"] += 1
+            continue
+        entry = {"key": key, "date": row["date"], "posture": row["posture"],
+                 "model_name": row["model_name"], "n": 1}
+        seen[key] = entry
+        out.append(entry)
+    return out
+
+
 def all_tags():
     return [r["tag"] for r in db.query(
         "SELECT tag, COUNT(*) c FROM scalars GROUP BY 1 ORDER BY c DESC, tag")]

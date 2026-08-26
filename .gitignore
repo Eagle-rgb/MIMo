@@ -33,10 +33,12 @@ icdl26
 *.npy
 pdf
 csv
+*.mp4
 
 results/intrinsic
 results/horizon
 results/curriculum
+results/noise_baseline
 *.log
 
 # Exclude composer for now, because it is not working.

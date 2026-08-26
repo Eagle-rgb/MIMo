@@ -53,11 +53,14 @@ class Settings:
 
         self.state_dir = self.mimo_root / ".mimolab"
         self.log_dir = self.state_dir / "logs"
+        # --group payloads live here permanently: results/plot_eval_success.py reads them to draw
+        # the thesis figure, so they are an output, not scratch.
+        self.eval_dir = self.state_dir / "evals"
         self.plot_dir = self.state_dir / "plots"
         self.db_path = self.state_dir / "index.db"
 
     def ensure_dirs(self):
-        for d in (self.state_dir, self.log_dir, self.plot_dir):
+        for d in (self.state_dir, self.log_dir, self.plot_dir, self.eval_dir):
             d.mkdir(parents=True, exist_ok=True)
 
     def hosts(self, include_app_host=False):

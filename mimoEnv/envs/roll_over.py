@@ -59,9 +59,11 @@ TOUCH_PARAMS = {
     "response_function": "spread_linear",
 }
 
-# 26.08.2026 The 'angle' and 'intrinsic' goal functions were REMOVED, and with them the
-# 'goal_function' switch: this environment now has exactly one goal, the scalar rotation
-# ':meth:`.get_achieved_goal_cos`'.
+# 26.08.2026 The 'angle' and 'intrinsic' goal functions were REMOVED. Two goal functions are
+# left, selected by '--goal_achievement_function':
+#
+#   'cos'      the scalar rotation ':meth:`.get_achieved_goal_cos`', rho in [0, 1].
+#   'gravity'  the 2-vector ':meth:`.get_achieved_goal_gravity`', +1 supine to -1 prone per body.
 #
 # 'angle' was the first goal function ever written here and was already documented as broken.
 # 'intrinsic' was the "non-scalar, non-extrinsic" goal: a 7-vector of six range-normalised hinge
@@ -69,14 +71,79 @@ TOUCH_PARAMS = {
 # free joint, which proprioception excludes. It did not work -- two 1M-step PPO runs reached
 # rho_max 0.019 and 0.038 against the baseline's 0.951, because the accelerometer reports gravity
 # *plus self-acceleration* and the policy forged the prone gravity signature by shaking while
-# lying supine. Its successor 'gravity' did work but was removed on the same day for the same
-# reason as this: one training configuration is enough, and every extra goal cost a variable goal
-# dimension, a reference-recording pass, a reset hook and a branch in every reward function.
+# lying supine. The measurements are in docs/roll_over.md 3.4. Models trained with
+# '--goal_achievement_function=angle|intrinsic' can no longer be loaded against this environment.
 #
-# The measurements are in docs/roll_over.md 3.4 and 3.5, and the reconstruction demo lives in
-# 'results/intrinsic/intrinsic_rho_check.py'. Models trained with
-# '--goal_achievement_function=angle|intrinsic|gravity' can no longer be loaded against this
-# environment.
+# 26.08.2026 'gravity' was removed earlier the same day and READDED here. The argument for
+# removing it was that its *mean over the two bodies* equals what 'cos' measures, so it made the
+# same claim about sensing at the cost of a second training configuration -- and that claim is
+# now made without training at all, by 'results/intrinsic/intrinsic_rho_check.py'.
+#
+# What that argument missed is that HER does not see the mean, it sees the vector. The goal is
+# two-dimensional and its success criterion is a ball rather than a threshold, and under a sparse
+# reward those are exactly the two properties that decide what a relabelled transition is worth:
+# 'gravity' trained without --goal_low/--goal_high where 'cos' needs them, 14/16 seeds against
+# 3/16 (docs/roll_over.md 3.6). '--goal_tolerance' was added to give 'cos' the ball criterion
+# alone; it cannot give it the second dimension, and (hip -1, chest +1) is indistinguishable from
+# (hip 0, chest 0) once averaged, which is the gap a vector goal closes.
+
+
+# 20.08.2026 The 'gravity' goal function -- the successor to 'intrinsic', which does not work
+# (see docs/roll_over.md 3.4 for the measurements that killed it).
+#
+# It estimates the direction of gravity in MIMo's body frames and takes its x component. That is
+# the same quantity 'get_dot_local_x_to_global_z(body)' returns (+1 supine, -1 prone), but
+# reconstructed from things MIMo can sense instead of read off the root free joint:
+#
+#     t = 0, MIMo demonstrably at rest:  g_site <- normalize(accelerometer)
+#     every step, gyroscope only:        g_site <- rotate(g_site, -omega * dt)
+#     goal:                              (R_body^T R_site @ g_site)[0]
+#
+# Why each of the three defects of 'intrinsic' disappears:
+#
+#   * Shaking. Linear acceleration does not enter the integration at all, so there is nothing to
+#     forge. The old goal could be driven 77% of the way to the target while lying still.
+#   * Head turning. Self-cancelling rather than merely counterweighted: turning the head makes the
+#     gyroscope rotate 'g_site' by exactly the amount that leaves 'R_rel @ g_site' unchanged. The
+#     joint-angle targets that used to serve this purpose were measured to be ~2x too weak.
+#   * Anti-correlation. The joints are no longer goal dimensions; they appear only in the frame
+#     transform, which is where they belong.
+#
+# The root free joint cancels out of 'R_body^T R_site' (measured residual 0.017 deg), so this
+# stays non-extrinsic. Validated offline before implementation over 14 recorded episodes:
+# correlation with the truth 0.9991 on a policy that rolls, drift 0.004 over a full 250-step
+# episode, and the estimate stays at +0.995 for the policy that games the old goal.
+
+
+# 21.08.2026 Which body frames the gravity direction is expressed in. Both, not just the hip:
+# a hip-only version was trained for 1M steps and plateaued at rho 0.385 with the hip at 101.9 deg
+# and the chest at 42.5 deg -- MIMo twists the pelvis and leaves the torso lying. That is the same
+# failure the 'cos' goal ran into historically and fixed the same way; kept as two separate
+# dimensions rather than averaged, because an average cannot tell (hip -1, chest +1) from
+# (hip 0, chest 0), while the vector distance penalises the gap directly.
+GRAVITY_GOAL_BODIES = ("hip", "chest")
+
+
+def rotate_by_angular_velocity(v, omega, dt):
+    """ Rotate 'v' by '-omega * dt' (Rodrigues), keeping it a unit vector.
+
+    'v' is a WORLD-fixed direction expressed in a ROTATING frame, so the transport theorem gives
+    dv/dt = -omega x v: if the frame turns by +omega, the coordinates of a fixed vector in it turn
+    by -omega. MuJoCo's gyro reports omega of the site in the site's own frame, which is exactly
+    the omega this needs -- no conversion.
+
+    Rodrigues is the closed-form exact solution for constant omega over the interval, not an Euler
+    step; the only error left is that omega is not really constant within one 10 ms sample.
+    """
+    magnitude = np.linalg.norm(omega)
+    theta = magnitude * dt
+    if theta < 1e-12:
+        return v
+    k = -omega / magnitude
+    rotated = (v * np.cos(theta) + np.cross(k, v) * np.sin(theta)
+               + k * np.dot(k, v) * (1.0 - np.cos(theta)))
+    return rotated / np.linalg.norm(rotated)
+
 
 class MIMoRollOverEnv(MIMoEnv):
     """
@@ -125,6 +192,21 @@ class MIMoRollOverEnv(MIMoEnv):
                  # Penalization factor for action penalization.
                  pen_factor=0.02,
                  pca=None,
+                 # Which quantity the goal is defined on: 'cos' (scalar rho) or 'gravity' (the
+                 # 2-vector of gravity-x per body). See the module header.
+                 goal_function='cos',
+                 # --- 'gravity' goal function ---------------------------------------------
+                 # Success radius: 'is_success' is '||achieved - desired|| <= gravity_goal_eps'.
+                 # A threshold makes no sense on a vector and exact equality never happens on a
+                 # continuous sensor reading, so the goal is a point and success is a ball.
+                 # In the goal's own +-1 units, eps = 2*(1 - rho_target) per body, so 0.15 over
+                 # two bodies is about rho 0.925.
+                 # Previously: --intrinsic_goal_eps
+                 gravity_goal_eps=0.15,
+                 # How many resets the prone/supine reference goals are averaged over. A single
+                 # reset would pin the goal to one draw of the initial joint noise.
+                 # Previously: --intrinsic_reference_samples
+                 gravity_reference_samples=20,
                  # 25.08.2026 Turns the scalar success test from the threshold
                  # 'achieved >= desired' into the band '|achieved - desired| <= goal_tolerance',
                  # None keeps the threshold, so every stored 'data.yml' reloads unchanged.
@@ -137,9 +219,9 @@ class MIMoRollOverEnv(MIMoEnv):
                  # it', and there is no gradient in goal space to climb. The band labels every
                  # nearby goal 0 and only the distant real goal -1, which is what forces the
                  # critic to represent the distance to the goal. That is the mechanism the
-                 # (since removed) 'gravity' goal function got for free from its ball criterion:
-                 # 100 % of its relabelled transitions scored 0 at the start of training, and it
-                 # trained without --goal_low/--goal_high, 14/16 seeds against 3/16 for 'cos'.
+                 # 'gravity' goal function gets for free from its ball criterion: 100 % of its
+                 # relabelled transitions scored 0 at the start of training, and it trained
+                 # without --goal_low/--goal_high, 14/16 seeds against 3/16 for 'cos'.
                  #
                  # 0.05 is the matched radius: 'gravity' used 0.15 over two bodies, i.e. 0.106
                  # per body in its +-1 units, and rho is that quantity halved.
@@ -171,8 +253,26 @@ class MIMoRollOverEnv(MIMoEnv):
             msg += "Needs to be 'prone', 'supine' or 'alternating'."
             raise ValueError(msg)
 
-        if goal_tolerance is not None and goal_tolerance <= 0.0:
-            raise ValueError(f"'goal_tolerance' must be positive, got {goal_tolerance}.")
+        if goal_function not in ['cos', 'gravity']:
+            msg = f"Unknown goal function '{goal_function}'. Needs to be 'cos' or 'gravity'. "
+            msg += "('angle' and 'intrinsic' were removed on 26.08.2026 -- see the module header.)"
+            raise ValueError(msg)
+
+        if goal_tolerance is not None:
+            if goal_tolerance <= 0.0:
+                raise ValueError(f"'goal_tolerance' must be positive, got {goal_tolerance}.")
+            if goal_function == 'gravity':
+                # That is already a point goal with a radius; a second one would be ambiguous.
+                raise ValueError(
+                    "'goal_tolerance' applies to the scalar goal function ('cos') only, got "
+                    f"'{goal_function}'. The gravity goal is a point goal already -- use "
+                    "'gravity_goal_eps' to set its success radius.")
+
+        if gravity_goal_eps <= 0.0:
+            raise ValueError(f"'gravity_goal_eps' must be positive, got {gravity_goal_eps}.")
+        if gravity_reference_samples < 1:
+            raise ValueError("'gravity_reference_samples' must be at least 1, got "
+                             f"{gravity_reference_samples}.")
         
         # Instead of supplying 'age' as a parameter to the environment directly, we beforehand created the
         # appropriate age scene. So we manually specify the scene location.
@@ -195,7 +295,25 @@ class MIMoRollOverEnv(MIMoEnv):
         self.pbrs_w=pbrs_w
         self.steps_after_reset=steps_after_reset
         self.pen_factor=pen_factor
+        self.goal_function=goal_function
+        self.gravity_goal_eps=gravity_goal_eps
+        self.gravity_reference_samples=gravity_reference_samples
         self.goal_tolerance=goal_tolerance
+
+        # 'gravity' goal function: the reference posture vectors recorded at the end of the
+        # constructor, and a flag saying whether they exist yet -- 'sample_goal' runs before they
+        # do, from inside 'MIMoEnv.initialize'.
+        self.reference_goals_created = False
+        self.prone_reference_goal = None
+        self.supine_reference_goal = None
+        self.reference_goal_std = {}
+        # The running estimate of the gravity direction in the vestibular site's frame, and the
+        # sim time it was last advanced to. Reset to None on every episode so the next read
+        # re-seeds it from the accelerometer while MIMo is still settled.
+        self._g_site = None
+        self._g_site_time = None
+        self._vestibular_site_id = None
+        self._gravity_body_ids = None
         self.success_at_side_lying=success_at_side_lying
         self.sparse_reward=sparse_reward
         self.goal_low=goal_low
@@ -246,6 +364,18 @@ class MIMoRollOverEnv(MIMoEnv):
         self.init_position=self.data.qpos.copy()
         self.put_in_starting_position()
 
+        if self.goal_function == 'gravity':
+            print("Creating prone and supine reference goals ('gravity').")
+            self.create_prone_and_supine_reference_goals()
+            # 19.08.2026 Re-sample now that the references exist. 'initialize()' already set
+            # 'self.goal', but it ran before this point, so 'sample_goal' took its
+            # not-yet-created fallback branch and stored the constructor-time *achieved* goal.
+            # Training never sees it (reset_model re-samples before the first step), but any
+            # analysis script that reads 'env.goal' without resetting first gets a goal that is
+            # simply MIMo's current posture -- which silently measures distance from where he
+            # started instead of distance to the target.
+            self.goal = self.sample_goal()
+
         self.fix_top_camera_rotation_supine()
 
     def fix_top_camera_rotation_supine(self):
@@ -257,8 +387,82 @@ class MIMoRollOverEnv(MIMoEnv):
             self.model.cam_quat[cam_top_id] = quat
 
     def initialize(self):
-        """ Called at construction and again on every embodiment hot-swap. """
+        """ Called at construction and again on every embodiment hot-swap.
+
+        Overridden to (re)resolve the MuJoCo ids the 'gravity' goal reads. 'set_embodiment'
+        rebuilds 'self.model'/'self.data' from a different scene XML, which invalidates any
+        cached index, and the base implementation ends by calling 'sample_goal', which for that
+        goal function reads the achieved goal -- so the ids have to exist before
+        'super().initialize()' runs, not after.
+
+        The recorded reference postures are deliberately *not* re-recorded here: the gravity goal
+        lives in the +-1 units of a direction cosine, which do not depend on the scene.
+        """
+        if self.goal_function == 'gravity':
+            self._vestibular_site_id = self.model.site('vestibular').id
+            self._gravity_body_ids = [self.model.body(name).id
+                                      for name in GRAVITY_GOAL_BODIES]
+            self._g_site = None
+            self._g_site_time = None
+
         super().initialize()
+
+    def create_prone_and_supine_reference_goals(self):
+        """ Record the reference goal vector in prone and in supine ('gravity' only).
+
+        These are the two 'desired_goal's: starting prone, the target is the supine reference,
+        and vice versa. Both are recorded once, at construction.
+
+        Two things differ from a naive single-shot implementation, and both were bugs waiting to
+        happen:
+
+        * The reference is **averaged over 'gravity_reference_samples' resets with ISR off**. A
+          single reset fixes the goal at one draw of the initial joint noise -- 'head_swivel' in
+          particular settles anywhere within a wide range -- and MIMo would then be scored on
+          reproducing that specific draw rather than on the posture.
+        * The RNG state is **saved and restored** around the recording. The reference resets draw
+          from 'self.np_random', the same generator that produces the initial joint noise of every
+          training episode, so without this the number of samples taken here would silently shift
+          which episodes the run sees. This is the same failure that made evaluation depend on
+          whether the goal was pinned via goal_low/goal_high (measured 94% vs 98%); see
+          ':meth:`.sample_goal`'.
+        """
+        rng_state = self.np_random.bit_generator.state
+        saved_isr = self.isr
+        saved_position = self.starting_position
+        self.isr = False
+
+        try:
+            for position in ('prone', 'supine'):
+                self.starting_position = position
+                samples = []
+                for _ in range(self.gravity_reference_samples):
+                    self.reset_model()
+                    samples.append(np.asarray(self.get_achieved_goal(), dtype=np.float64))
+                samples = np.asarray(samples, dtype=np.float64)
+                reference = samples.mean(axis=0)
+                spread = samples.std(axis=0)
+
+                if position == 'prone':
+                    self.prone_reference_goal = reference
+                else:
+                    self.supine_reference_goal = reference
+                self.reference_goal_std[position] = spread
+
+                print(f"Reference goal ({position}, n={self.gravity_reference_samples}):")
+                for label, value, sd in zip(self.goal_labels(), reference, spread):
+                    print(f"    {label:<22} {value:+.3f}  (sd {sd:.3f})")
+        finally:
+            self.isr = saved_isr
+            self.starting_position = saved_position
+            self.np_random.bit_generator.state = rng_state
+            self.reference_goals_created = True
+
+    def goal_labels(self):
+        """ Names of the goal dimensions, in order. For logging and diagnostics. """
+        if self.goal_function == 'gravity':
+            return [f'gravity_x_in_{name}_frame' for name in GRAVITY_GOAL_BODIES]
+        return ['rho']
 
 
     def set_embodiment(self, morph_age, physio_age):
@@ -293,24 +497,38 @@ class MIMoRollOverEnv(MIMoEnv):
 
     @property
     def goal_dim(self):
-        """ Length of a single goal. The rotation goal is a scalar, so 1.
+        """ Length of a single goal. 1 for the scalar 'cos' rotation, one entry per body for
+        'gravity'.
 
         Kept as a property rather than inlined because 'compute_reward' and '_info_block' pass it
-        around, and because a goal of a different width has been tried here twice.
+        around, and because the width is what separates the two goal functions.
         """
+        if self.goal_function == 'gravity':
+            return len(GRAVITY_GOAL_BODIES)
         return 1
 
     def _success_mask(self, achieved, desired):
         """ Success as a (N,) boolean array, from goals already shaped (N, goal_dim).
 
-        Two rules, both pure functions of the two arguments:
+        Three rules, all of them pure functions of the two arguments:
 
-        * default: 'achieved >= desired'. The goal is a rotation threshold, and overshooting it
-          is still success.
-        * with 'goal_tolerance' set: '|achieved - desired| <= tolerance'. The threshold becomes a
-          band, so overshooting a goal is no longer success. See the constructor for why -- it is
-          what gives the critic a distance to climb under HER.
+        * 'cos', default: 'achieved >= desired'. The goal is a rotation threshold, and
+          overshooting it is still success.
+        * 'cos' with 'goal_tolerance' set: '|achieved - desired| <= tolerance'. The threshold
+          becomes a band, so overshooting a goal is no longer success. See the constructor for
+          why -- it is what gives the critic a distance to climb under HER.
+        * 'gravity': '||achieved - desired|| <= gravity_goal_eps'. A threshold comparison makes
+          no sense on a vector -- and this one runs from +1 (supine) to -1 (prone), so
+          'achieved >= desired' would be satisfied at the *start* of a prone->supine episode.
+          Equality never happens on continuous sensor readings either, so the goal is a point and
+          success is a ball around it.
+
+        The last two are the same rule; they differ only in which radius they read, because the
+        two are calibrated on different scales (rho in [0, 1] against the +-1 of a direction
+        cosine).
         """
+        if self.goal_function == 'gravity':
+            return np.linalg.norm(desired - achieved, axis=-1) <= self.gravity_goal_eps
         if self.goal_tolerance is not None:
             return np.linalg.norm(desired - achieved, axis=-1) <= self.goal_tolerance
         return (achieved >= desired).reshape(-1)
@@ -467,13 +685,23 @@ class MIMoRollOverEnv(MIMoEnv):
         # self.set_state(self.init_qpos, self.init_qvel)
         self.put_in_starting_position()
 
+        # Drop the gravity estimate so the first read below re-seeds it from the accelerometer.
+        # This has to come AFTER 'put_in_starting_position': that method drops MIMo onto the floor
+        # and runs 'steps_after_reset' settle steps, and only once those are done is he at rest,
+        # which is the single condition under which specific force equals gravity. Seeding before
+        # it would both read a moving accelerometer and integrate the settle steps as if they were
+        # part of the episode.
+        self._g_site = None
+        self._g_site_time = None
+
         return self._get_obs()
     
     def get_goal_space(self, obs_space):
         """ The goal space.
 
-        A flat Box of shape (1,). Flatness is what HerReplayBuffer needs -- it relabels by
-        writing into an array, and SB3 cannot take a nested dict as a goal space.
+        A flat Box of shape ('goal_dim',): (1,) for 'cos', (2,) for 'gravity'. Flatness is what
+        HerReplayBuffer needs -- it relabels by writing into an array, and SB3 cannot take a
+        nested dict as a goal space.
         """
         return spaces.Box(-np.inf, np.inf, shape=(self.goal_dim,), dtype=np.float64)
 
@@ -496,9 +724,26 @@ class MIMoRollOverEnv(MIMoEnv):
         condition on the goal input, and the relabelled transitions describe goals that are never
         asked for at evaluation time. Evaluation should always pin the goal to 0.95.
 
+        The 'gravity' goal function ignores all of that: its target is the reference vector
+        recorded in the *opposite* starting position, fixed per episode rather than sampled.
+
         Returns:
-            np.array[float]: The target rotation, shape (1,).
+            np.array[float]: The target goal, shape ('goal_dim',).
         """
+        if self.goal_function == 'gravity':
+            # Fixed per starting position. HER still sees plenty of goal variation, because every
+            # relabelled goal is an achieved gravity vector from the trajectory -- which is why
+            # this goal function trains without the --goal_low/--goal_high range 'cos' needs
+            # (14/16 seeds against 3/16; docs/roll_over.md 3.6).
+            #
+            # The references are recorded at the very end of the constructor. Observation calls
+            # before that point reach this function while they do not exist yet, so fall back to
+            # the current achieved goal -- it is only used to shape the observation space.
+            if not self.reference_goals_created:
+                return self.get_achieved_goal()
+            if self.starting_position == 'prone':
+                return self.supine_reference_goal.copy()
+            return self.prone_reference_goal.copy()
 
         if self.goal_low is not None:
             # A degenerate range means a fixed goal. Return it without drawing: consuming a
@@ -606,9 +851,55 @@ class MIMoRollOverEnv(MIMoEnv):
         return np.array([(rot_hip + rot_chest) / 2.0])
     
 
-    def get_achieved_goal(self):
-        """ The achieved goal: the normalised rotation of hip and chest, ':meth:`.get_achieved_goal_cos`'.
+    def get_achieved_goal_gravity(self):
+        """ The gravity direction in each of 'GRAVITY_GOAL_BODIES', x component.
+
+        One entry per body, all on the same scale: +1 supine, -1 prone -- the same scale as
+        'get_dot_local_x_to_global_z(body)', but reconstructed from the gyroscope and the
+        proprioceptive joint chain instead of from the root free joint that proprioception does
+        not report.
+
+        The estimate is a running one, advanced lazily: the first read after a reset seeds it from
+        the accelerometer (the one moment MIMo is demonstrably at rest, so specific force IS
+        gravity), and every later read integrates the gyroscope forward to the current 'data.time'.
+        Keying on the simulation clock rather than on a step counter makes this idempotent -- the
+        environment reads the achieved goal several times per step (observation, reward, info) and
+        all of them must see the same value.
+
+        Note this makes 'get_achieved_goal' history-dependent, unlike 'cos'. 'compute_reward'
+        stays pure -- it only ever sees the stored achieved/desired pair -- so HER relabelling is
+        unaffected.
         """
+        self._advance_gravity_estimate()
+        R_site = self.data.site_xmat[self._vestibular_site_id].reshape(3, 3)
+        # R_body^T @ R_site depends only on the joints between that body and the head; the root
+        # rotation cancels, which is what keeps this quantity non-extrinsic.
+        return np.array([float(((self.data.xmat[body_id].reshape(3, 3).T @ R_site)
+                                @ self._g_site)[0])
+                         for body_id in self._gravity_body_ids])
+
+    def _advance_gravity_estimate(self):
+        """ Seed or integrate ':attr:`._g_site`' up to the current simulation time. """
+        now = float(self.data.time)
+        if self._g_site is None or self._g_site_time is None:
+            acc = self.get_vestibular_obs()[:3]
+            norm = np.linalg.norm(acc)
+            # A degenerate reading would be free fall, which cannot happen at reset; fall back to
+            # the site's own +x rather than dividing by zero.
+            self._g_site = acc / norm if norm > 1e-9 else np.array([1.0, 0.0, 0.0])
+            self._g_site_time = now
+            return
+        dt = now - self._g_site_time
+        if dt <= 0.0:
+            return
+        self._g_site = rotate_by_angular_velocity(
+            self._g_site, self.get_vestibular_obs()[3:6], dt)
+        self._g_site_time = now
+
+    def get_achieved_goal(self):
+        """ The achieved goal, from whichever goal function this run was configured with. """
+        if self.goal_function == 'gravity':
+            return self.get_achieved_goal_gravity()
         return self.get_achieved_goal_cos()
 
     def get_potential(self):
@@ -800,16 +1091,21 @@ class MIMoRollOverEnv(MIMoEnv):
         """ Puts the shaping potential of every goal function on the same [0, 1] scale.
 
         21.08.2026 'cos' measures progress in [0, 1], so a reset sits at potential -1 and the goal
-        at 0. The removed 'gravity' goal ran from +1 to -1 per body, so with two bodies a reset sat
-        at -2.83: the PBRS term was 2.83x larger than in the baseline while 'reward_success' stayed
-        at 500, i.e. the terminal bonus was relatively 2.83x weaker, and the policy farmed shaping
-        reward up to rho 0.48 rather than paying for the expensive last part of the roll. Dividing
-        by the reset distance fixed it.
+        at 0. The 'gravity' goal runs from +1 to -1 per body, so with two bodies a reset sits at
+        -2.83 -- the PBRS term was 2.83x larger than in the baseline while 'reward_success' stayed
+        at 500, i.e. the terminal bonus was relatively 2.83x weaker. Measured consequence: the
+        policy happily farmed shaping reward up to rho 0.48 and had little incentive to pay for
+        the expensive last part of the roll.
 
-        Every remaining goal function already sits on that scale, so this is 1.0 throughout. It is
-        kept as a hook rather than inlined because the next goal function on a different scale will
-        need it again, and the failure above is what it is here to prevent.
+        Dividing by the reset distance (2*sqrt(n_bodies)) makes '--pbrs_w' and 'reward_success'
+        mean the same thing for 'gravity' as for 'cos', which is what makes the two comparable.
+
+        Note this deliberately does NOT scale ':attr:`.gravity_goal_eps`': the success radius
+        stays in the readable +-1 units of the goal itself, where eps = 2*(1 - rho_target) per
+        body -- eps 0.21 for two bodies is about rho 0.925.
         """
+        if self.goal_function == 'gravity':
+            return 1.0 / (2.0 * np.sqrt(len(GRAVITY_GOAL_BODIES)))
         return 1.0
 
     @staticmethod

@@ -153,8 +153,10 @@ off unless `--touch`. Measured on the default configuration (`9M/9M`, no touch,
 | `achieved_goal` | (1,) or (7,) | only if `--achieved_goal_in_observation` (forced on by `--her`) |
 | `desired_goal` | (1,) or (7,) | always — `goals_in_observation=True` is hard-coded (`roll_over.py:333`) |
 
-Both goal keys are flat `Box` spaces of shape (1,) -- there is one goal function, the scalar ρ.
-Vector goals were tried twice (§3.4, §3.5) and removed on 26.08.2026.
+Both goal keys are flat `Box` spaces of shape (`goal_dim`,): **(1,) under
+`--goal_achievement_function=cos`**, the scalar ρ, and **(2,) under `gravity`** (§3.5), one entry
+per body in `GRAVITY_GOAL_BODIES`. The third vector goal, `intrinsic` (§3.4), was removed on
+26.08.2026.
 
 **Proprioception is a sorted-key concatenation, so `qpos` does not start at index 0.**
 `mimoProprioception/proprio.py:177` concatenates `sensor_outputs` in sorted key order, which for
@@ -296,19 +298,21 @@ configurations without complaint:
   outside, i.e. a single step leaving the goal region paid **−50001.0**, and the critic loss
   reached ~2.8e7 within 1000 updates.
 There used to be a second guard, **`--her` with `--goal_achievement_function=intrinsic`**. Both
-it and the flag are gone (§3.4).
+it and that goal function are gone (§3.4).
 
 The environment validates its own arguments — unknown posture, unknown goal function, an age
-outside `AGES`, a `goal_low`/`goal_high` mismatch and a non-positive `goal_tolerance` — but it
-knows nothing about the combination above.
+outside `AGES`, a `goal_low`/`goal_high` mismatch, a non-positive `goal_tolerance` or
+`gravity_goal_eps`, and `--goal_tolerance` combined with `gravity` (which is a point goal with a
+radius already) — but it knows nothing about the combination above.
 
 ### 3.4 The `intrinsic` goal function — a non-scalar, non-extrinsic goal that did not work
 
 **Removed from `roll_over.py` on 26.08.2026**, together with `--intrinsic_goal_joints`,
-`--intrinsic_acc_axes`, `--intrinsic_acc_w`, `--intrinsic_goal_eps` and
-`--intrinsic_reference_samples`. It never worked (the measurements below say why), and it is
-recorded here as a negative result. Runs trained with it can no longer be loaded against the
-current environment.
+`--intrinsic_acc_axes` and `--intrinsic_acc_w`. It never worked (the measurements below say why),
+and it is recorded here as a negative result. Runs trained with it can no longer be loaded against
+the current environment. (`--intrinsic_goal_eps` and `--intrinsic_reference_samples` survive as
+aliases of `--gravity_goal_eps`/`--gravity_reference_samples`, which is where those two knobs are
+actually read — §3.5.)
 
 Rewritten 19.08.2026. Before that date `intrinsic` meant "the whole observation dict is the goal",
 selected by a `--intrinsic_goal` sub-mode (`all`, `vesti`, `vesti_acc`, `sparse_proprio`) and
@@ -479,15 +483,23 @@ trajectory, so goal variation is automatic. `--no_done_active` is still required
 
 
 
-### 3.5 The `gravity` goal function -- worked, then removed on 26.08.2026
+### 3.5 The `gravity` goal function
 
-Added 20.08.2026 after the measurements in 3.4 showed `intrinsic` to be unfixable by tuning;
-**removed from `roll_over.py` on 26.08.2026 once it had made its point.** The results below are
-the record of what it achieved and stay valid; what no longer exists is
-`--goal_achievement_function=gravity`, so the runs listed here can no longer be loaded against the
-current environment. The claim it was built to support is now carried by
-`results/intrinsic/intrinsic_rho_check.py` -- see "Removed, and what carries the claim now" at the
-end of this section.
+Added 20.08.2026 after the measurements in 3.4 showed `intrinsic` to be unfixable by tuning,
+**removed on 26.08.2026, and readded the same day.** It is a supported goal function again:
+`--goal_achievement_function=gravity`, with `--gravity_goal_eps` (previously
+`--intrinsic_goal_eps`) as the success radius. Everything below stands, including the runs.
+
+> **Why it came back.** The removal argument was that `gravity`'s *mean over the two bodies* is
+> the same quantity rho measures, so it made the same claim about sensing at the cost of a second
+> training configuration -- and that claim is now made without training at all, by
+> `results/intrinsic/intrinsic_rho_check.py` (see the end of this section). What the argument
+> missed is that **HER does not see the mean, it sees the vector.** The goal is two-dimensional
+> and its success criterion is a ball rather than a threshold, and under a sparse reward those
+> are exactly the two properties that decide what a relabelled transition is worth: `gravity`
+> trains without `--goal_low`/`--goal_high` where `cos` needs them, 14/16 seeds against 3/16
+> (3.6). `--goal_tolerance` gives `cos` the ball criterion alone; it cannot give it the second
+> dimension, and `(hip -1, chest +1)` is indistinguishable from `(hip 0, chest 0)` once averaged.
 
 The idea is to stop reading a *posture* off an *acceleration* sensor. The accelerometer can only
 do that at rest; the gyroscope measures rotation directly and is structurally untouched by linear
@@ -503,8 +515,10 @@ goal:                              [ (R_body^T R_site @ g_site)[0]
 +1 supine, -1 prone per body -- the same scale as `get_dot_local_x_to_global_z(body)`, but
 reconstructed from what MIMo senses. `R_body^T R_site` depends only on the joints between that
 body and the head, so the root free joint cancels (measured residual 0.017 deg) and the goal stays
-non-extrinsic. It was configured by `--goal_achievement_function=gravity`, with
-`--intrinsic_goal_eps` reused as the success radius, where `eps = 2*(1 - rho_target)` per body.
+non-extrinsic. It is configured by `--goal_achievement_function=gravity`, with
+`--gravity_goal_eps` as the success radius, where `eps = 2*(1 - rho_target)` per body.
+`--intrinsic_goal_eps` still works as an alias, and `load_model_yaml` renames the stored key, so
+runs from 20.-22.08.2026 reload with their own radius rather than the default.
 
 Why each defect of `intrinsic` disappears: shaking has no purchase because linear acceleration
 never enters the integration; head turning cancels as an *identity* rather than being
@@ -591,28 +605,27 @@ Caveats, because none of these are covered yet:
 
 #### The potential is normalised
 
-`cos` measures progress in [0, 1]; `gravity` ran from +1 to -1 per body, so with two bodies a
-reset sat at distance 2.83. With `--pbrs_w=100` and `reward_success=500` unchanged, the shaping
+`cos` measures progress in [0, 1]; `gravity` runs from +1 to -1 per body, so with two bodies a
+reset sits at distance 2.83. With `--pbrs_w=100` and `reward_success=500` unchanged, the shaping
 term was 2.83x larger than in the baseline while the terminal bonus was not -- i.e. the +500
 attractor was relatively 2.83x weaker, which fits a policy that farms shaping reward to rho 0.48
 and does not pay for the last part of the roll. `_potential_scale` divides by the reset distance
-`2*sqrt(n_bodies)`, so the two goal functions are finally comparable. It deliberately did **not**
-scale `--intrinsic_goal_eps`, which stayed in the readable +-1 units of the goal.
+`2*sqrt(n_bodies)`, so the two goal functions are comparable. It deliberately does **not** scale
+`--gravity_goal_eps`, which stays in the readable +-1 units of the goal.
 
-Since the removal `_potential_scale` returns 1.0 for every remaining goal function. It is kept as
-a hook rather than inlined, because the failure above is exactly what the next goal function on a
-different scale would walk into.
+So `_potential_scale` returns `1/(2*sqrt(n_bodies))` for `gravity` and 1.0 for `cos`. It is a
+property rather than an inlined constant, because the failure above is exactly what the next goal
+function on a different scale would walk into.
 
-#### Removed, and what carries the claim now
+#### What carries the sensing claim
 
-The claim the goal function existed to make is a claim about *sensing*, not about training: the
-quantity rho is defined on -- `data.body(b).xmat[2,0]`, read off the root free joint -- is
-reconstructible from the vestibular sensors and the joint angles. A training configuration is an
-expensive way to state that. It cost a goal dimension, a per-episode integration state, a reset
-hook and a potential rescale threaded through every branch in `roll_over.py`, and it forked every
-code path that asks "which goal function is this".
+The claim the goal function was originally built to make is a claim about *sensing*, not about
+training: the quantity rho is defined on -- `data.body(b).xmat[2,0]`, read off the root free
+joint -- is reconstructible from the vestibular sensors and the joint angles. A training
+configuration is an expensive way to state that, which is what motivated the (reverted) removal.
 
-`results/intrinsic/intrinsic_rho_check.py` states it directly instead. It reimplements the
+`results/intrinsic/intrinsic_rho_check.py` states it directly instead, and remains the citation
+for it: the goal function's own job is the HER behaviour above, not this. It reimplements the
 estimator standalone -- nothing in it imports the environment's goal code -- and measures it
 against the truth step by step along real rollouts:
 
@@ -674,7 +687,7 @@ training):
 | `gravity`, 1M checkpoint (rolls) | -1.0 .. 1.0 | 44 % |
 
 So HER's relabelling is *blind* for `gravity` until the policy already moves further than
-`intrinsic_goal_eps` -- and that run reaches rho 0.99 anyway. The relabelled batch is not where
+`gravity_goal_eps` -- and that run reaches rho 0.99 anyway. The relabelled batch is not where
 its advantage comes from, which kills the obvious explanation ("the vector goal gives HER
 automatic goal variation"; it does, but the variation carries no reward contrast).
 
@@ -704,9 +717,9 @@ python mimoEnv/illustrations.py --algorithm=SAC --her --sparse_reward --no_done_
     --goal_achievement_function=cos --goal_tolerance=0.05 --episode_steps=200 ...
 ```
 
-If it trains, the mechanism above is confirmed. The counter-test would have been `gravity` with
-`--intrinsic_goal_eps=0.02`, which should then collapse -- no longer runnable since the goal
-function was removed (3.5). Note the two groups compared above also differ in horizon (100 vs 200
+If it trains, the mechanism above is confirmed. The counter-test is `gravity` with
+`--gravity_goal_eps=0.02`, which should then collapse; it is runnable again since the goal
+function came back (3.5). Note the two groups compared above also differ in horizon (100 vs 200
 steps), so a `cos` run at 100 steps is still needed to rule that out.
 
 The reported numbers stay comparable either way: `eval_rollover.py` scores `rho_max >= 0.95`
@@ -766,16 +779,19 @@ Its twelve sections are: SB3 `check_env`; purity (reward varies with each argume
 invariant under stepping the sim); vectorization (batch matches elementwise); PBRS regression
 (the step reward still equals the original formula, so the 94 % baseline stays comparable);
 sparse reward; goal sampling; the `info` contract; end-to-end relabelling; PBRS boundedness under
-relabelling; `--goal_tolerance` (§3.6); early stopping; and the episode horizon.
+relabelling; `--goal_tolerance` (§3.6); the episode horizon; and the `gravity` goal function
+(§3.5).
 
 **Run them one per process** — `goalenv_check.py --list` prints the names. One env is ~3.8 GB RSS
 and `close()` does not return all of it, so running every section in one process OOM-kills a
 16 GB machine.
 
-> **Known gap:** every one of them exercises the **scalar** goal functions only. The intrinsic
-> posture goal (§3.4) passes the same properties — verified by hand at the time it was written —
-> but nothing in the gate would catch a regression there. Adding intrinsic cases is the obvious
-> next change to this file.
+> **Known gap, now closed for `gravity`.** Until 26.08.2026 every section exercised the scalar
+> goal only, so nothing in the gate would have caught a regression in a vector goal.
+> `test_gravity_goal` covers the branches that differ: the width of the goal space, the ball
+> success criterion, the fixed reference goal, the estimate against the extrinsic direction
+> cosine it reconstructs, `compute_reward` batched at `goal_dim > 1`, the potential rescale, and
+> the RNG restore around the reference recording.
 
 ### 4.2 Goal-independent terms travel through `info`
 
@@ -1085,10 +1101,15 @@ reloading will silently evaluate the model under different settings than it was 
 
 `load_model_yaml` also carries back-compat shims for renamed and retired flags — the old single
 `age` is expanded into `morph_age` + `physio_age`, `proprio_only_qpos` / `no_proprio` are
-translated into `proprio_config`, and the retired `intrinsic_goal` / `proprio_w` / `vesti_w` are
+translated into `proprio_config`, `intrinsic_goal_eps` / `intrinsic_reference_samples` are renamed
+to `gravity_goal_eps` / `gravity_reference_samples` (§3.5), and the retired `intrinsic_goal` /
+`proprio_w` / `vesti_w` / `intrinsic_goal_joints` / `intrinsic_acc_axes` / `intrinsic_acc_w` are
 dropped with a printed notice (§3.4) so they do not land on the argparse namespace as settings
-nothing reads. Follow that pattern when renaming, and keep the `# Previously: --old_name`
-comments the fork uses (`--pen_factor` was `--pen_fac`).
+nothing reads. Note the rename has to happen here and not only as an argparse alias:
+`set_defaults` keys on the *dest*, so a stored `intrinsic_goal_eps` would otherwise be a dead
+attribute and the run would evaluate at the default radius instead of its own. Follow that
+pattern when renaming, and keep the `# Previously: --old_name` comments the fork uses
+(`--pen_factor` was `--pen_fac`).
 
 Deliberately **not** stored, because they describe the invocation rather than the model:
 `save_model`, `save_every`, `test`, `render_video`, `use_muscle`, `roll_over_starting_position`.

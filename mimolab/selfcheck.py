@@ -354,6 +354,95 @@ def _pdf_export():
     return "3.5 in and 7.0 in pages, TrueType embedded, PNG unaffected"
 
 
+@check("thesis figures are placed at their final size with the given labels")
+def _thesis():
+    rows, _ = queries.search({}, limit=30)
+    run_ids = [r["run_id"] for r in rows]
+    series = queries.series_of(run_ids)
+    assert series, "no series for a non-empty selection"
+
+    # The label editor must list the series in the order the renderer groups them, or row i of
+    # the editor names a different line than swatch i suggests.
+    grouped, order = set(), []
+    for run_id in run_ids:
+        row = db.one("SELECT date, posture, model_name FROM runs WHERE run_id=?", (run_id,))
+        key = (row["date"], row["posture"], row["model_name"])
+        if key not in grouped:
+            grouped.add(key)
+            order.append(key)
+    assert [s["key"] for s in series] == [plots._series_key(k) for k in order], \
+        "the label editor lists series in a different order than the chart draws them"
+
+    overrides = {s["key"]: f"Series {i}" for i, s in enumerate(series[:3], start=1)}
+    for column, size in plots.THESIS_SIZES.items():
+        with plots.render_as("pdf", column, style="thesis"):
+            data = plots.curve(run_ids, indexer.HEADLINE_TAG, aggregate=True, band="std",
+                               label_overrides=overrides, ylabel="Mean Success Rate")
+        assert data.startswith(b"%PDF")
+        media = re.search(rb"/MediaBox\s*\[([\d.\s-]+)\]", data)
+        box = [float(v) for v in media.group(1).split()]
+        width, height = box[2] - box[0], box[3] - box[1]
+        # Placed at its final size: \includegraphics must not need a width= to rescale it.
+        assert abs(width - size[0] * 72) < 1.5 and abs(height - size[1] * 72) < 1.5, \
+            f"{column}: {width:.0f}x{height:.0f} pt, expected {size[0] * 72:.0f}x{size[1] * 72:.0f}"
+    return (f"single {plots.THESIS_SIZES['single']} in, double {plots.THESIS_SIZES['double']} in; "
+            f"{len(overrides)} labels applied")
+
+
+@check("stored --group payloads feed the bar chart")
+def _bars():
+    files = evals.group_jsons()
+    if not files:
+        return "skipped -- no group evaluation stored yet"
+    import json as _json
+    for entry in files[:3]:
+        with open(entry["run_path"]) as fh:
+            payload = _json.load(fh)
+        # plot_eval_success.py reads exactly these keys; losing one breaks the thesis figure.
+        assert "rows" in payload and payload["rows"], f"{entry['job_id']}: no rows"
+        for row in payload["rows"]:
+            assert "rolled" in row and "starting_position" in row, \
+                f"{entry['job_id']}: a row is missing rolled/starting_position"
+    return f"{len(files)} payload(s) stored, newest {files[0]['label']}"
+
+
+@check("the bar panel offers only evaluations of the selected runs")
+def _bar_scope():
+    everything = evals.group_jsons()
+    if not everything:
+        return "skipped -- no group evaluation stored yet"
+
+    # A selection that includes the newest payload's own runs must offer it...
+    import json as _json
+    with open(everything[0]["run_path"]) as fh:
+        payload = _json.load(fh)
+    dirs = {str(Path(r["model"]).parent) for r in payload.get("rows", []) if r.get("model")}
+    run_ids = []
+    for path in dirs:
+        row = db.one("SELECT run_id FROM runs WHERE path=?", (path,))
+        if row:
+            run_ids.append(row["run_id"])
+    assert run_ids, "the newest payload names no indexed run"
+    offered = {e["job_id"] for e in evals.group_jsons(run_ids=run_ids)}
+    assert everything[0]["job_id"] in offered, "a payload's own runs do not offer it"
+
+    # ...and a selection sharing none of its runs must not.
+    others = [r["run_id"] for r in db.query(
+        "SELECT run_id FROM runs WHERE path NOT IN ({}) LIMIT 40".format(
+            ",".join("?" * len(dirs))), list(dirs))]
+    if others:
+        stray = evals.group_jsons(run_ids=others)
+        for entry in stray:
+            with open(entry["run_path"]) as fh:
+                other = _json.load(fh)
+            other_dirs = {str(Path(r["model"]).parent) for r in other.get("rows", [])
+                          if r.get("model")}
+            assert other_dirs & set(dirs) or entry["job_id"] != everything[0]["job_id"], \
+                "an unrelated payload was offered"
+    assert evals.group_jsons(run_ids=[]) == [], "an empty selection offered evaluations"
+    return f"{len(everything)} stored, {len(offered)} offered for the newest payload's own runs"
+
+
 @check("series labels stay distinct")
 def _labels():
     names = ["sac_her_sparse_goal_lohi_curriculum",

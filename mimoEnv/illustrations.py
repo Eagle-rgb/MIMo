@@ -422,6 +422,34 @@ def main():
                         default='prone',
                         help='Choose the starting position of MIMo in the roll_over environment. Put '
                              'either \'supine\', \'prone\' or \'alternating\'. Default: \'prone\'.')
+    parser.add_argument('--goal_achievement_function', required=False,  # Previously: --roll_over_goal_function
+                        choices=['cos', 'gravity'],
+                        default='cos',
+                        help="Which quantity the goal is defined on. 'cos' is the scalar "
+                             "rotation rho in [0, 1], read off the root free joint, with success "
+                             "'rho >= desired'. 'gravity' is the 2-vector of the gravity "
+                             "direction's x component in the hip and chest frames (+1 supine, -1 "
+                             "prone), reconstructed from the gyroscope and the joint chain "
+                             "instead of the root joint, with success a ball of radius "
+                             "--gravity_goal_eps around a recorded reference posture. The two "
+                             "describe the same roll -- 'gravity' averaged over the two bodies "
+                             "IS rho -- but HER sees the vector, not the average, and trains "
+                             "from it without --goal_low/--goal_high (14/16 seeds against 3/16). "
+                             "'angle' and 'intrinsic' were removed on 26.08.2026; see "
+                             "docs/roll_over.md 3.4. Default: 'cos'.")
+    # --- 'gravity' goal function -----------------------------------------------------------
+    parser.add_argument('--gravity_goal_eps', '--intrinsic_goal_eps',  # Previously: --intrinsic_goal_eps
+                        default=0.15, type=float, required=False,
+                        help="Success radius of the gravity goal: success is "
+                             "||achieved - desired|| <= eps. In the goal's own +-1 units, "
+                             "eps = 2*(1 - rho_target) per body, so 0.15 over two bodies is "
+                             "about rho 0.925. Ignored by --goal_achievement_function=cos.")
+    parser.add_argument('--gravity_reference_samples', '--intrinsic_reference_samples',
+                        default=20, type=int, required=False,
+                        help="How many ISR-free resets the prone/supine reference goals are "
+                             "averaged over. One reset would pin the goal to a single draw of "
+                             "the initial joint noise, and MIMo would be scored on reproducing "
+                             "that draw. Ignored by --goal_achievement_function=cos.")
     # 25.08.2026 See MIMoRollOverEnv.__init__ for the measurement this comes out of.
     parser.add_argument('--goal_tolerance', default=None, type=float, required=False,
                         help="Turn the scalar success test into a band: success is "
@@ -430,8 +458,9 @@ def main():
                              "instead of 0.95. The real task is unchanged (rho is capped at 1.0, "
                              "so |rho-1|<=0.05 IS rho>=0.95); what changes is the reward of the "
                              "goals HER relabels onto, which is the point. 0.05 matches the "
-                             "0.15 radius the removed 'gravity' goal used over two bodies. Scalar "
-                             "goal functions only. Default: unset (threshold).")
+                             "0.15 radius --goal_achievement_function=gravity uses over two "
+                             "bodies. 'cos' only -- 'gravity' is a point goal already, and "
+                             "combining the two raises. Default: unset (threshold).")
     parser.add_argument('--roll_over_model_path_auto', action='store_true',
                         help="""If set, the path of the model for the roll_over environment
 is automatically set to the following:
@@ -594,6 +623,7 @@ An example is '251206_prone_linear_1e6_test'
     touch = args.touch
     achieved_goal_in_observation=args.achieved_goal_in_observation
     pen_factor = args.pen_factor
+    goal_function = args.goal_achievement_function
     freeze_arm = args.freeze_arm
     freeze_leg = args.freeze_leg
     side_lying = args.side_lying
@@ -739,6 +769,9 @@ An example is '251206_prone_linear_1e6_test'
             proprio_params=proprio_params,
             pbrs_w=pbrs_w,
             pen_factor=pen_factor,
+            goal_function=goal_function,
+            gravity_goal_eps=args.gravity_goal_eps,
+            gravity_reference_samples=args.gravity_reference_samples,
             goal_tolerance=args.goal_tolerance,
             freeze_leg=freeze_leg,
             freeze_arm=freeze_arm,
@@ -845,6 +878,11 @@ An example is '251206_prone_linear_1e6_test'
         'obs_norm': observation_normalization,
         'touch': touch,
         'pen_factor': pen_factor,
+        # Experiment-defining: the goal function fixes the width of the goal space, so a model
+        # reloaded without it cannot even be loaded, let alone evaluated.
+        'goal_achievement_function': goal_function,
+        'gravity_goal_eps': args.gravity_goal_eps,
+        'gravity_reference_samples': args.gravity_reference_samples,
         # Experiment-defining: it changes the success test and the value of the fixed goal, so a
         # model reloaded without it would be evaluated against a different task.
         'goal_tolerance': args.goal_tolerance,
@@ -897,6 +935,9 @@ An example is '251206_prone_linear_1e6_test'
             touch_params=ROLL_OVER_TOUCH_PARAMS if touch else None,
             achieved_goal_in_observation=achieved_goal_in_observation,
             proprio_params=proprio_params, pbrs_w=pbrs_w, pen_factor=pen_factor,
+            goal_function=goal_function,
+            gravity_goal_eps=args.gravity_goal_eps,
+            gravity_reference_samples=args.gravity_reference_samples,
             goal_tolerance=args.goal_tolerance,
             freeze_leg=freeze_leg, freeze_arm=freeze_arm,
             success_at_side_lying=False,

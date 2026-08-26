@@ -47,8 +47,9 @@ for i in $(seq 0 $((NUMBER_OF_RUNS-1))); do
 		"--goal_high=0.95" \
 		"--roll_over_model_path_auto" \
 		# 26.08.2026 Was '--goal_achievement_function=gravity --intrinsic_goal_eps=0.15'.
-		# Both flags are gone -- the environment has one goal now. This sweep already passes
-		# --goal_low/--goal_high, which is the goal variation HER needs, so it runs unchanged.
+		# Both flags exist again (the goal was removed and readded the same day), but this
+		# sweep stays on 'cos': it already passes --goal_low/--goal_high, which is the goal
+		# variation HER needs, so it runs unchanged. Add the two flags back to compare.
 		"--save_model=${MODEL_NAME}_run_$((i))" \
 		"--morph_age=9" \
 		"--physio_age=9" \

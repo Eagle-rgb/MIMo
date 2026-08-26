@@ -42,6 +42,21 @@ THEMES = {
 
 HEADLINE_TAG = "rollout/ep_rho_max_mean"
 
+# Axis names for a document, where 'ep_rho_max_mean' means nothing to the reader.
+PRETTY_Y = {
+    "rollout/success_rate": "Mean Success Rate",
+    "rollout/ep_rho_max_mean": "Mean Rotation $\\rho_{max}$",
+    "rollout/side_lying_success_rate": "Side-Lying Rate",
+    "rollout/ep_rew_mean": "Mean Episode Reward",
+    "rollout/ep_len_mean": "Mean Episode Length",
+    "eval/roll_rate": "Roll Rate",
+}
+
+
+def _series_key(key):
+    """The identity of one aggregated series: date|posture|model_name."""
+    return "|".join("" if part is None else str(part) for part in key)
+
 # Paper style for exported figures, mirroring results/icdlplot.py so a figure exported here and a
 # figure produced by the analysis scripts sit on the same page without looking like two documents.
 # fonttype 42 embeds TrueType rather than matplotlib's default Type 3, which several thesis and
@@ -63,6 +78,23 @@ PAPER_RC = {
 # so the export is not the screen figure re-encoded -- it is re-laid out at the target width.
 COLUMN_WIDTHS = {"single": (3.5, 2.6), "double": (7.0, 3.9)}
 
+# results/training_plot_no_sig.py draws a square 3x3 in figure; the reference figure
+# (results/proprio_ablations/26-08-12_proprio_ablations.pdf) is that shape. A thesis figure is
+# rendered at its final size so \includegraphics needs no scaling -- scaling is what makes the
+# type in one figure disagree with the type in the next.
+THESIS_SIZES = {"single": (3.4, 3.2), "double": (6.9, 3.6)}
+
+# The palette of results/icdlplot.py, so a curve drawn here sits beside one drawn by the analysis
+# scripts without looking like a different document.
+ICDL_COLORS = ["#99ff99", "#ff9999", "#9999ff", "#9f9f9f", "#0FEFEB", "#DCEB12"]
+
+# Those pastels are too light to read as lines on white; the scripts draw them at full width on a
+# pale band of the same hue. Darkened here for the line, kept pale for the band.
+def _darken(hex_color, factor=0.62):
+    hex_color = hex_color.lstrip("#")
+    rgb = [int(hex_color[i:i + 2], 16) for i in (0, 2, 4)]
+    return "#%02x%02x%02x" % tuple(int(c * factor) for c in rgb)
+
 # Render options for the request being served. A ContextVar rather than module state because
 # matplotlib's rcParams are global and FastAPI serves sync handlers on a threadpool: two
 # concurrent exports would otherwise fight over the style.
@@ -70,15 +102,23 @@ _OPTS = contextvars.ContextVar("mimolab_render_opts", default=None)
 
 
 def _opts():
-    return _OPTS.get() or {"fmt": "png", "paper": False, "size": None}
+    return _OPTS.get() or {"fmt": "png", "paper": False, "size": None, "thesis": False}
 
 
 @contextlib.contextmanager
-def render_as(fmt="png", column=None):
-    """Render everything inside this block as 'fmt', optionally at a fixed column width."""
-    paper = fmt == "pdf"
-    size = COLUMN_WIDTHS.get(column) if column else None
-    token = _OPTS.set({"fmt": fmt, "paper": paper, "size": size})
+def render_as(fmt="png", column=None, style="screen"):
+    """Render everything inside this block as 'fmt', optionally at a fixed column width.
+
+    style="thesis" additionally applies the paper typography on screen, so the PNG in the browser
+    is a preview of the PDF rather than a differently-styled cousin.
+    """
+    thesis = style == "thesis"
+    paper = fmt == "pdf" or thesis
+    if column:
+        size = (THESIS_SIZES if thesis else COLUMN_WIDTHS).get(column)
+    else:
+        size = THESIS_SIZES["single"] if thesis else None
+    token = _OPTS.set({"fmt": fmt, "paper": paper, "size": size, "thesis": thesis})
     try:
         if paper:
             with plt.rc_context(PAPER_RC):
@@ -166,8 +206,12 @@ TAG_NOTES = {
 
 def _figure(theme, width=9.0, height=4.6):
     t = THEMES[theme]
-    size = _opts()["size"]
-    if size:
+    opts = _opts()
+    size = opts["size"]
+    if size and opts.get("thesis"):
+        # A thesis figure is placed at its final size, so both dimensions are prescribed.
+        width, height = size
+    elif size:
         # Keep the caller's aspect ratio, but honour the requested column width.
         width, height = size[0], size[0] * (height / width)
     # Paper figures are laid out constrained so everything fits *inside* the requested size.
@@ -227,7 +271,9 @@ def _common_grid(series, points=200):
     return grid, stacked
 
 
-def curve(run_ids, tag, theme="light", aggregate=False, smooth=1, title=None):
+def curve(run_ids, tag, theme="light", aggregate=False, smooth=1, title=None,
+          label_overrides=None, band="minmax", xlabel=None, ylabel=None, ylim=None,
+          legend_title=None, legend_loc=None):
     """Training curves for a set of runs.
 
     aggregate=False draws one line per run; aggregate=True collapses each experiment group
@@ -242,8 +288,13 @@ def curve(run_ids, tag, theme="light", aggregate=False, smooth=1, title=None):
     if not series:
         return _placeholder(theme, f"no '{tag}' logged for this selection")
 
+    thesis = _opts().get("thesis")
+    label_overrides = label_overrides or {}
     fig, ax, t = _figure(theme)
-    colors = t["series"]
+    # A thesis figure follows results/icdlplot.py's palette; the app's own charts follow the
+    # data-viz palette. Same data, two audiences.
+    colors = [_darken(c) for c in ICDL_COLORS] if thesis else t["series"]
+    bands = ICDL_COLORS if thesis else colors
 
     if aggregate:
         groups = {}
@@ -283,15 +334,30 @@ def curve(run_ids, tag, theme="light", aggregate=False, smooth=1, title=None):
             if grid is None:
                 continue
             mean = _smooth(stacked.mean(axis=0), smooth)
+            if band == "std":
+                # results/training_plot_no_sig.py draws mean +- std, clipped: a rate cannot leave
+                # [0, 1], and an unclipped band implies runs that were never possible.
+                spread = stacked.std(axis=0)
+                lower, upper = np.clip(mean - spread, 0.0, 1.0), np.clip(mean + spread, 0.0, 1.0)
+            else:
+                lower, upper = stacked.min(axis=0), stacked.max(axis=0)
             # 'ep100_18 prone' already says prone; only add the posture when it is not there.
-            base_label = labels[key]
-            detail = f"n={len(members)}" if key[1] in base_label else f"{key[1]}, n={len(members)}"
-            label = f"{base_label} ({detail})"
-            ax.fill_between(grid, stacked.min(axis=0), stacked.max(axis=0),
-                            color=colors[i], alpha=0.15, linewidth=0)
-            ax.plot(grid, mean, color=colors[i], linewidth=2.0, label=label,
-                    solid_capstyle="round")
-            if len(items) <= 4 and not _opts()["paper"]:
+            # An explicit label wins outright: for a thesis legend the reader wants
+            # 'qpos+torque', not the run directory's name and seed count.
+            override = label_overrides.get(_series_key(key))
+            if override:
+                label = override
+            else:
+                base_label = labels[key]
+                detail = (f"n={len(members)}" if key[1] in base_label
+                          else f"{key[1]}, n={len(members)}")
+                label = f"{base_label} ({detail})"
+            ax.fill_between(grid, lower, upper,
+                            color=bands[i % len(bands)], alpha=0.30 if thesis else 0.15,
+                            linewidth=0)
+            ax.plot(grid, mean, color=colors[i % len(colors)],
+                    linewidth=2.6 if thesis else 2.0, label=label, solid_capstyle="round")
+            if len(items) <= 4 and not _opts()["paper"] and not thesis:
                 ax.annotate(labels[key], xy=(grid[-1], mean[-1]),
                             xytext=(6, 0), textcoords="offset points",
                             color=colors[i], fontsize=8, va="center", fontweight="semibold")
@@ -310,27 +376,45 @@ def curve(run_ids, tag, theme="light", aggregate=False, smooth=1, title=None):
             label = run_id
             if row:
                 seed = "" if row["seed_idx"] is None else f" #{row['seed_idx']}"
-                label = f"{names.get(row['model_name'], shorten(row['model_name']))}{seed}"
+                label = (label_overrides.get(run_id)
+                         or f"{names.get(row['model_name'], shorten(row['model_name']))}{seed}")
             ax.plot(np.asarray(steps), _smooth(np.asarray(vals), smooth),
-                    color=colors[i], linewidth=1.8, label=label, solid_capstyle="round")
+                    color=colors[i % len(colors)], linewidth=2.6 if thesis else 1.8,
+                    label=label, solid_capstyle="round")
         if len(series) > len(shown):
             ax.plot([], [], color=t["faint"], linewidth=1.8,
                     label=f"+{len(series) - len(shown)} more runs not shown")
 
     paper = _opts()["paper"]
-    ax.set_xlabel("environment steps", color=t["muted"], fontsize=None if paper else 9)
-    ax.set_ylabel(tag.split("/")[-1], color=t["muted"], fontsize=None if paper else 9)
+    ink = t["ink"] if thesis else t["muted"]
+    ax.set_xlabel(xlabel or ("Steps" if thesis else "environment steps"),
+                  color=ink, fontsize=None if paper else 9)
+    ax.set_ylabel(ylabel or (PRETTY_Y.get(tag, tag.split("/")[-1]) if thesis
+                             else tag.split("/")[-1]),
+                  color=ink, fontsize=None if paper else 9)
+    if ylim:
+        ax.set_ylim(*ylim)
+    if thesis:
+        # The reference figure's grid: dashed, faint, behind the data.
+        ax.grid(True, linestyle="--", alpha=0.5, color=t["grid"], linewidth=0.7)
+        ax.tick_params(colors=ink)
     ax.margins(x=0.02)
     # The italic caption is on-screen guidance about how to read the metric. A figure in a
     # document gets its caption from the document, and at 3.5 in the line runs off the page.
     note = None if paper else TAG_NOTES.get(tag)
-    ax.set_title(title or tag, color=t["ink"], fontsize=None if paper else 11.5, loc="left",
-                 pad=26 if note else 12, fontweight="semibold")
+    if thesis:
+        # No title: the figure gets its caption from the document, and a title inside the
+        # graphic duplicates it on the page.
+        if title:
+            ax.set_title(title, color=ink, loc="center")
+    else:
+        ax.set_title(title or tag, color=t["ink"], fontsize=None if paper else 11.5, loc="left",
+                     pad=26 if note else 12, fontweight="semibold")
     if note:
         ax.text(0, 1.015, note, transform=ax.transAxes, color=t["muted"], fontsize=8.2,
                 va="bottom", style="italic")
 
-    if tag == HEADLINE_TAG:
+    if tag == HEADLINE_TAG and not thesis:
         ax.axhline(0.95, color=t["faint"], linewidth=1.0, linestyle=(0, (4, 3)))
         # Right-aligned: the upper left is where the earliest data and the busiest labels sit.
         ax.text(0.998, 0.95, "roll threshold 0.95 ", transform=ax.get_yaxis_transform(),
@@ -339,7 +423,14 @@ def curve(run_ids, tag, theme="light", aggregate=False, smooth=1, title=None):
     # Legend below the axes, never over the data.
     handles, legend_labels = ax.get_legend_handles_labels()
     if handles:
-        if paper:
+        if thesis:
+            # Inside the axes with a frame, like the reference figure: at 3.4 in a legend below
+            # the axes eats a third of the height.
+            legend = ax.legend(handles, legend_labels, loc=legend_loc or "best",
+                               title=legend_title, framealpha=0.85, fancybox=False,
+                               borderpad=0.4, labelspacing=0.3, handlelength=1.6)
+            legend.get_frame().set_linewidth(0.6)
+        elif paper:
             # "outside" is what makes constrained layout *reserve* room for the legend. With the
             # axes-anchored version it lands on top of the x-axis label at column width.
             # A single column stacks the entries; at double width they fit side by side.
@@ -352,7 +443,7 @@ def curve(run_ids, tag, theme="light", aggregate=False, smooth=1, title=None):
                                frameon=False, ncols=min(4, len(handles)), handlelength=1.6,
                                columnspacing=1.6, borderaxespad=0)
         for text in legend.get_texts():
-            text.set_color(t["muted"])
+            text.set_color(ink if thesis else t["muted"])
     return _emit(fig)
 
 
@@ -450,3 +541,63 @@ def horizon_warning(run_ids):
                 ", ".join(str(h) for h in horizons) +
                 " steps). Curves are not directly comparable across them.")
     return None
+
+
+# ---------------------------------------------------------------------------------------------
+# Evaluation bar chart
+# ---------------------------------------------------------------------------------------------
+
+def eval_bars(sources, out_path, metric="successful", threshold=0.75, xlabel="", ylabel=None,
+              annotate=False, column="single", height=3.0, title=None, sort="given",
+              python=None, cwd=None):
+    """Draw the success bar chart by calling results/plot_eval_success.py.
+
+    Deliberately a subprocess rather than a reimplementation: that script already produces the
+    thesis figure from exactly the --group JSON the evaluation writes, and a second implementation
+    of the same chart would drift from the one the document is built with. 'sources' is a list of
+    (label, json_path).
+
+    Returns the raw bytes of the rendered file.
+    """
+    import subprocess
+    import json as _json
+
+    if not sources:
+        raise ValueError("no evaluation files selected")
+
+    # The script lays one panel out per posture and multiplies the width by their number, so the
+    # target column width has to be divided by however many postures the payloads contain.
+    postures = set()
+    for _label, path in sources:
+        try:
+            with open(path) as fh:
+                payload = _json.load(fh)
+        except (OSError, ValueError):
+            continue
+        for row in payload.get("rows", []):
+            if row.get("starting_position"):
+                postures.add(row["starting_position"])
+    total_width = (THESIS_SIZES.get(column) or THESIS_SIZES["single"])[0]
+    panel_width = total_width / max(1, len(postures))
+
+    argv = [python or "python", "results/plot_eval_success.py",
+            f"--out={out_path}", f"--metric={metric}", f"--threshold={threshold}",
+            f"--panel_width={panel_width:.3f}", f"--height={height}", f"--sort={sort}"]
+    if xlabel is not None:
+        argv.append(f"--xlabel={xlabel}")
+    if ylabel:
+        argv.append(f"--ylabel={ylabel}")
+    if title:
+        argv.append(f"--title={title}")
+    if annotate:
+        argv.append("--annotate")
+    for label, path in sources:
+        argv.append("--json")
+        argv.append(f"{label}={path}" if label else str(path))
+
+    proc = subprocess.run(argv, cwd=cwd, capture_output=True, text=True, timeout=180)
+    try:
+        with open(out_path, "rb") as fh:
+            return fh.read()
+    except OSError:
+        raise RuntimeError((proc.stderr or proc.stdout or "plot_eval_success.py produced nothing")[-2000:])

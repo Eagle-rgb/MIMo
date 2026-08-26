@@ -116,8 +116,8 @@ if __name__ == "__main__":
     parser.add_argument('--num_runs_in_label', action='store_true', help=f"Suffix label " \
                         "with number of runs.")
     parser.add_argument('--legend_title', type=str, required=False, help="Title for legend.")
-    parser.add_argument('--tag', type=str, default="success_rate", required=False, help="Tag to load. Default: rollout/success_rate. Specify" \
-            "without the 'rollout/' prefix.")
+    parser.add_argument('--tag', type=str, default="rollout/success_rate", required=False,
+                        help="Tag to load. Default: rollout/success_rate.")
 
     for i in range(1,max_models+1):
         parser.add_argument(f'--date{i}', required=i==1, type=valid_date, help=f"Date of the runs {i}")
@@ -165,8 +165,7 @@ if __name__ == "__main__":
         suffixes.append(suffix)
         labels.append(label)
         haltungen.append(haltung)
-        #tags.append("rollout/" + tag)
-        tags.append("rollout/" + args.tag)
+        tags.append(args.tag)
 
     if len(dates) == 0:
         raise ValueError("No models specified...")

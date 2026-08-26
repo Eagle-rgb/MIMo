@@ -36,7 +36,10 @@ def _run_group_eval(task):
     """
     job_id = task["job_id"]
     log_path = SETTINGS.log_dir / f"{job_id}.log"
-    json_path = SETTINGS.state_dir / f"{job_id}.json"
+    # Kept, not temporary: results/plot_eval_success.py draws the thesis bar chart straight from
+    # this payload, so the file is the handover between evaluation and figure.
+    SETTINGS.eval_dir.mkdir(parents=True, exist_ok=True)
+    json_path = SETTINGS.eval_dir / f"{job_id}.json"
 
     argv = [SETTINGS.python, "mimoEnv/eval_rollover.py",
             f"--group={task['group_spec']}",
@@ -78,11 +81,7 @@ def _run_group_eval(task):
         except OSError:
             pass
         raise RuntimeError(tail or f"eval_rollover exited with {proc.returncode} and wrote no JSON")
-    finally:
-        try:
-            os.unlink(json_path)
-        except OSError:
-            pass
+    payload["_json_path"] = str(json_path)
     return payload
 
 
@@ -188,6 +187,8 @@ def _loop():
             if task.get("kind") == "group":
                 payload = _run_group_eval(task)
                 stored, missing = _store_group(payload)
+                db.execute("UPDATE jobs SET run_path=? WHERE job_id=?",
+                           (payload.get("_json_path") or task["group_spec"], job_id))
                 note = f"{stored} run(s) stored"
                 if missing:
                     note += f"; {len(missing)} not in the index"
@@ -275,6 +276,63 @@ def submit_group(date, posture, model_name, episodes=40, checkpoint="last",
     start_worker()
     _queue.put(task)
     return dict(db.one("SELECT * FROM jobs WHERE job_id=?", (job_id,)))
+
+
+def group_json(date, posture, model_name):
+    """The most recent --group payload for this experiment, if one was ever produced."""
+    from . import queries
+    experiment = queries.experiment(date, posture, model_name)
+    if experiment is None:
+        return None
+    spec = experiment["group_spec"]
+    row = db.one("""SELECT run_path FROM jobs WHERE kind='group' AND state='finished'
+                      AND (cmd LIKE ? OR run_path LIKE ?)
+                    ORDER BY finished_at DESC LIMIT 1""",
+                 (f"%{spec}%" if spec else "%", "%.json"))
+    if row and row["run_path"] and row["run_path"].endswith(".json") \
+            and Path(row["run_path"]).exists():
+        return row["run_path"]
+    return None
+
+
+def group_jsons(limit=200, run_ids=None):
+    """Stored --group payloads, newest first.
+
+    'run_ids' restricts the list to payloads that actually evaluated runs in that selection --
+    the bar panel sits on the Analysis page, where offering every evaluation ever made means the
+    chart can be built from experiments the page is not showing. Matching is done on the run
+    directories inside each payload rather than on the job's label, because a label is free text
+    and two experiments can share one.
+    """
+    rows = db.query("""SELECT job_id, label, run_path, finished_at FROM jobs
+                       WHERE kind='group' AND state='finished' AND run_path LIKE '%.json'
+                       ORDER BY finished_at DESC LIMIT ?""", (limit,))
+    found = [dict(r) for r in rows if r["run_path"] and Path(r["run_path"]).exists()]
+    if run_ids is None:
+        return found
+
+    wanted = set()
+    for run_id in run_ids:
+        row = db.one("SELECT path FROM runs WHERE run_id=?", (run_id,))
+        if row and row["path"]:
+            wanted.add(os.path.abspath(row["path"]))
+    if not wanted:
+        return []
+
+    matching = []
+    for entry in found:
+        try:
+            with open(entry["run_path"]) as fh:
+                payload = json.load(fh)
+        except (OSError, ValueError):
+            continue
+        dirs = {os.path.abspath(str(Path(row["model"]).parent))
+                for row in payload.get("rows", []) if row.get("model")}
+        if dirs & wanted:
+            entry["n_runs"] = len(dirs)
+            entry["n_selected"] = len(dirs & wanted)
+            matching.append(entry)
+    return matching
 
 
 def job(job_id):

@@ -81,6 +81,14 @@ def env_kwargs(config, starting_position, goal):
         pen_factor=config.get('pen_factor', 0.02),
         nopen=config.get('nopen', False),
         sparse_reward=config.get('sparse_reward', False),
+        # 26.08.2026 The goal function fixes the width of the goal space, so a run trained with
+        # 'gravity' cannot even be loaded against a 'cos' env. Absent from every data.yml written
+        # between 26.08.2026 and the readd, where it correctly reads as 'cos'.
+        goal_function=config.get('goal_achievement_function', 'cos'),
+        gravity_goal_eps=config.get('gravity_goal_eps',
+                                    config.get('intrinsic_goal_eps', 0.15)),
+        gravity_reference_samples=config.get('gravity_reference_samples',
+                                             config.get('intrinsic_reference_samples', 20)),
         # 25.08.2026 Band instead of threshold, if the run was trained that way. Absent from
         # every data.yml written before that date, where it correctly reads as None.
         goal_tolerance=config.get('goal_tolerance'),
@@ -108,6 +116,18 @@ def env_kwargs(config, starting_position, goal):
     if isinstance(proprio, dict):
         kwargs['proprio_params'] = proprio
     return kwargs
+
+
+def goal_label(config, goal):
+    """How to describe the environment's desired_goal in the printed header.
+
+    'goal_low'/'goal_high' pin a scalar for 'cos', but the gravity goal ignores them: its target
+    is the reference vector recorded in the opposite posture. Printing "goal=0.95" for such a run
+    would name a number the environment never used.
+    """
+    if config.get('goal_achievement_function', 'cos') == 'gravity':
+        return "opposite-posture reference (gravity)"
+    return f"{goal:.2f}"
 
 
 def build_env(config, starting_position, goal):
@@ -560,8 +580,8 @@ def main():
         print(f"run                 : {label}")
         print(f"episodes            : {episodes} per row (deterministic, ISR off, {start}, "
               f"{episode_steps} steps)")
-        print(f"env goal            : {goal:.2f} (fixed; rho_max is measured from the simulation, "
-              f"so it does not depend on this)")
+        print(f"env goal            : {goal_label(config, goal)} (fixed; rho_max is measured "
+              f"from the simulation, so it does not depend on this)")
         print()
         print(f"{'fed goal':>9}  {'roll':>6}  {'side':>6}  {'rho_max mean':>13}  {'min':>6}  "
               f"{'max':>6}")
@@ -585,7 +605,7 @@ def main():
     print(f"run                 : {label}")
     print(f"algorithm / her     : {algorithm} / {config.get('her', False)}")
     print(f"reward              : {'sparse' if config.get('sparse_reward') else ('pbrs' if config.get('pbrs') else 'distance')}")
-    print(f"episodes            : {episodes} (deterministic, ISR off, goal={goal:.2f}, "
+    print(f"episodes            : {episodes} (deterministic, ISR off, goal={goal_label(config, goal)}, "
           f"{start}, {episode_steps} steps)")
     if args.policy_goal is not None:
         print(f"policy was fed      : desired_goal={args.policy_goal:.2f} (constant -- the score "

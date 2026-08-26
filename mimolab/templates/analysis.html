@@ -41,18 +41,133 @@
     <div class="chartbar">
       <span class="label">Figure</span>
       <span class="spacer"></span>
-      <label class="inline" for="column">PDF width</label>
+      <label class="inline" for="style">Style</label>
+      <select id="style">
+        <option value="screen">Screen</option>
+        <option value="thesis">Thesis</option>
+      </select>
+      <label class="inline" for="column">Width</label>
       <select id="column">
         <option value="double">2 columns &middot; 7.0 in</option>
         <option value="single">1 column &middot; 3.5 in</option>
       </select>
       <a class="btn sm" id="exportmain" download href="#"
-         title="Vector PDF in the paper style (serif, 300 dpi, TrueType fonts) at the chosen column width">Export PDF</a>
+         title="Vector PDF at exactly the chosen column width, so \includegraphics needs no scaling">Export PDF</a>
     </div>
+
+    <details class="figopts" id="figopts">
+      <summary>Legend labels and axes</summary>
+      <p class="hint">The figure is rendered at its final size, so
+        <code>\includegraphics</code> needs no <code>width=</code>. Leave a label empty to keep
+        the run name.</p>
+
+      <div class="fieldrow">
+        <div class="field">
+          <label for="ylabelin">Y axis</label>
+          <input id="ylabelin" type="text" placeholder="Mean Success Rate">
+        </div>
+        <div class="field">
+          <label for="xlabelin">X axis</label>
+          <input id="xlabelin" type="text" placeholder="Steps">
+        </div>
+        <div class="field">
+          <label for="bandsel">Band</label>
+          <select id="bandsel">
+            <option value="std">mean &plusmn; std</option>
+            <option value="minmax">min&ndash;max</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="legendloc">Legend</label>
+          <select id="legendloc">
+            <option value="best">auto</option>
+            <option value="upper left">upper left</option>
+            <option value="lower right">lower right</option>
+            <option value="upper right">upper right</option>
+            <option value="lower left">lower left</option>
+          </select>
+        </div>
+      </div>
+
+      {% if series %}
+      <table class="runs labeltable">
+        <thead><tr><th style="width:1.2rem"></th><th>Series</th><th>Legend label</th></tr></thead>
+        <tbody>
+        {% for sr in series %}
+          <tr>
+            <td><i class="swatch" data-swatch="{{ loop.index0 }}"></i></td>
+            <td class="runmeta">{{ sr.model_name }} <span style="opacity:.6">{{ sr.posture }} &middot; {{ sr.date or '' }} &middot; n={{ sr.n }}</span></td>
+            <td><input class="labelin" type="text" data-series="{{ sr.key }}"
+                       placeholder="{{ sr.model_name }}"></td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+      {% endif %}
+    </details>
     <div class="chart">
       <img id="mainchart" alt="Training curve"
         data-chart-base="/api/plot/curve.png?{% for r in selected %}run={{ r|urlencode }}&amp;{% endfor %}">
     </div>
+  </div>
+
+  <div class="panel" style="margin-top:.9rem">
+    <div class="chartbar">
+      <span class="label">Evaluation bars</span>
+      <span class="spacer"></span>
+      <label class="inline" for="barmetric">Metric</label>
+      <select id="barmetric">
+        <option value="successful">Successful models [%]</option>
+        <option value="roll_rate">Mean roll rate [%]</option>
+      </select>
+      <label class="inline" for="barcolumn">Width</label>
+      <select id="barcolumn">
+        <option value="single">1 column &middot; 3.5 in</option>
+        <option value="double">2 columns &middot; 7.0 in</option>
+      </select>
+      <a class="btn sm" id="exportbars" download href="#">Export PDF</a>
+    </div>
+    <p class="sub">Drawn by <code>results/plot_eval_success.py</code> from the stored
+      <code>--group</code> payloads, so it is the same figure the thesis scripts produce.
+      Evaluate an experiment first; each evaluation becomes one bar.</p>
+
+    {% if eval_files %}
+    <details class="figopts" open>
+      <summary>Bars and labels</summary>
+      <div class="fieldrow">
+        <div class="field">
+          <label for="barx">X axis</label>
+          <input id="barx" type="text" placeholder="Age [months]">
+        </div>
+        <div class="field">
+          <label for="bary">Y axis</label>
+          <input id="bary" type="text" placeholder="auto">
+        </div>
+        <div class="field check">
+          <input id="barannotate" type="checkbox">
+          <label for="barannotate">Annotate n/N</label>
+        </div>
+      </div>
+      <table class="runs labeltable">
+        <thead><tr><th style="width:1.2rem"></th><th>Evaluation</th><th>Bar label</th></tr></thead>
+        <tbody>
+        {% for f in eval_files %}
+          <tr>
+            <td><input type="checkbox" class="barpick" value="{{ f.job_id }}"></td>
+            <td class="runmeta">{{ f.label }}
+              <span style="opacity:.6">{{ human_age(f.finished_at) }}{% if f.n_selected is defined and f.n_runs and f.n_selected < f.n_runs %} &middot; {{ f.n_selected }} of {{ f.n_runs }} runs in this selection{% endif %}</span></td>
+            <td><input class="barlabel" type="text" data-job="{{ f.job_id }}" placeholder="{{ f.label.split(' (')[0] }}"></td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </details>
+    <div class="chart" style="margin-top:.7rem"><img id="barchart" alt="Evaluation bars" hidden></div>
+    <p class="hint" id="barhint">Tick at least one evaluation to draw the chart.</p>
+    {% else %}
+      <div class="empty" style="padding:1.6rem"><b>None of the selected runs have been evaluated.</b>
+        Open one of their experiments and run the group evaluation; it will appear here.</div>
+    {% endif %}
   </div>
 
   <div class="chartgrid" style="margin-top:.9rem">
