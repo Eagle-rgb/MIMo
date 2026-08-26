@@ -47,9 +47,8 @@ for i in $(seq 0 $((NUMBER_OF_RUNS-1))); do
 		"--goal_high=0.95" \
 		"--roll_over_model_path_auto" \
 		# 26.08.2026 Was '--goal_achievement_function=gravity --intrinsic_goal_eps=0.15'.
-		# The gravity goal was removed; this sweep already passes --goal_low/--goal_high, which
-		# is the goal variation 'cos' needs under HER, so it runs as the scalar baseline now.
-		"--goal_achievement_function=cos" \
+		# Both flags are gone -- the environment has one goal now. This sweep already passes
+		# --goal_low/--goal_high, which is the goal variation HER needs, so it runs unchanged.
 		"--save_model=${MODEL_NAME}_run_$((i))" \
 		"--morph_age=9" \
 		"--physio_age=9" \

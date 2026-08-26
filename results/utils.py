@@ -23,7 +23,6 @@ def make_env(age_physio, age_morph, starting_position='supine', pen_fac=0.02):
         touch_params=None,
         nopen=False,
         pen_factor=pen_fac,
-        goal_function='cos',
         achieved_goal_in_observation=False,
         pbrs=True,
         age_physio=age_physio,

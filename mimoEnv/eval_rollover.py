@@ -76,7 +76,6 @@ def env_kwargs(config, starting_position, goal):
     proprio = config.get('proprio_params')
     kwargs = dict(
         starting_position=starting_position,
-        goal_function=config.get('goal_achievement_function', 'cos'),
         pbrs=config.get('pbrs', False),
         pbrs_w=config.get('pbrs_w', 100),
         pen_factor=config.get('pen_factor', 0.02),

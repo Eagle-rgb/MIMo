@@ -115,7 +115,7 @@ class RollOverEvalCallback(BaseCallback):
     SIDE_LYING_THRESHOLD = 0.5
 
     def __init__(self, eval_env, eval_every, n_episodes=20, save_dir=None, episode_steps=500,
-                 seed0=1000, stop_at_roll_rate=None, stop_patience=2):
+                 seed0=1000):
         super().__init__()
         self.eval_env = eval_env
         self.eval_every = eval_every
@@ -126,21 +126,6 @@ class RollOverEvalCallback(BaseCallback):
         self.best_rho = -np.inf
         self.best_step = None
         self._next_eval = None
-
-        # 25.08.2026 Early stopping. The question it answers -- "how many steps to solve this" --
-        # is the quantity these experiments report, so a run that keeps going after it is solved
-        # is spending compute to measure nothing. It scores 'eval/roll_rate', the number that goes
-        # in the write-up, measured exactly as 'eval_rollover.py' measures it -- not the training
-        # success rate, which scores the *sampled* goal under *stochastic* actions and is neither
-        # the reported protocol nor a fixed target.
-        self.stop_at_roll_rate = stop_at_roll_rate
-        self.stop_patience = stop_patience
-        # Set once the criterion holds. Read by 'illustrations.train', which has to break its own
-        # checkpoint loop -- returning False from a callback only ends the current 'learn()' call,
-        # and the loop would otherwise start the next segment immediately.
-        self.stop_requested = False
-        self.stop_step = None
-        self._consecutive_hits = 0
 
     def _on_training_start(self):
         # Anchor on the current step count: 'train()' calls learn() once per checkpoint segment
@@ -192,25 +177,6 @@ class RollOverEvalCallback(BaseCallback):
             if self.save_dir is not None:
                 self.model.save(os.path.join(self.save_dir, "model_best"))
         self.logger.record("eval/rho_max_best", self.best_rho)
-
-        if self.stop_at_roll_rate is not None:
-            # Consecutive hits, not a single one: with 20 episodes a rate of 1.0 is 20 successes,
-            # and a policy hovering just under the threshold crosses it by chance often enough
-            # that stopping on one reading would report a solve step that another seed cannot
-            # reproduce. Patience turns "touched it" into "holds it".
-            if float(rolled.mean()) >= self.stop_at_roll_rate:
-                self._consecutive_hits += 1
-            else:
-                self._consecutive_hits = 0
-            self.logger.record("eval/stop_hits", self._consecutive_hits)
-
-            if self._consecutive_hits >= self.stop_patience:
-                self.stop_requested = True
-                self.stop_step = self.model.num_timesteps
-                print(f"RollOverEvalCallback: roll rate {rolled.mean():.2f} >= "
-                      f"{self.stop_at_roll_rate} for {self.stop_patience} consecutive "
-                      f"evaluations -- stopping at step {self.stop_step}.")
-                return False
         return True
 
     def _on_training_end(self):
@@ -219,21 +185,3 @@ class RollOverEvalCallback(BaseCallback):
                   f"{self.best_step}" + (f", saved as model_best.zip" if self.save_dir else ""))
 
 
-class GlobalStepCallback(BaseCallback):
-    """ Publishes the global step count into a plain dict, for the learning-rate schedule.
-
-    A schedule spanning the whole run cannot use SB3's 'progress_remaining': 'train()' calls
-    learn() once per checkpoint segment, and SB3 recomputes that fraction within each call, so
-    the rate saw-tooths back up at every checkpoint. Reading the step count directly fixes it,
-    but the schedule must not close over the model -- SB3 pickles the schedule when saving, and
-    a model reference drags a thread lock into the pickle ("cannot pickle '_thread.lock'").
-    Hence this indirection: the callback writes an int, the schedule reads an int.
-    """
-
-    def __init__(self, state):
-        super().__init__()
-        self.state = state
-
-    def _on_step(self) -> bool:
-        self.state['steps'] = self.model.num_timesteps
-        return True

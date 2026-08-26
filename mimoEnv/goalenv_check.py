@@ -49,7 +49,7 @@ def check(name, condition, detail=""):
 
 
 def make_env(**kwargs):
-    params = dict(starting_position='supine', goal_function='cos', touch_params=None,
+    params = dict(starting_position='supine', touch_params=None,
                   pbrs=True, pbrs_w=100, pen_factor=0.02, isr=False,
                   age_physio=9, age_morph=9, achieved_goal_in_observation=True,
                   render_mode='rgb_array')
@@ -252,16 +252,14 @@ def test_goal_tolerance():
     """
     print("\n10. Goal tolerance (--goal_tolerance)")
 
-    # Rejected combinations first: all three raise in the constructor, before the MuJoCo model is
-    # built, so they cost nothing.
-    for name, kwargs in (("intrinsic", dict(goal_function='intrinsic', goal_tolerance=0.05)),
-                         ("a non-positive radius", dict(goal_tolerance=0.0))):
-        try:
-            make_env(**kwargs).close()
-            refused = False
-        except ValueError:
-            refused = True
-        check(f"refuses {name}", refused)
+    # Rejected first: this raises in the constructor, before the MuJoCo model is built, so it
+    # costs nothing.
+    try:
+        make_env(goal_tolerance=0.0).close()
+        refused = False
+    except ValueError:
+        refused = True
+    check("refuses a non-positive radius", refused)
 
     env = make_env(goal_tolerance=0.05, sparse_reward=True, pbrs=False, done_active=False)
 
@@ -338,72 +336,6 @@ def test_goal_tolerance():
           env_kwargs({}, 'supine', 0.95)['goal_tolerance'] is None)
 
 
-def test_early_stop():
-    """--stop_at_roll_rate must need consecutive hits, and must not fire when it is off.
-
-    25.08.2026 Stub-driven: the logic under test is the counter, and the only thing a live env
-    would add is 20 deterministic rollouts per case at 3.6 GB. '_run_episodes' is replaced with a
-    scripted sequence of roll rates, which is also the only way to test the "hit, miss, hit"
-    case -- a real policy will not produce it on demand.
-    """
-    print("\n11. Early stopping on the evaluation roll rate")
-
-    from mimoEnv.envs.roll_over_callback import RollOverEvalCallback
-
-    class FakeLogger:
-        def __init__(self):
-            self.values = {}
-
-        def record(self, key, value):
-            self.values[key] = value
-
-    class FakeModel:
-        # 'BaseCallback.logger' is a read-only property returning 'self.model.logger', so the
-        # stub logger has to hang off the model rather than off the callback.
-        def __init__(self):
-            self.num_timesteps = 0
-            self.logger = FakeLogger()
-
-    def drive(rates, stop_at, patience):
-        """Feed a sequence of roll rates through the callback; return (returns, cb)."""
-        cb = RollOverEvalCallback(eval_env=None, eval_every=1, n_episodes=20,
-                                  save_dir=None, episode_steps=200,
-                                  stop_at_roll_rate=stop_at, stop_patience=patience)
-        cb.model = FakeModel()
-        cb._next_eval = 0
-        returns = []
-        for i, rate in enumerate(rates):
-            cb.model.num_timesteps = (i + 1) * 25000
-            rolled = np.array([1.0] * int(round(rate * 20)) + [0.0] * (20 - int(round(rate * 20))))
-            cb._run_episodes = lambda r=rolled: (np.where(r > 0, 0.99, 0.30), r, r, np.full(20, 50.0))
-            returns.append(cb._on_step())
-        return returns, cb
-
-    returns, cb = drive([0.8, 0.9], stop_at=1.0, patience=2)
-    check("below threshold does not stop", all(returns) and not cb.stop_requested)
-
-    returns, cb = drive([1.0], stop_at=1.0, patience=2)
-    check("one hit is not enough", all(returns) and not cb.stop_requested,
-          f"hits {cb._consecutive_hits}")
-
-    returns, cb = drive([1.0, 1.0], stop_at=1.0, patience=2)
-    check("two consecutive hits stop the run", cb.stop_requested and returns[-1] is False)
-    check("the stop step is recorded", cb.stop_step == 50000, f"got {cb.stop_step}")
-
-    # The reason patience exists: a policy hovering under the threshold crosses it by chance.
-    returns, cb = drive([1.0, 0.9, 1.0], stop_at=1.0, patience=2)
-    check("a miss resets the counter", not cb.stop_requested and all(returns),
-          f"hits {cb._consecutive_hits}")
-
-    returns, cb = drive([0.85, 0.85], stop_at=0.75, patience=2)
-    check("a threshold below 1.0 works", cb.stop_requested, "0.85 >= 0.75 twice")
-
-    returns, cb = drive([1.0, 1.0, 1.0], stop_at=None, patience=2)
-    check("off by default -- never stops", all(returns) and not cb.stop_requested)
-    check("no stop counter is logged when off", 'eval/stop_hits' not in cb.model.logger.values)
-
-    returns, cb = drive([1.0], stop_at=1.0, patience=1)
-    check("patience 1 stops on the first hit", cb.stop_requested and returns[-1] is False)
 
 
 def test_episode_horizon():
@@ -414,7 +346,7 @@ def test_episode_horizon():
     would be invisible in training: episodes would just keep their old length while data.yml
     claims otherwise.
     """
-    print("\n12. Episode horizon (--episode_steps)")
+    print("\n11. Episode horizon (--episode_steps)")
 
     def run_to_truncation(env, limit):
         """Step with zero actions until the wrapper ends the episode. Returns the step count."""
@@ -425,7 +357,7 @@ def test_episode_horizon():
                 return step, truncated
         return None, False
 
-    params = dict(starting_position='supine', goal_function='cos', touch_params=None,
+    params = dict(starting_position='supine', touch_params=None,
                   pbrs=False, sparse_reward=True, pen_factor=0.02, isr=False,
                   age_physio=9, age_morph=9, achieved_goal_in_observation=True,
                   # Nothing may terminate early, or the horizon is not what ends the episode.
@@ -454,7 +386,7 @@ SECTIONS = [
     'test_sb3_env_checker', 'test_purity', 'test_vectorization', 'test_pbrs_regression',
     'test_sparse_reward', 'test_goal_sampling', 'test_info_contract',
     'test_her_relabel_end_to_end', 'test_pbrs_bounded_under_relabelling',
-    'test_goal_tolerance', 'test_early_stop', 'test_episode_horizon',
+    'test_goal_tolerance', 'test_episode_horizon',
 ]
 
 
@@ -490,7 +422,6 @@ if __name__ == '__main__':
     test_her_relabel_end_to_end()
     test_pbrs_bounded_under_relabelling()
     test_goal_tolerance()
-    test_early_stop()
     test_episode_horizon()
 
     print()

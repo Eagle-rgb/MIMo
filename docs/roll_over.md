@@ -153,8 +153,8 @@ off unless `--touch`. Measured on the default configuration (`9M/9M`, no touch,
 | `achieved_goal` | (1,) or (7,) | only if `--achieved_goal_in_observation` (forced on by `--her`) |
 | `desired_goal` | (1,) or (7,) | always — `goals_in_observation=True` is hard-coded (`roll_over.py:333`) |
 
-The goal keys are (1,) for the scalar goal functions (`cos`, `angle`) and (7,) for `intrinsic`,
-whose goal is a posture vector rather than a rotation (§3.4). Both are flat `Box` spaces.
+Both goal keys are flat `Box` spaces of shape (1,) -- there is one goal function, the scalar ρ.
+Vector goals were tried twice (§3.4, §3.5) and removed on 26.08.2026.
 
 **Proprioception is a sorted-key concatenation, so `qpos` does not start at index 0.**
 `mimoProprioception/proprio.py:177` concatenates `sensor_outputs` in sorted key order, which for
@@ -254,7 +254,6 @@ with `ctrl_cost = pen_factor * sum(data.ctrl²)` (`:1015`).
 
 | Flag | Effect | Interaction to know |
 |---|---|---|
-| `--goal_achievement_function` | `cos` (default, ρ as in §1), `angle` (**broken**, §8), `intrinsic` (a posture vector MIMo can sense, §3.4) | all three share one reward path since 19.08.2026; `intrinsic` only changes the goal's dimensionality and the success test |
 | `--pbrs` (+ `--pbrs_w`, default 100) | potential *difference* shaping instead of the raw potential | forbidden with `--no_done_active`; pointless with `--sparse_reward` (the sparse branch is checked first) |
 | `--sparse_reward` | {0, −1} only | overrides `--pbrs` silently; the control cost still applies unless `--nopen` |
 | `--pen_factor` (default 0.02), `--nopen` | weight of the quadratic control cost | goal-*independent*, which is why it travels through `info` under HER (§4.2) |
@@ -274,10 +273,9 @@ lives **in the goal**, not in the check: `sample_goal` (`:687`) returns
 - `0.5` with `success_at_side_lying` (`--side_lying`),
 - `U(goal_low, effective_goal_high)` when a range is configured.
 
-Under `--goal_achievement_function=intrinsic` the goal is a point in a 7-dimensional posture
-space rather than a threshold, so success is `‖achieved − desired‖ ≤ --intrinsic_goal_eps`
-instead. Both live in `_success_mask` (`:494`); `is_success` (`:508`) is a thin wrapper that
-returns a plain `bool` for a single goal and a `(N,)` array for a batch.
+Under `--goal_tolerance` the threshold becomes a band, `|achieved − desired| ≤ tolerance`
+(§3.6). Both rules live in `_success_mask`; `is_success` is a thin wrapper that returns a plain
+`bool` for a single goal and a `(N,)` array for a batch.
 
 Moving the threshold out of `is_success` is what makes `is_success` a pure function of its
 arguments, which is the precondition for HER (§4.1).
@@ -297,18 +295,20 @@ configurations without complaint:
   episode. Measured before the guard existed: potential 500.0 inside the goal, −0.01 just
   outside, i.e. a single step leaving the goal region paid **−50001.0**, and the critic loss
   reached ~2.8e7 within 1000 updates.
-There used to be a second guard, **`--her` with `--goal_achievement_function=intrinsic`**. It was
-removed on 19.08.2026: intrinsic goals are now flat vectors with a pure reward, so relabelling
-them is real (§3.4).
+There used to be a second guard, **`--her` with `--goal_achievement_function=intrinsic`**. Both
+it and the flag are gone (§3.4).
 
 The environment validates its own arguments — unknown posture, unknown goal function, an age
-outside `AGES`, a `goal_low`/`goal_high` mismatch, a non-positive `intrinsic_goal_eps`,
-a non-positive `goal_tolerance`, `goal_tolerance` on a vector goal, fewer than one
-reference sample, an accelerometer axis outside `xyz`, an intrinsic goal joint that is not a
-1-DoF hinge or has no usable range (`roll_over.py:116`, `:219`–`:299`, `:358`) — but it knows
-nothing about the combination above.
+outside `AGES`, a `goal_low`/`goal_high` mismatch and a non-positive `goal_tolerance` — but it
+knows nothing about the combination above.
 
-### 3.4 The `intrinsic` goal function — a non-scalar, non-extrinsic goal
+### 3.4 The `intrinsic` goal function — a non-scalar, non-extrinsic goal that did not work
+
+**Removed from `roll_over.py` on 26.08.2026**, together with `--intrinsic_goal_joints`,
+`--intrinsic_acc_axes`, `--intrinsic_acc_w`, `--intrinsic_goal_eps` and
+`--intrinsic_reference_samples`. It never worked (the measurements below say why), and it is
+recorded here as a negative result. Runs trained with it can no longer be loaded against the
+current environment.
 
 Rewritten 19.08.2026. Before that date `intrinsic` meant "the whole observation dict is the goal",
 selected by a `--intrinsic_goal` sub-mode (`all`, `vesti`, `vesti_acc`, `sparse_proprio`) and
@@ -477,13 +477,6 @@ suggests.
 reason to condition on it. Here every relabelled goal is an achieved posture vector from the
 trajectory, so goal variation is automatic. `--no_done_active` is still required (§4.6).
 
-```bash
-# SAC + HER + sparse, the configuration this goal was built for
-python mimoEnv/illustrations.py --env=roll_over --algorithm=SAC \
-    --goal_achievement_function=intrinsic --her --sparse_reward --no_done_active \
-    --roll_over_starting_position=prone --roll_over_model_path_auto \
-    --train_for=1000000 --save_every=200000 --save_model=intrinsic_her
-```
 
 
 ### 3.5 The `gravity` goal function -- worked, then removed on 26.08.2026
@@ -700,10 +693,8 @@ see a different rule, which is what makes it a controlled A/B. 0.05 is the match
 `gravity` uses 0.15 over two bodies, i.e. 0.106 per body in its +-1 units, and rho is that
 quantity halved.
 
-Scalar goal functions only; it refuses `intrinsic`, which is a point goal already and has
-`--intrinsic_goal_eps`. Under `--side_lying` the goal stays 0.5 but then means "stop at side
-lying" rather than "reach at least side lying". `_potential` is untouched -- it was a distance
-already.
+Under `--side_lying` the goal stays 0.5 but then means "stop at side lying" rather than "reach
+at least side lying". `_potential` is untouched -- it was a distance already.
 
 The experiment this exists for:
 
@@ -798,11 +789,10 @@ Both are written into `info` during `step()` (`roll_over.py:1004`) and read back
 `_info_column` (`:1154`), which handles a single dict, a sequence of dicts (HER's batched form)
 and a missing key, falling back to the live value so ordinary stepping is unchanged.
 
-Under `--goal_achievement_function=intrinsic` the previous achieved goal is a whole posture vector
-rather than a scalar, so it is read back by `_info_block` (`:1182`), the `(N, goal_dim)`
-counterpart of `_info_column`. `step()` caches `_prev_achieved_goal` for **every** goal function;
-the guard that used to skip it for `intrinsic` would have made PBRS silently unrelabelable
-there.
+The previous achieved goal is read back by `_info_block`, the `(N, goal_dim)` counterpart of
+`_info_column`. It is kept in that shape although `goal_dim` is 1 -- `_info_column` collapses a
+batched fallback to its first element, which was wrong when the goal was a vector and would be
+wrong again for the next one.
 
 This is why `HerReplayBuffer` **must** be constructed with `copy_info_dict=True`
 (`illustrations.py:917`). Without it the penalty silently drops to zero in every virtual
@@ -929,11 +919,10 @@ happens. And note the disagreement by construction: `side_lying`/`rolled_over` d
 | Flag | Note |
 |---|---|
 | `--her` | Attaches `HerReplayBuffer(copy_info_dict=True)`. Requires an off-policy algorithm (`OFF_POLICY_ALGORITHMS = ('SAC', 'TD3', 'DDPG')`, `illustrations.py:58`). Forces `--achieved_goal_in_observation` on, since HER reads `next_obs['achieved_goal']`. |
-| `--n_sampled_goal` (4), `--goal_selection_strategy` (`future`) | relabelling ratio and strategy |
 | `--sparse_reward` | use this with HER, not `--pbrs` |
 | `--goal_low` / `--goal_high` | HER needs goal variation, otherwise the policy never learns to condition on the goal and the relabelled transitions describe goals nobody ever asks for |
 | `--no_done_active` | §4.6 |
-| `--buffer_size` (300 000), `--train_freq` (1), `--gradient_steps` (1), `--learning_starts` (100) | off-policy knobs; `--learning_starts` is auto-raised to 1000 under `--her` because `HerReplayBuffer.sample` needs at least one finished episode and the horizon is 500 steps (`illustrations.py:742`) |
+| `--buffer_size` (300 000), `--train_freq` (1) | off-policy knobs. `gradient_steps=1`, `n_sampled_goal=4`, `goal_selection_strategy='future'` and `learning_starts=100` are hardcoded since 26.08.2026; under `--her` the last is raised above the episode horizon automatically, because `HerReplayBuffer.sample` needs at least one finished episode |
 
 `--algorithm=HER` does not exist. It used to be in `choices` but was never dispatched, so it hit
 the `else: raise RuntimeError` branch at runtime. Since SB3 1.1, **HER is a replay buffer, not an
@@ -1099,12 +1088,10 @@ reloading will silently evaluate the model under different settings than it was 
 translated into `proprio_config`, and the retired `intrinsic_goal` / `proprio_w` / `vesti_w` are
 dropped with a printed notice (§3.4) so they do not land on the argparse namespace as settings
 nothing reads. Follow that pattern when renaming, and keep the `# Previously: --old_name`
-comments the fork uses (`--pen_factor` was `--pen_fac`, `--goal_achievement_function` was
-`--roll_over_goal_function`).
+comments the fork uses (`--pen_factor` was `--pen_fac`).
 
 Deliberately **not** stored, because they describe the invocation rather than the model:
-`save_model`, `save_every`, `test`, `render_video`, `use_muscle`, `roll_over_starting_position`,
-and the `--action_*` random-rollout knobs.
+`save_model`, `save_every`, `test`, `render_video`, `use_muscle`, `roll_over_starting_position`.
 
 Not stored, but arguably should be — treat these as gaps rather than decisions:
 
@@ -1125,9 +1112,10 @@ Not stored, but arguably should be — treat these as gaps rather than decisions
 
 ## 8. Divergences: how it is vs. how it was meant
 
-### `angle` is inverted and succeeds at reset
+### `angle` was inverted and succeeded at reset
 
-`--goal_achievement_function=angle` is **unusable as it stands.**
+**Removed 26.08.2026 along with the `goal_function` switch.** Recorded because it was the default
+for a while, so anything measured with it before then is suspect. It was **unusable as it stood.**
 `_get_standardized_rotation` (`roll_over.py:820`) returns `abs(angle_deg) / 180`, where
 `angle_deg` is 180° at reset and 0° at the goal. Its own comment two lines above says the intended
 scaling is "180° = 0 … 0° = 1". The code produces the opposite: `achieved_goal` starts near 1 and
@@ -1310,7 +1298,6 @@ purpose. "yaml" marks the flags that round-trip through `data.yml` (§7).
 
 | Flag | Type / default | yaml | Note |
 |---|---|---|---|
-| `--goal_achievement_function` | choice `angle\|cos\|intrinsic`, default `cos` | ✓ | `angle` is broken (§8) |
 | `--pbrs` | flag | ✓ | potential-difference shaping |
 | `--pbrs_w` | float, `100` | ✓ | needs to be large; see §3.1 |
 | `--sparse_reward` | flag | ✓ | {0, −1}; takes precedence over `--pbrs` |
@@ -1321,33 +1308,18 @@ purpose. "yaml" marks the flags that round-trip through `data.yml` (§7).
 | `--goal_tolerance` | float, `None` | ✓ | band instead of threshold, §3.6 |
 | `--no_done_active` | flag | ✓ | never terminate early |
 
-### The `intrinsic` goal function
-
-All only take effect under `--goal_achievement_function=intrinsic`; all round-trip through yaml,
-because each of them defines the task (§3.4).
-
-| Flag | Type / default | yaml | Note |
-|---|---|---|---|
-| `--intrinsic_goal_joints` | str, `''` | ✓ | comma-separated joint names, `robot:` prefix optional; empty = the default six. Must be 1-DoF hinges |
-| `--intrinsic_acc_axes` | str, `'x'` | ✓ | subset of `xyz`; `''` drops the accelerometer. **z carries no posture signal** — see §3.4 |
-| `--intrinsic_acc_w` | float, `1.0` | ✓ | accelerometer weight relative to the normalised joint angles |
-| `--intrinsic_goal_eps` | float, `0.15` | ✓ | success radius; under `--sparse_reward` this *is* the task. Not yet calibrated |
-| `--intrinsic_reference_samples` | int, `20` | ✓ | resets averaged into the recorded reference posture |
-
-Removed 19.08.2026: `--intrinsic_goal`, `--proprio_w`, `--vesti_w` (§3.4). `load_model_yaml` drops
-them from old `data.yml` files with a printed notice.
-
 ### Off-policy and HER
 
 | Flag | Type / default | yaml | Note |
 |---|---|---|---|
-| `--her` | flag | ✓ | needs SAC/TD3/DDPG; works with every goal function since 19.08.2026 |
-| `--n_sampled_goal` | int, `4` | ✓ | virtual transitions per real one |
-| `--goal_selection_strategy` | choice `future\|final\|episode`, default `future` | ✓ | |
+| `--her` | flag | ✓ | needs SAC/TD3/DDPG |
 | `--buffer_size` | int, `300000` | ✓ | 1e6 OOMs, see §4.8 |
 | `--train_freq` | int, `1` | ✓ | env steps between updates |
-| `--gradient_steps` | int, `1` | ✓ | `-1` = as many as `--train_freq` |
-| `--learning_starts` | int, `100` | ✓ | auto-raised to 1000 under `--her` |
+
+Hardcoded since 26.08.2026, previously flags: `n_sampled_goal=4`, `goal_selection_strategy='future'`,
+`gradient_steps=1`, `learning_starts=100` (raised above the episode horizon under `--her`, and
+written to `data.yml` as such). Also removed: `--lr_schedule`, `--lr_decay_start`,
+`--target_entropy`, `--stop_at_roll_rate`, `--stop_patience`.
 
 ### Rendering and testing
 
@@ -1357,12 +1329,6 @@ them from old `data.yml` files with a printed notice.
 | `--render_frames` | flag, `False` | — | four PDFs: start, 60°, side lying, final |
 | `--render_actuations` | flag | — | actuation plot overlay; render height 720 |
 | `--log_actuations` | flag | — | **no effect** (§8) |
-| `--random_actions` | flag | — | test with random actions instead of the loaded policy |
-| `--action_noise` | choice `white\|pink\|colored`, default `white` | — | sampler for random-action rollouts |
-| `--action_beta` | float, `1.0` | — | colored-noise exponent: 0 white, 1 pink, 2 red |
-| `--action_sigma` | float, `0.3` | — | uniform[−1,1] has std 0.577, so 1.0 saturates the clip |
-| `--action_seq_len` | int, `None` | — | defaults to the 500-step horizon |
-| `--action_noise_seed` | int, `0` | — | without it the pink generator is unseeded |
 | `--save_intermediate` | flag | — | `model_intermediate_90.zip` at 90 % side-lying rate |
 
 ---

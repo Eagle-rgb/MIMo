@@ -753,7 +753,6 @@ if __name__ == '__main__':
         touch_params=None,
         nopen=False,
 		pen_factor=0.04,
-        goal_function='cos',
         achieved_goal_in_observation=False,
         pbrs=True,
 		#proprio_params=PROPRIOCEPTION_PARAMS_ONLY_QPOS,

@@ -38,7 +38,6 @@ for i in $(seq 0 5); do
 		"--goal_high=0.95" \
 		"--episode_steps=200" \
 		"--roll_over_model_path_auto" \
-		"--goal_achievement_function=cos" \
 		"--save_model=${MODEL_NAME}_run_$((i))" \
 		"--morph_age=9" \
 		"--physio_age=9" \

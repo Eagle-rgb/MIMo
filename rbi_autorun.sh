@@ -41,7 +41,6 @@ for i in $(seq 0 $((NUMBER_OF_RUNS-1))); do
 		"--eval_every=25000" \
 		"--eval_episodes=20" \
 		"--roll_over_model_path_auto" \
-		"--goal_achievement_function=cos" \
 		"--save_model=${MODEL_NAME}_run_${i}" \
 		"--pbrs" \
 		"--morph_age=9" \

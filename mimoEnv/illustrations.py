@@ -44,8 +44,7 @@ import yaml
 import numpy as np
 
 from mimoEnv.envs.roll_over import TOUCH_PARAMS as ROLL_OVER_TOUCH_PARAMS
-from mimoEnv.envs.roll_over_callback import RollOverCallback, RollOverEvalCallback, \
-    GlobalStepCallback
+from mimoEnv.envs.roll_over_callback import RollOverCallback, RollOverEvalCallback
 from mimoEnv.envs.morphological_curriculum import make_curriculum_callback
 from mimoEnv.envs.isr_callback import ISRCallback
 from stable_baselines3.common.callbacks import CallbackList
@@ -55,8 +54,8 @@ from mimoEnv.utils import load_model_yaml
 from PIL import Image
 import mujoco
 
-# Algorithms that keep a replay buffer, and therefore accept --buffer_size / --train_freq /
-# --gradient_steps and can carry a HerReplayBuffer. PPO and A2C are on-policy and take none.
+# Algorithms that keep a replay buffer, and therefore accept --buffer_size / --train_freq and
+# can carry a HerReplayBuffer. PPO and A2C are on-policy and take none.
 OFF_POLICY_ALGORITHMS = ('SAC', 'TD3', 'DDPG')
 
 # Episode horizon of MIMoRollOver-v0, from the TimeLimit set in mimoEnv/__init__.py.
@@ -64,9 +63,8 @@ ROLL_OVER_EPISODE_STEPS = 500
 
 from mimoEnv.envs.gaussiannoiseobswrapper import GaussianNoiseObsWrapper
 
-def test(wrapped_env, save_dir, model=None, render_video=False, render_frames=False, render_actuations=False, roll_over_starting_position='prone',
-         action_noise='white', action_sigma=0.3, action_seq_len=None, action_noise_seed=0,
-         action_beta=1.0, log_obs=None):
+def test(wrapped_env, save_dir, model=None, render_video=False, render_frames=False,
+         render_actuations=False, roll_over_starting_position='prone', log_obs=None):
     """ Tests the model for one episode.
 
     Args:
@@ -100,26 +98,6 @@ def test(wrapped_env, save_dir, model=None, render_video=False, render_frames=Fa
     else:
         wrapped_env.unwrapped.isr=False
 
-    # 08.08.2026 Action noise for the random-action rollout, so that the videos
-    # show the same exploration distribution the H1 buffers are collected with
-    # (mimoComposer/h1_latent_probe.py). White = the original
-    # action_space.sample(); pink = 1/f colored noise (Eberhard et al. 2023).
-    #
-    # NB pink is clipped into the action range, and at large sigma that clip is
-    # not cosmetic: at sigma=1.0 about a third of the samples saturate, which
-    # distorts the 1/f spectrum. Sigma is therefore not the effective amplitude
-    # -- measure the clipped signal, do not infer it from the flag.
-    noise_sampler = None
-    if action_noise in ('pink', 'colored'):
-        from pink import ColoredActionNoise
-        seq_len = action_seq_len or wrapped_env.spec.max_episode_steps or 500
-        beta = 1.0 if action_noise == 'pink' else action_beta
-        noise_sampler = ColoredActionNoise(beta=beta, sigma=action_sigma,
-                                           action_dim=wrapped_env.action_space.shape[0],
-                                           seq_len=seq_len,
-                                           rng=np.random.default_rng(action_noise_seed))
-        noise_sampler.reset()
-        print(f"Using colored action noise (beta={beta}, sigma={action_sigma}, seq_len={seq_len})")
 
     print("Testing model...")
 
@@ -173,7 +151,7 @@ def test(wrapped_env, save_dir, model=None, render_video=False, render_frames=Fa
             writer.writerows(obs_rows)
         print(f"Wrote {len(obs_rows)} observation rows to '{path}'")
         last = obs_rows[-1]
-        print("Final joint angles of the intrinsic-goal joints (degrees):")
+        print("Final head and hip joint angles (degrees):")
         for lbl in ('head_swivel', 'head_tilt_side', 'head_tilt',
                     'hip_lean1', 'hip_rot1', 'hip_bend1'):
             key = f'{lbl}_deg'
@@ -211,12 +189,7 @@ def test(wrapped_env, save_dir, model=None, render_video=False, render_frames=Fa
 
     while not done and not trunc:
         if model is None:
-            if noise_sampler is None:
-                action = wrapped_env.action_space.sample()
-            else:
-                action = np.clip(noise_sampler(),
-                                 wrapped_env.action_space.low,
-                                 wrapped_env.action_space.high)
+            action = wrapped_env.action_space.sample()
         else:
             # 08.08.2026 Was 'determinstic=True' (typo). SB3 2.5.0 rejects the
             # unknown kwarg with TypeError, so --test crashed for every loaded
@@ -270,7 +243,7 @@ def test(wrapped_env, save_dir, model=None, render_video=False, render_frames=Fa
     wrapped_env.reset()
 
 def train(model, train_for, save_every, save_dir, isr, argparse_args, save_intermediate=False,
-          eval_callback=None, lr_state=None):
+          eval_callback=None):
     """ Training function of a model.
 
     If 'isr' is active, then trains the model for 75% with 'isr' enabled and the remaining last 25%
@@ -304,9 +277,6 @@ def train(model, train_for, save_every, save_dir, isr, argparse_args, save_inter
     if eval_callback is not None:
         callbacks.append(eval_callback)
 
-    if lr_state is not None:
-        callbacks.append(GlobalStepCallback(lr_state))
-
     while train_for > 0:
         counter += 1
         
@@ -322,15 +292,6 @@ def train(model, train_for, save_every, save_dir, isr, argparse_args, save_inter
 
         model.save(os.path.join(save_dir, "model_" + str(counter)))
 
-        # 25.08.2026 Early stop. A callback returning False only ends the current 'learn()' call,
-        # so without this the loop would immediately start the next checkpoint segment and train
-        # on regardless. The checkpoint above has already been written, so the stopped run ends
-        # with a normally-numbered final model and 'eval_rollover.py --group' picks it up as the
-        # last checkpoint like any other run.
-        if eval_callback is not None and getattr(eval_callback, 'stop_requested', False):
-            print(f"train(): stopping early at {eval_callback.stop_step} steps of "
-                  f"{train_for_total}, final checkpoint model_{counter}.zip.")
-            break
 
 def load_observation_normalization_dict(obs):
     """ Loads the dictionary containing values for obseration normalization.
@@ -384,18 +345,6 @@ def load_observation_normalization_dict(obs):
     print("Successfully loaded observation normalization.")
     return mean_dict, std_dict
 
-def parse_intrinsic_goal_joints(joints_string: str):
-    """ Parses the --intrinsic_goal_joints list.
-
-    Comma-separated joint names, with or without the 'robot:' prefix (the model always uses it,
-    but the note this came from does not). An empty string means "use the default six", which is
-    signalled to the environment as None rather than as an empty list -- an empty list would be a
-    goal with no joint dimensions at all, which is a different, valid configuration.
-    """
-    names = [name.strip() for name in joints_string.split(',') if name.strip()]
-    if not names:
-        return None
-    return [name if name.startswith('robot:') else f'robot:{name}' for name in names]
 
 
 def parse_proprio(proprio_args_string: str):
@@ -466,29 +415,6 @@ def main():
                         help='Name of model to save')
     parser.add_argument('--render_video', action='store_true',
                         help='Renders a video for each episode during the test run.')
-    parser.add_argument('--random_actions', action='store_true',
-                        help='Test with random actions instead of a policy. Needed because '
-                             '--algorithm defaults to PPO, so without --load_model the script '
-                             'builds a fresh UNTRAINED PPO rather than passing model=None, and '
-                             "test()'s random-action branch was unreachable from the CLI.")
-    parser.add_argument('--action_beta', default=1.0, type=float,
-                        help='Colored-noise exponent: 0 white, 1 pink, 2 red/brownian. Only '
-                             'used with --action_noise=colored.')
-    parser.add_argument('--action_noise', default='white', choices=['white', 'pink', 'colored'],
-                        help='Action sampler for random-action test rollouts (--test without '
-                             '--load_model). "white" = action_space.sample(); "pink" = 1/f '
-                             'colored noise. Ignored when a model is loaded. Not stored in '
-                             'data.yml -- it describes the invocation, not the model.')
-    parser.add_argument('--action_sigma', default=0.3, type=float,
-                        help='Noise scale for --action_noise=pink. NB uniform[-1,1] has std '
-                             '0.577, so 0.3 is weaker than white and 1.0 saturates the clip.')
-    parser.add_argument('--action_seq_len', default=None, type=int,
-                        help='Pink noise correlation length. Defaults to the environment '
-                             'horizon (500 for roll_over).')
-    parser.add_argument('--action_noise_seed', default=0, type=int,
-                        help='Seed for the pink noise generator. Needed because '
-                             'PinkActionNoise without an explicit rng draws from a fresh '
-                             'unseeded np.random.default_rng().')
     parser.add_argument('--use_muscle', action='store_true',
                         help='Use the muscle actuation model instead of spring-damper model if provided.')
     parser.add_argument('--roll_over_starting_position', required=False,
@@ -496,45 +422,6 @@ def main():
                         default='prone',
                         help='Choose the starting position of MIMo in the roll_over environment. Put '
                              'either \'supine\', \'prone\' or \'alternating\'. Default: \'prone\'.')
-    parser.add_argument('--goal_achievement_function', required=False, # Previously: --roll_over_goal_function
-                        choices=['angle', 'cos', 'intrinsic'],
-                        default='cos',
-                        help='Choose the function of achieved goal for the roll_over environment. Put '
-                             'either \'angle\', \'cos\' or \'intrinsic\'. \'angle\' and \'cos\' are '
-                             'scalar rotations read off the root free joint, which MIMo cannot '
-                             'sense. \'intrinsic\' is the non-scalar, non-extrinsic posture goal: a '
-                             'vector of joint angles plus vestibular acc-z, all of it already in '
-                             'the observation, but it does NOT work -- see docs/roll_over.md 3.4. '
-                             '26.08.2026 \'gravity\', which did work, was removed: that the '
-                             'extrinsic goal is computable from what MIMo senses is shown by '
-                             'results/intrinsic/intrinsic_rho_check.py without a training '
-                             'configuration of its own. Default: \'cos\'.')
-    # --- 'intrinsic' goal function ---------------------------------------------------------
-    # 19.08.2026 The old '--intrinsic_goal' sub-mode selector ('all', 'vesti', 'vesti_acc',
-    # 'sparse_proprio') was removed: those goals were dicts of raw sensor readings, which cannot
-    # be a SB3 goal space and cannot be relabelled by HER, and only 3 of 539 stored runs used
-    # them. 'intrinsic' now means the one posture goal, configured by the flags below.
-    parser.add_argument('--intrinsic_goal_joints', default='', type=str, required=False,
-                        help="Comma-separated joint names making up the intrinsic goal vector, "
-                             "with or without the 'robot:' prefix. Empty means the default six "
-                             "(head swivel/tilt/tilt_side, hip lean1/rot1/bend1). All must be "
-                             "1-DoF hinges.")
-    parser.add_argument('--intrinsic_acc_axes', default='x', type=str, required=False,
-                        help="Vestibular accelerometer components in the intrinsic goal, as a "
-                             "subset of 'xyz'. Default 'x': the accelerometer reports in the head "
-                             "site's local frame, whose x axis is the one aligned with world z, so "
-                             "x is the only component that separates prone (-9.7) from supine "
-                             "(+9.6). Pass '' to drop the accelerometer entirely -- that leaves "
-                             "only joint angles, which barely differ between the two postures.")
-    parser.add_argument('--intrinsic_acc_w', default=1.0, type=float, required=False,
-                        help="Weight of the accelerometer dimension of the intrinsic goal "
-                             "relative to the range-normalised joint angles. Default: 1.0.")
-    parser.add_argument('--intrinsic_goal_eps', default=0.15, type=float, required=False,
-                        help="Success radius of the intrinsic goal: success is "
-                             "||achieved - desired|| <= eps. Under --sparse_reward this value is "
-                             "the task definition. Default: 0.15.")
-    parser.add_argument('--intrinsic_reference_samples', default=20, type=int, required=False,
-                        help="Resets averaged into the recorded reference posture. Default: 20.")
     # 25.08.2026 See MIMoRollOverEnv.__init__ for the measurement this comes out of.
     parser.add_argument('--goal_tolerance', default=None, type=float, required=False,
                         help="Turn the scalar success test into a band: success is "
@@ -573,25 +460,10 @@ An example is '251206_prone_linear_1e6_test'
                              "of 1 means one gradient step per env step, which is what makes SAC far "
                              "slower per env step than PPO. Raise it to trade sample efficiency for "
                              "wallclock. Ignored by PPO/A2C.")
-    parser.add_argument('--gradient_steps', default=1, type=int,
-                        help="Off-policy only: gradient steps per update. -1 means 'as many as "
-                             "--train_freq'. Ignored by PPO/A2C.")
-    parser.add_argument('--learning_starts', default=100, type=int,
-                        help="Off-policy only: env steps collected before training begins. SB3's "
-                             "SAC default is 100, but HER cannot sample until a full episode is "
-                             "in the buffer, so with --her this is raised to above the 500-step "
-                             "episode horizon unless you set it higher yourself.")
     parser.add_argument('--her', action='store_true',
                         help="Use Hindsight Experience Replay. Requires an off-policy "
-                             "--algorithm (SAC/TD3/DDPG). Works with every "
-                             "--goal_achievement_function, including 'intrinsic': its goals are "
-                             "flat vectors and its reward is pure, so relabelling is real. Forces "
+                             "--algorithm (SAC/TD3/DDPG). Forces "
                              "--achieved_goal_in_observation on, since HER needs that key.")
-    parser.add_argument('--n_sampled_goal', default=4, type=int,
-                        help="HER: virtual transitions created per real transition.")
-    parser.add_argument('--goal_selection_strategy', default='future',
-                        choices=['future', 'final', 'episode'],
-                        help="HER: where the relabelled goal comes from.")
     parser.add_argument('--sparse_reward', action='store_true',
                         help="Reward 0 on reaching the goal and -1 otherwise, instead of PBRS or "
                              "distance shaping. This is the point of the HER experiments: it "
@@ -604,54 +476,14 @@ An example is '251206_prone_linear_1e6_test'
                              "condition on the goal. Evaluate with a fixed 0.95 regardless.")
     parser.add_argument('--goal_high', default=None, type=float,
                         help="Upper end of the sampled goal range. Must be given with --goal_low.")
-    parser.add_argument('--lr_schedule', default='constant',
-                        choices=['constant', 'linear', 'linear_tail'],
-                        help="Decay the learning rate so the endpoint is a frozen policy rather "
-                             "than a drifting one. 'linear' decays from step 0 to 0 at "
-                             "--train_for. **Measured on ep100, 6 seeds: it does what it is meant "
-                             "to do for seeds that learn early (retention 84 %%, best of three "
-                             "variants, and zero catastrophic dropouts) but it cannot rescue a "
-                             "late starter -- one seed was still at rho 0.076 at 500k, climbed "
-                             "afterwards on an already-halved rate and ended at 0.907. Only 3 of "
-                             "6 seeds ever reached 100 %%, against 5 and 6 without it.** "
-                             "'linear_tail' therefore holds the rate constant until "
-                             "--lr_decay_start of the run and only then decays to 0, leaving the "
-                             "whole learning phase at full rate (the first 100 %% falls between "
-                             "442k and 667k across variants) and freezing only the endpoint.")
-    parser.add_argument('--lr_decay_start', default=0.6, type=float,
-                        help="Fraction of --train_for at which 'linear_tail' starts decaying. "
-                             "0.6 of 1e6 = 600k, just after the observed learning phase. Must be "
-                             "in [0, 1).")
-    parser.add_argument('--target_entropy', default=None, type=float,
-                        help="SAC's entropy target, default -dim(action) = -46 here. The "
-                             "automatic coefficient rises whenever the policy becomes more "
-                             "deterministic than this, so on a solved task it re-injects noise: "
-                             "across 18 seeds the gap between the best and the final checkpoint "
-                             "correlates with the rise of 'train/ent_coef' at r = +0.68, and the "
-                             "five collapsing seeds ended at 0.0153 against 0.0034 for the "
-                             "stable ones. A lower value (e.g. -92) permits convergence while "
-                             "keeping the automatic tuning. SAC only.")
     parser.add_argument('--eval_every', default=0, type=int,
                         help="Run a deterministic evaluation every N steps (0 = off) under the "
-                             "protocol of eval_rollover.py: ISR off, goal pinned to 0.95, no "
-                             "curriculum, episodes not cut short. Logs 'eval/*' and saves "
+                             "protocol of eval_rollover.py: ISR off, goal pinned to 0.95, "
+                             "episodes not cut short. Logs 'eval/*' and saves "
                              "'model_best.zip' at the peak. Costs a second environment "
                              "(~3.6 GB RSS) and about 4 %% wall clock at the defaults.")
     parser.add_argument('--eval_episodes', default=20, type=int,
                         help="Episodes per evaluation when --eval_every is set.")
-    parser.add_argument('--stop_at_roll_rate', default=None, type=float,
-                        help="Stop training once --eval_every's roll rate reaches this value on "
-                             "--stop_patience consecutive evaluations. 1.0 means every "
-                             "evaluation episode rolled. The point is that 'steps to solve' is "
-                             "what a curriculum experiment reports, so training past the solve "
-                             "measures nothing. Needs --eval_every > 0. The checkpoint written "
-                             "at the stop is a normal model_<n>.zip, so --group evaluation is "
-                             "unaffected.")
-    parser.add_argument('--stop_patience', default=2, type=int,
-                        help="Consecutive evaluations that must hit --stop_at_roll_rate. One "
-                             "reading is not enough: a policy hovering below the threshold "
-                             "crosses it by chance, and the reported solve step would then not "
-                             "reproduce across seeds.")
     parser.add_argument('--episode_steps', default=None, type=int,
                         help=f"Episode horizon in steps, overriding the "
                              f"{ROLL_OVER_EPISODE_STEPS}-step TimeLimit that "
@@ -750,7 +582,6 @@ An example is '251206_prone_linear_1e6_test'
     render = args.render_video          # not in yaml
     use_muscle = args.use_muscle        # not in yaml
     roll_over_starting_position = args.roll_over_starting_position  # not in yaml
-    roll_over_goal_function = args.goal_achievement_function
     roll_over_model_path_auto = args.roll_over_model_path_auto      # not in yaml
     render_actuations = args.render_actuations
     log_actuations = args.log_actuations
@@ -763,7 +594,6 @@ An example is '251206_prone_linear_1e6_test'
     touch = args.touch
     achieved_goal_in_observation=args.achieved_goal_in_observation
     pen_factor = args.pen_factor
-    intrinsic_goal_joints = parse_intrinsic_goal_joints(args.intrinsic_goal_joints)
     freeze_arm = args.freeze_arm
     freeze_leg = args.freeze_leg
     side_lying = args.side_lying
@@ -776,36 +606,11 @@ An example is '251206_prone_linear_1e6_test'
     goal_low = args.goal_low
     goal_high = args.goal_high
     done_active = not args.no_done_active
+    # SB3's SAC default. Not a flag any more: every stored run used it, and under --her it is
+    # overridden below anyway because HerReplayBuffer cannot sample before an episode is done.
+    learning_starts = 100
 
-    # SB3 accepts either a float or a callable of the remaining progress (1.0 -> 0.0). That
-    # argument cannot be used here: train() calls learn() once per --save_every segment, and SB3
-    # recomputes the progress within each call, so the rate would saw-tooth back up at every
-    # checkpoint (measured: segment 1 ran 3e-4 -> 0, segment 2 restarted at 1.3e-4). The schedule
-    # therefore reads the model's global step count instead; 'lr_state' is filled in once the
-    # model exists.
-    lr_state = {'steps': 0, 'total': args.train_for}
-    if args.lr_schedule != 'constant':
-        if not 0.0 <= args.lr_decay_start < 1.0:
-            raise ValueError(f"--lr_decay_start must be in [0, 1), got {args.lr_decay_start}.")
-        base_lr = learning_rate
-        # 'linear' is 'linear_tail' with the decay starting at step 0.
-        decay_start = args.lr_decay_start if args.lr_schedule == 'linear_tail' else 0.0
 
-        def learning_rate(progress_remaining, _base=base_lr, _state=lr_state,
-                          _start=decay_start):
-            total = _state['total']
-            if not total:
-                return progress_remaining * _base
-            done = _state['steps'] / total
-            if done <= _start:
-                return _base
-            # Linear from the full rate at '_start' to 0 at the end of the run.
-            return max(0.0, (1.0 - done) / (1.0 - _start)) * _base
-
-    if args.target_entropy is not None and algorithm != 'SAC':
-        raise ValueError(
-            f"--target_entropy is a SAC parameter, got --algorithm={algorithm}. TD3 and DDPG "
-            f"have no entropy term, and PPO's is a fixed coefficient (--ent_coef upstream).")
 
     # The horizon actually in force. gym.make's 'max_episode_steps' overrides the TimeLimit from
     # the registration, so everything downstream has to read this rather than the constant.
@@ -837,20 +642,14 @@ An example is '251206_prone_linear_1e6_test'
         # HerReplayBuffer.sample() raises until at least one episode has finished, because it
         # needs episode boundaries to pick a 'future' goal. The horizon is 'episode_steps',
         # which --episode_steps may have moved away from the registered default.
-        if args.learning_starts <= episode_steps:
-            args.learning_starts = 2 * episode_steps
-            print(f"--her set: raising --learning_starts to {args.learning_starts} "
+        if learning_starts <= episode_steps:
+            learning_starts = 2 * episode_steps
+            print(f"--her set: raising learning_starts to {learning_starts} "
                   f"(must exceed the {episode_steps}-step episode horizon).")
 
     if (goal_low is None) != (goal_high is None):
         raise ValueError("Provide both --goal_low and --goal_high, or neither.")
 
-    if args.stop_at_roll_rate is not None and args.eval_every <= 0:
-        raise ValueError("--stop_at_roll_rate scores the periodic evaluation, so it needs "
-                         "--eval_every > 0. Without it nothing ever measures the roll rate and "
-                         "the run would train to --train_for regardless.")
-    if args.stop_patience < 1:
-        raise ValueError(f"--stop_patience must be at least 1, got {args.stop_patience}.")
 
     if pbrs and not sparse_reward and not done_active:
         # The PBRS potential jumps to +reward_success at the goal. That is only safe while the
@@ -929,7 +728,6 @@ An example is '251206_prone_linear_1e6_test'
             # in is a no-op, so this is safe when --episode_steps was not given.
             max_episode_steps=episode_steps,
             starting_position=roll_over_starting_position,
-            goal_function=roll_over_goal_function,
             width=480, # always 480 regardless whether we render actuations or not.
             height=render_height,
             nopen=nopen,
@@ -941,11 +739,6 @@ An example is '251206_prone_linear_1e6_test'
             proprio_params=proprio_params,
             pbrs_w=pbrs_w,
             pen_factor=pen_factor,
-            intrinsic_goal_joints=intrinsic_goal_joints,
-            intrinsic_acc_axes=args.intrinsic_acc_axes,
-            intrinsic_acc_w=args.intrinsic_acc_w,
-            intrinsic_goal_eps=args.intrinsic_goal_eps,
-            intrinsic_reference_samples=args.intrinsic_reference_samples,
             goal_tolerance=args.goal_tolerance,
             freeze_leg=freeze_leg,
             freeze_arm=freeze_arm,
@@ -1003,8 +796,9 @@ An example is '251206_prone_linear_1e6_test'
             from stable_baselines3 import HerReplayBuffer
             replay_buffer_class = HerReplayBuffer
             replay_buffer_kwargs = dict(
-                n_sampled_goal=args.n_sampled_goal,
-                goal_selection_strategy=args.goal_selection_strategy,
+                # The HER paper's own defaults, and what every stored run used.
+                n_sampled_goal=4,
+                goal_selection_strategy='future',
                 # Not optional. The roll_over reward splits into a goal-dependent success term
                 # and two goal-INDEPENDENT terms (the action penalty, and the previous achieved
                 # goal that the PBRS difference needs). Those two ride in the info dict, so if
@@ -1025,13 +819,11 @@ An example is '251206_prone_linear_1e6_test'
                 learning_rate=learning_rate,
                 buffer_size=args.buffer_size,
                 train_freq=args.train_freq,
-                gradient_steps=args.gradient_steps,
-                learning_starts=args.learning_starts,
+                gradient_steps=1,
+                learning_starts=learning_starts,
                 replay_buffer_class=replay_buffer_class,
                 replay_buffer_kwargs=replay_buffer_kwargs,
                 verbose=1)
-            if args.target_entropy is not None:
-                off_policy_kwargs['target_entropy'] = args.target_entropy
             model = RL("MultiInputPolicy", env, **off_policy_kwargs)
     else:
         if load_model:
@@ -1043,26 +835,16 @@ An example is '251206_prone_linear_1e6_test'
 
     # Save model metadata in model.
     yaml_data = {
-        # args.lr, not 'learning_rate': with --lr_schedule the latter is a callable, and
-        # yaml.dump would write a '!!python/name:' tag that yaml.safe_load then refuses.
         'lr': args.lr,
         'nopen': nopen,
         'pbrs': pbrs,
         'pbrs_w': pbrs_w,
-        'goal_achievement_function': roll_over_goal_function,
         'isr': isr,
         'algorithm': algorithm,
         'num_train': train_for,
         'obs_norm': observation_normalization,
         'touch': touch,
         'pen_factor': pen_factor,
-        # Intrinsic goal function. All experiment-defining, so all of them round-trip: reloading
-        # a model trained with eps=0.15 under a different eps would evaluate a different task.
-        'intrinsic_goal_joints': args.intrinsic_goal_joints,
-        'intrinsic_acc_axes': args.intrinsic_acc_axes,
-        'intrinsic_acc_w': args.intrinsic_acc_w,
-        'intrinsic_goal_eps': args.intrinsic_goal_eps,
-        'intrinsic_reference_samples': args.intrinsic_reference_samples,
         # Experiment-defining: it changes the success test and the value of the fixed goal, so a
         # model reloaded without it would be evaluated against a different task.
         'goal_tolerance': args.goal_tolerance,
@@ -1078,13 +860,10 @@ An example is '251206_prone_linear_1e6_test'
         # a 300k buffer under a different --buffer_size would evaluate a different experiment.
         'buffer_size': args.buffer_size,
         'train_freq': args.train_freq,
-        'gradient_steps': args.gradient_steps,
-        'learning_starts': args.learning_starts,
+        'learning_starts': learning_starts,
         # HER / goal settings. These define the experiment, so they must round-trip: reloading a
         # sparse-reward model under the default shaped reward would evaluate a different thing.
         'her': use_her,
-        'n_sampled_goal': args.n_sampled_goal,
-        'goal_selection_strategy': args.goal_selection_strategy,
         'sparse_reward': sparse_reward,
         'goal_low': goal_low,
         'goal_high': goal_high,
@@ -1093,13 +872,8 @@ An example is '251206_prone_linear_1e6_test'
         # a run at the length it was trained on, and 'None' would send it back to the default.
         'episode_steps': episode_steps,
         # Stability knobs. 'lr' above is the base rate; with a schedule it is the value at step 0.
-        'lr_schedule': args.lr_schedule,
-        'lr_decay_start': args.lr_decay_start if args.lr_schedule == 'linear_tail' else None,
-        'target_entropy': args.target_entropy,
         'eval_every': args.eval_every,
         'eval_episodes': args.eval_episodes,
-        'stop_at_roll_rate': args.stop_at_roll_rate,
-        'stop_patience': args.stop_patience,
         'achieved_goal_in_observation': achieved_goal_in_observation,
     }
     with open(f'{save_dir}/data.yml', 'w') as outfile:
@@ -1117,18 +891,12 @@ An example is '251206_prone_linear_1e6_test'
         eval_env = gym.make(env_names[env_name], actuation_model=actuation_model,
             max_episode_steps=episode_steps,
             starting_position=roll_over_starting_position,
-            goal_function=roll_over_goal_function,
             width=480, height=render_height, nopen=nopen,
             isr=False,
             pbrs=pbrs, render_mode='rgb_array',
             touch_params=ROLL_OVER_TOUCH_PARAMS if touch else None,
             achieved_goal_in_observation=achieved_goal_in_observation,
             proprio_params=proprio_params, pbrs_w=pbrs_w, pen_factor=pen_factor,
-            intrinsic_goal_joints=intrinsic_goal_joints,
-            intrinsic_acc_axes=args.intrinsic_acc_axes,
-            intrinsic_acc_w=args.intrinsic_acc_w,
-            intrinsic_goal_eps=args.intrinsic_goal_eps,
-            intrinsic_reference_samples=args.intrinsic_reference_samples,
             goal_tolerance=args.goal_tolerance,
             freeze_leg=freeze_leg, freeze_arm=freeze_arm,
             success_at_side_lying=False,
@@ -1144,9 +912,7 @@ An example is '251206_prone_linear_1e6_test'
                                              eval_every=args.eval_every,
                                              n_episodes=args.eval_episodes,
                                              save_dir=save_dir,
-                                             episode_steps=episode_steps,
-                                             stop_at_roll_rate=args.stop_at_roll_rate,
-                                             stop_patience=args.stop_patience)
+                                             episode_steps=episode_steps)
 
     if train_for > 0:
         if model is None:
@@ -1158,8 +924,7 @@ An example is '251206_prone_linear_1e6_test'
               isr=isr,
               argparse_args=args,
               save_intermediate=save_intermediate,
-              eval_callback=eval_callback,
-              lr_state=lr_state if args.lr_schedule != 'constant' else None)
+              eval_callback=eval_callback)
         if eval_callback is not None:
             eval_callback.eval_env.close()
 
@@ -1168,16 +933,11 @@ An example is '251206_prone_linear_1e6_test'
         # 'None', we just take random actions.
         test(env,
              save_dir,
-             model=None if args.random_actions else model,
+             model=model,
              render_video=render,
              render_frames=render_frames,
              render_actuations=render_actuations,
              roll_over_starting_position=roll_over_starting_position,
-             action_noise=args.action_noise,
-             action_sigma=args.action_sigma,
-             action_seq_len=args.action_seq_len,
-             action_noise_seed=args.action_noise_seed,
-             action_beta=args.action_beta,
              log_obs=args.log_obs)
 
     env.close()
