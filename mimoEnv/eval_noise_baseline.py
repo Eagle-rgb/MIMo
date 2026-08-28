@@ -36,6 +36,7 @@ the posture changes, so at most one env exists at a time -- never run two of the
 import argparse
 import gc
 import json
+import shutil
 import os
 
 os.environ.setdefault("MUJOCO_GL", "osmesa")
@@ -173,17 +174,20 @@ def _overlay(frame, text_lines):
     import cv2
 
     frame = np.ascontiguousarray(frame)
+    # On an RGBA frame the text has to bring its own alpha, or it is drawn into pixels that stay
+    # fully transparent and is invisible in anything that honours the channel.
+    dark = (0, 0, 0, 255) if frame.shape[2] == 4 else (0, 0, 0)
+    light = (255, 255, 255, 255) if frame.shape[2] == 4 else (255, 255, 255)
     for i, line in enumerate(text_lines):
         origin = (10, 24 + 22 * i)
         # Black underlay first, so the text stays readable over both the bright floor and MIMo.
-        cv2.putText(frame, line, origin, cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 3, cv2.LINE_AA)
-        cv2.putText(frame, line, origin, cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1,
-                    cv2.LINE_AA)
+        cv2.putText(frame, line, origin, cv2.FONT_HERSHEY_SIMPLEX, 0.6, dark, 3, cv2.LINE_AA)
+        cv2.putText(frame, line, origin, cv2.FONT_HERSHEY_SIMPLEX, 0.6, light, 1, cv2.LINE_AA)
     return frame
 
 
-def make_frame_source(env, camera, size):
-    """How a frame is grabbed, as ``(grab, close)``.
+def make_frame_source(env, camera, size, transparent=False):
+    """How a frame is grabbed, as ``(grab, close)``. RGB, or RGBA when 'transparent'.
 
     'top' is the camera illustrations.py uses for its frame_1..4 stills: free camera, elevation
     -90, azimuth flipped for supine, and `render_top_down` re-aims `lookat` at the centre of
@@ -192,8 +196,17 @@ def make_frame_source(env, camera, size):
 
     render.utils.create_renderer hardcodes 240x240 -- fine for a still in a paper, too coarse for a
     video -- so the renderer is built here with the same call and a configurable size.
+
+    Transparency: MuJoCo's renderer has no alpha channel, so the cutout comes from a second pass in
+    segmentation mode over the same scene. That pass returns (geom id, object type) per pixel, and
+    the rule for "this is MIMo" is `model.geom_bodyid[geom] != 0` -- body 0 is the worldbody, which
+    is exactly the floor and the skybox. Naming the floor geom would have worked too, but breaks on
+    any scene that names it differently; the worldbody test does not.
     """
     if camera != 'top':
+        if transparent:
+            raise SystemExit("--transparent needs --camera=top: the cutout comes from a second "
+                             "segmentation pass, and the env's own renderer does not offer one.")
         return (lambda: env.mujoco_renderer.render(render_mode="rgb_array")), (lambda: None)
 
     import mujoco
@@ -201,11 +214,33 @@ def make_frame_source(env, camera, size):
 
     renderer = mujoco.Renderer(env.model, height=size, width=size)
     cam = create_top_down_camera(env.starting_position)
-    return (lambda: render_top_down(env.data, renderer, cam)), renderer.close
+    if not transparent:
+        return (lambda: render_top_down(env.data, renderer, cam)), renderer.close
+
+    geom_bodyid = env.model.geom_bodyid
+
+    def grab():
+        # render_top_down first: it sets cam.lookat, so the segmentation pass below sees exactly
+        # the same framing without having to recompute the centre.
+        rgb = render_top_down(env.data, renderer, cam)
+        renderer.enable_segmentation_rendering()
+        try:
+            renderer.update_scene(env.data, camera=cam)
+            segmentation = renderer.render()
+        finally:
+            renderer.disable_segmentation_rendering()
+        objid, objtype = segmentation[:, :, 0], segmentation[:, :, 1]
+        is_geom = (objtype == mujoco.mjtObj.mjOBJ_GEOM) & (objid >= 0)
+        # np.where over a clipped index: objid is -1 on background pixels and would wrap around.
+        on_mimo = is_geom & (geom_bodyid[np.clip(objid, 0, None)] != 0)
+        rgba = np.dstack([rgb, np.where(on_mimo, 255, 0).astype(np.uint8)])
+        return rgba
+
+    return grab, renderer.close
 
 
 def render_episode(env, condition, sigma, episode, episode_steps, seed0, seq_len, out_path,
-                   overlay=True, fps=None, camera='top', size=500):
+                   overlay=True, fps=None, camera='top', size=500, transparent=False):
     """Re-run one episode of the sweep with the renderer on and write it to 'out_path'.
 
     Two things make this an exact replay of the measured episode rather than a fresh sample:
@@ -219,6 +254,11 @@ def render_episode(env, condition, sigma, episode, episode_steps, seed0, seq_len
 
     Frames are streamed straight into the writer instead of collected in a list: 500 frames of
     480x480 RGB is ~345 MB held for no reason.
+
+    With 'transparent' the frames carry an alpha channel, which mp4v cannot: they go out as a PNG
+    sequence, ffmpeg encodes a VP9 WebM (`yuva420p`, the one widely-played format that keeps
+    alpha), and the keyframes are cut from the PNGs rather than read back out of the video, so
+    they keep full per-pixel alpha instead of VP9's compressed version of it.
     """
     import cv2
 
@@ -235,13 +275,21 @@ def render_episode(env, condition, sigma, episode, episode_steps, seed0, seq_len
         # Real time: one simulated second is one second of video.
         fps = int(round(1.0 / env.dt))
 
-    grab, close_renderer = make_frame_source(env, camera, size)
+    grab, close_renderer = make_frame_source(env, camera, size, transparent)
     frame = grab()
     height, width = frame.shape[:2]
     os.makedirs(os.path.dirname(os.path.abspath(out_path)), exist_ok=True)
-    writer = cv2.VideoWriter(out_path, cv2.VideoWriter_fourcc(*'mp4v'), fps, (width, height))
-    if not writer.isOpened():
-        raise RuntimeError(f"OpenCV could not open a writer for {out_path}.")
+
+    frame_dir = None
+    writer = None
+    if transparent:
+        frame_dir = out_path[:-4] + '_frames'
+        shutil.rmtree(frame_dir, ignore_errors=True)
+        os.makedirs(frame_dir)
+    else:
+        writer = cv2.VideoWriter(out_path, cv2.VideoWriter_fourcc(*'mp4v'), fps, (width, height))
+        if not writer.isOpened():
+            raise RuntimeError(f"OpenCV could not open a writer for {out_path}.")
 
     rho = float(env.get_achieved_goal_cos()[0])
     best = rho
@@ -263,14 +311,58 @@ def render_episode(env, condition, sigma, episode, episode_steps, seed0, seq_len
                     "ROLLED (rho >= 0.95)" if best >= ROLL_THRESHOLD else "",
                 ])
             trace.append(rho)
-            writer.write(cv2.cvtColor(np.asarray(frame, dtype=np.uint8), cv2.COLOR_RGB2BGR))
+            out = np.asarray(frame, dtype=np.uint8)
+            if transparent:
+                cv2.imwrite(os.path.join(frame_dir, f"f{step:05d}.png"),
+                            cv2.cvtColor(out, cv2.COLOR_RGBA2BGRA))
+            else:
+                writer.write(cv2.cvtColor(out, cv2.COLOR_RGB2BGR))
     finally:
-        writer.release()
+        if writer is not None:
+            writer.release()
         close_renderer()
-    return best, rho, fps, np.asarray(trace)
+    if transparent:
+        encode_alpha_video(frame_dir, out_path, fps)
+    return best, rho, fps, np.asarray(trace), frame_dir
 
 
-def write_keyframes(video_path, trace, count, out_prefix):
+ALPHA_CODEC = ('qtrle', 'argb', '.mov')
+# 26.08.2026 Not WebM/VP9. `-c:v libvpx-vp9 -pix_fmt yuva420p` is the recipe everyone quotes for
+# transparent video, and ffmpeg 8 accepts it without a warning -- but decoding the result back to
+# rgba returns a fully opaque frame, so the alpha is silently dropped. QuickTime RLE keeps it, is
+# lossless, and plays in VLC and every editor; ProRes 4444 ('prores_ks', 'yuva444p10le') is the
+# other option if a smaller file matters more than losslessness.
+
+
+def encode_alpha_video(frame_dir, out_path, fps):
+    """PNG sequence -> a video that actually carries the alpha channel.
+
+    Verified rather than trusted: the encode is followed by decoding frame 0 back to rgba and
+    checking that transparent pixels are still transparent. Getting this wrong is invisible in the
+    file itself -- it just quietly gains a black background -- so it is worth the one extra call.
+    """
+    import subprocess
+
+    codec, pix_fmt, suffix = ALPHA_CODEC
+    video = out_path[:-4] + suffix
+    subprocess.run([
+        'ffmpeg', '-y', '-loglevel', 'error',
+        '-framerate', str(fps), '-i', os.path.join(frame_dir, 'f%05d.png'),
+        '-c:v', codec, '-pix_fmt', pix_fmt, video,
+    ], check=True)
+
+    probe = os.path.join(frame_dir, '_alpha_check.png')
+    subprocess.run(['ffmpeg', '-y', '-loglevel', 'error', '-i', video,
+                    '-frames:v', '1', '-pix_fmt', 'rgba', probe], check=True)
+    import cv2
+    decoded = cv2.imread(probe, cv2.IMREAD_UNCHANGED)
+    os.remove(probe)
+    if decoded is None or decoded.shape[2] != 4 or not (decoded[:, :, 3] == 0).any():
+        raise RuntimeError(f"{video} lost its alpha channel during encoding.")
+    return video
+
+
+def write_keyframes(video_path, trace, count, out_prefix, frame_dir=None):
     """Pull 'count' frames out of an already-written video, from the start up to the roll.
 
     "Up to the roll" is the point: the interesting part of a lucky red-noise episode is over the
@@ -279,7 +371,9 @@ def write_keyframes(video_path, trace, count, out_prefix):
     the frame with the highest rho stands in for it.
 
     Frames are read sequentially rather than seeked: mp4v seeking by frame index is unreliable, and
-    reading a few hundred frames costs nothing. Only the wanted ones are kept in memory.
+    reading a few hundred frames costs nothing. Only the wanted ones are kept in memory. When the
+    render kept a PNG sequence ('frame_dir', the transparent path), the wanted frames are read from
+    it directly -- both because it is cheaper and because it preserves the alpha channel exactly.
     """
     import cv2
 
@@ -289,18 +383,25 @@ def write_keyframes(video_path, trace, count, out_prefix):
     # the roll itself -- the two frames the figure has to contain.
     wanted = sorted(set(int(i) for i in np.linspace(0, last, count)))
 
-    capture = cv2.VideoCapture(video_path)
-    frames, index = {}, 0
-    try:
-        while index <= wanted[-1]:
-            ok, frame = capture.read()
-            if not ok:
-                break
-            if index in wanted:
-                frames[index] = frame
-            index += 1
-    finally:
-        capture.release()
+    frames = {}
+    if frame_dir:
+        for i in wanted:
+            frame = cv2.imread(os.path.join(frame_dir, f"f{i:05d}.png"), cv2.IMREAD_UNCHANGED)
+            if frame is not None:
+                frames[i] = frame
+    else:
+        capture = cv2.VideoCapture(video_path)
+        index = 0
+        try:
+            while index <= wanted[-1]:
+                ok, frame = capture.read()
+                if not ok:
+                    break
+                if index in wanted:
+                    frames[index] = frame
+                index += 1
+        finally:
+            capture.release()
 
     paths = []
     for position, i in enumerate(wanted):
@@ -386,6 +487,12 @@ def main():
                         help="'top' is illustrations.py's top-down camera, re-centred on MIMo every "
                              "frame (render.utils.render_top_down) -- he stays in the picture even "
                              "as he slides. 'env' is the environment's own fixed camera.")
+    parser.add_argument('--transparent', action='store_true',
+                        help="Cut the floor and the skybox out: frames get an alpha channel from a "
+                             "segmentation pass, keyframes become RGBA PNGs and the video is "
+                             "written as a QuickTime-RLE .mov, since mp4 cannot carry alpha.")
+    parser.add_argument('--keep_frames', action='store_true',
+                        help="With --transparent, keep the intermediate PNG sequence.")
     parser.add_argument('--render_size', type=int, default=500,
                         help="Square resolution of the --camera=top renderer.")
     parser.add_argument('--keyframes', type=int, default=0, metavar='N',
@@ -417,16 +524,18 @@ def main():
                     print(f"Rendering {posture} {condition} sigma={sigma:g} episode {episode} "
                           f"(replaying {episode} episodes first to reach its noise stream)...",
                           flush=True)
-                    best, end, fps, trace = render_episode(
+                    best, end, fps, trace, frame_dir = render_episode(
                         env, condition, sigma, episode, args.episode_steps, args.seed, seq_len,
                         out, overlay=not args.no_overlay, fps=args.fps,
-                        camera=args.camera, size=args.render_size)
+                        camera=args.camera, size=args.render_size,
+                        transparent=args.transparent)
                     verdict = 'ROLLED' if best >= ROLL_THRESHOLD else 'no roll'
-                    print(f"  -> {out}  rho_max={best:.4f} rho_end={end:.4f} "
+                    video = out[:-4] + ALPHA_CODEC[2] if args.transparent else out
+                    print(f"  -> {video}  rho_max={best:.4f} rho_end={end:.4f} "
                           f"({verdict}, {fps} fps)", flush=True)
                     if args.keyframes:
                         paths, strip, cut, hit = write_keyframes(
-                            out, trace, args.keyframes, out[:-4])
+                            out, trace, args.keyframes, out[:-4], frame_dir=frame_dir)
                         where = ("roll at step" if hit else "no roll; highest rho at step")
                         print(f"     {args.keyframes} keyframes over steps 0..{cut} "
                               f"({where} {cut}):", flush=True)
@@ -434,6 +543,8 @@ def main():
                             print(f"       step {step:3d}  rho={rho:.3f}  {path}", flush=True)
                         if strip:
                             print(f"       strip: {strip}", flush=True)
+                    if frame_dir and not args.keep_frames:
+                        shutil.rmtree(frame_dir, ignore_errors=True)
             finally:
                 env.close()
                 del env

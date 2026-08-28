@@ -509,7 +509,7 @@ class MIMoEnv(MujocoEnv, utils.EzPickle):
         if self.vision:
             obs = self.get_vision_obs()
             for sensor in self.vision_params:
-                spaces_dict[sensor] = spaces.Box(0, 255, shape=obs.shape, dtype=np.uint8)
+                spaces_dict[sensor] = spaces.Box(0, 255, shape=obs[sensor].shape, dtype=np.uint8)
         if self.vestibular:
             obs = self.get_vestibular_obs()
             print(f"Using vestibular. Vestibular shape: {obs.shape}.")

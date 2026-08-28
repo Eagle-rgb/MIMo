@@ -36,6 +36,7 @@ for i in $(seq 0 $((NUMBER_OF_RUNS-1))); do
 		"--save_every=200000" \
 		"--roll_over_starting_position=prone" \
 		"--algorithm=SAC" \
+		"--her" \
 		"--sparse_reward" \
 		"--eval_every=25000" \
 		"--eval_episodes=20" \

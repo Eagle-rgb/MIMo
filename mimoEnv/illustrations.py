@@ -28,7 +28,7 @@ import cv2
 
 import mimoEnv
 from mimoEnv.envs.mimo_env import MIMoEnv
-from mimoEnv.envs.mimo_env import DEFAULT_PROPRIOCEPTION_PARAMS, PROPRIOCEPTION_PARAMS_ONLY_QPOS
+from mimoEnv.envs.mimo_env import DEFAULT_PROPRIOCEPTION_PARAMS, PROPRIOCEPTION_PARAMS_ONLY_QPOS, DEFAULT_VISION_PARAMS
 from mimoActuation.actuation import SpringDamperModel
 from mimoActuation.muscle import MuscleModel
 from mimoEnv.envs.mimo_env import SCENE_DIRECTORY
@@ -591,6 +591,8 @@ An example is '251206_prone_linear_1e6_test'
                         "- limits\n" \
                         "- actuation\n\n" \
                         "Combine arguments using '|'.")
+    parser.add_argument("--vision", action="store_true",
+                        help="Enable vision observation")
     
     # Parse yaml if we specified '--load_model'.
     args, remaining_argv = parser.parse_known_args()
@@ -695,8 +697,11 @@ An example is '251206_prone_linear_1e6_test'
 
     proprio_params = DEFAULT_PROPRIOCEPTION_PARAMS
 
-    if len(args.proprio_config) > 0:
-        proprio_params["components"] = parse_proprio(args.proprio_config)
+    if args.proprio_config is not None:
+        if len(args.proprio_config) == 0:
+            proprio_params = None
+        else:
+            proprio_params["components"] = parse_proprio(args.proprio_config)
 
     if freeze_arm or freeze_leg:
         print("Warning! Some limbs are frozen.")
@@ -752,7 +757,10 @@ An example is '251206_prone_linear_1e6_test'
     # 15.12.2025 Added 'done_active=True' to allow environment termination
     # when we reached a goal state.
     if env_name == 'roll_over':
-        print(f"Using proprioception parameters: " + ','.join(proprio_params["components"]))
+        if proprio_params:
+            print(f"Using proprioception parameters: " + ','.join(proprio_params["components"]))
+        else:
+            print(f"Not using proprioception")
         env = gym.make(env_names[env_name], actuation_model=actuation_model,
             # Overrides the TimeLimit from the registration. Passing the registered default back
             # in is a no-op, so this is safe when --episode_steps was not given.
@@ -781,7 +789,8 @@ An example is '251206_prone_linear_1e6_test'
             goal_high=goal_high,
             done_active=done_active,
             age_physio=physio_age,
-            age_morph=morph_age)
+            age_morph=morph_age,
+            vision_params=DEFAULT_VISION_PARAMS if args.vision else None)
         # if log_actuations:
         #     wrapped_env = MIMoRollOverWrapper(env, log_file=os.path.join(save_dir,"actuation_log.csv"))
         # else:
@@ -913,6 +922,7 @@ An example is '251206_prone_linear_1e6_test'
         'eval_every': args.eval_every,
         'eval_episodes': args.eval_episodes,
         'achieved_goal_in_observation': achieved_goal_in_observation,
+        'vision': args.vision,
     }
     with open(f'{save_dir}/data.yml', 'w') as outfile:
         yaml.dump(yaml_data, outfile, default_flow_style=False)
@@ -948,6 +958,7 @@ An example is '251206_prone_linear_1e6_test'
             goal_low=(1.0 if args.goal_tolerance is not None else 0.95),
             goal_high=(1.0 if args.goal_tolerance is not None else 0.95),
             done_active=False,
+            vision_params=DEFAULT_VISION_PARAMS if args.vision else None,
             age_physio=physio_age, age_morph=morph_age).unwrapped
         eval_callback = RollOverEvalCallback(eval_env=eval_env,
                                              eval_every=args.eval_every,
