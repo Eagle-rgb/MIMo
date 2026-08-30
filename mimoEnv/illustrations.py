@@ -493,6 +493,8 @@ An example is '251206_prone_linear_1e6_test'
                         help="Use Hindsight Experience Replay. Requires an off-policy "
                              "--algorithm (SAC/TD3/DDPG). Forces "
                              "--achieved_goal_in_observation on, since HER needs that key.")
+    parser.add_argument("--n_sampled_goal", type=int, default=4,
+                        help="Number of virtual transitions inserted into the replay buffer by HER.")
     parser.add_argument('--sparse_reward', action='store_true',
                         help="Reward 0 on reaching the goal and -1 otherwise, instead of PBRS or "
                              "distance shaping. This is the point of the HER experiments: it "
@@ -839,7 +841,7 @@ An example is '251206_prone_linear_1e6_test'
             replay_buffer_class = HerReplayBuffer
             replay_buffer_kwargs = dict(
                 # The HER paper's own defaults, and what every stored run used.
-                n_sampled_goal=4,
+                n_sampled_goal=args.n_sampled_goal,
                 goal_selection_strategy='future',
                 # Not optional. The roll_over reward splits into a goal-dependent success term
                 # and two goal-INDEPENDENT terms (the action penalty, and the previous achieved
@@ -923,6 +925,7 @@ An example is '251206_prone_linear_1e6_test'
         'eval_episodes': args.eval_episodes,
         'achieved_goal_in_observation': achieved_goal_in_observation,
         'vision': args.vision,
+        'n_sampled_goal': args.n_sampled_goal,
     }
     with open(f'{save_dir}/data.yml', 'w') as outfile:
         yaml.dump(yaml_data, outfile, default_flow_style=False)
