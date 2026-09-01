@@ -24,15 +24,17 @@ for i in $(seq 0 5); do
 		"cd MIMo && "\
 		"python mimoEnv/illustrations.py" \
 		"--train_for=1000000" \
-		"--save_every=1000000" \
-		"--roll_over_starting_position=supine" \
+		"--save_every=200000" \
+		"--roll_over_starting_position=prone" \
 		"--algorithm=SAC" \
-		"--goal_tolerance=0.05" \
+		"--her" \
 		"--sparse_reward" \
+		"--n_sampled_goal=1024" \
 		"--eval_every=25000" \
 		"--eval_episodes=20" \
 		"--pen_factor=0.02" \
 		"--no_done_active" \
+		"--goal_achievement_function=gravity" \
 		"--episode_steps=200" \
 		"--roll_over_model_path_auto" \
 		"--save_model=${MODEL_NAME}_run_$((i))" \

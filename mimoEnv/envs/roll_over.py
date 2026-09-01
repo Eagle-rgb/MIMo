@@ -21,6 +21,7 @@ The class with the env is :class:`~mimoEnv.envs.standup.MIMoRollOverEnv` while
 the path to the scene XML is defined in :data:`ROLL_OVER_XML`.
 """
 
+from mimoEnv.envs.roll_over_look import LookReward
 from mimoEnv.envs.mimo_env import MIMoEnv, SCENE_DIRECTORY, \
     DEFAULT_PROPRIOCEPTION_PARAMS, DEFAULT_VESTIBULAR_PARAMS
 from mimoActuation.actuation import SpringDamperModel
@@ -58,6 +59,105 @@ TOUCH_PARAMS = {
     "touch_function": "force_vector",
     "response_function": "spread_linear",
 }
+
+# 01.09.2026 Vision. The motivation is the blindness literature: only 20 % of blind infants roll
+# at 9 months against 100 % of same-aged sighted infants, so vision belongs in this experiment.
+#
+# The upstream 'DEFAULT_VISION_PARAMS' renders 256x256 RGB *per eye*, i.e. 393216 values per
+# observation. That is what ran the cluster GPUs out of VRAM, for three compounding reasons:
+#
+#   - SB3's 'CombinedExtractor' builds one NatureCNN per image key. Its three strided convs
+#     (8/4, 4/2, 3/1) shrink the image by ~8x, so the flatten before the output layer is
+#     64 * (H/8)^2: 50176 at 256x256, hence a 50176x256 Linear = 12.8 M parameters *per eye*.
+#     SAC instantiates that for the actor, both critics and both critic targets, and Adam keeps
+#     two moments per parameter.
+#   - Conv activations scale with H*W and are held for the backward pass, once per batch element.
+#   - The replay buffer holds 'obs' and 'next_obs': 393 kB per observation is 79 GB for a 100k
+#     HER buffer. That is host RAM rather than VRAM, but it kills a run just as reliably.
+#
+# 64x64 is the standard resolution for pixel RL (DQN/Atari onwards, and what NatureCNN was tuned
+# for). Against 256 it cuts the observation 16x (393216 -> 24576 values) and the CNN's final
+# Linear 49x (1024x256 = 262 k per eye). '--vision_grayscale' takes another 3x off, and
+# '--vision_eyes=left|right' a further 2x; rolling needs no binocular disparity.
+#
+# Do not go below 36: NatureCNN's convs collapse the feature map to zero width, and SB3 itself
+# warns about image spaces smaller than 36x36.
+VISION_RESOLUTION_DEFAULT = 64
+VISION_RESOLUTION_MIN = 36
+
+# What runs saved before 01.09.2026 were trained at: those used 'DEFAULT_VISION_PARAMS'
+# unchanged. 'load_model_yaml' substitutes this when a stored 'data.yml' has 'vision: true' but
+# no 'vision_resolution', so reloading such a run does not silently rebuild it at 64x64.
+VISION_RESOLUTION_LEGACY = 256
+
+EYES = {"both": ["eye_left", "eye_right"], "left": ["eye_left"], "right": ["eye_right"]}
+""" The camera sets selectable with ``--vision_eyes``. The camera names must exist in the scene
+XML.
+
+:meta hide-value:
+"""
+
+
+def scene_path(age_physio, age_morph, playroom=False):
+    """ The pre-generated scene for one (physiological, morphological) age pair.
+
+    Args:
+        age_physio (int): Actuation age, one of :data:`.AGES`.
+        age_morph (int): Body age, one of :data:`.AGES`.
+        playroom (bool): Load the '_playroom' variant, which adds the toys. Default ``False``.
+
+    Returns:
+        str: Path to the scene xml.
+    """
+    if age_physio not in AGES or age_morph not in AGES:
+        raise ValueError(f"Allowed ages: {AGES}, got physio={age_physio}, morph={age_morph}")
+    name = f"scene_act_{age_physio}_body_{age_morph}{'_playroom' if playroom else ''}.xml"
+    return os.path.join(SCENE_DIRECTORY, "roll_over", "prone", name)
+
+
+def make_vision_params(resolution=VISION_RESOLUTION_DEFAULT, grayscale=False, eyes="both",
+                       shadows=False, fovy=60):
+    """ Builds the vision configuration for the roll-over experiment.
+
+    This replaces :data:`~mimoEnv.envs.mimo_env.DEFAULT_VISION_PARAMS`, whose 256x256 per eye does
+    not fit on the cluster GPUs. See the comment above :data:`.VISION_RESOLUTION_DEFAULT` for the
+    arithmetic.
+
+    Args:
+        resolution (int): Edge length of the square image rendered per eye. Default
+            :data:`.VISION_RESOLUTION_DEFAULT` (64). Must be at least
+            :data:`.VISION_RESOLUTION_MIN` (36).
+        grayscale (bool): Render RGB but return a single luminance channel, i.e. `(H, W, 1)`
+            instead of `(H, W, 3)`. Default ``False``.
+        eyes (str): Which cameras to use, one of the keys of :data:`.EYES`. Default ``"both"``.
+        shadows (bool): Render shadows and floor reflections. Default ``False``: they cost about
+            eight times the render and do not depend on the resolution. See
+            :meth:`~mimoVision.vision.SimpleVision.get_vision_obs`.
+        fovy (float): Vertical field of view in degrees. Default 60, as upstream.
+
+    Returns:
+        Dict: A vision configuration for :class:`~mimoVision.vision.SimpleVision`.
+    """
+    if resolution < VISION_RESOLUTION_MIN:
+        raise ValueError(
+            f"--vision_resolution={resolution} is below {VISION_RESOLUTION_MIN}. SB3's NatureCNN "
+            f"reduces the image by a factor of ~8 over three strided convolutions and the "
+            f"feature map collapses below that size.")
+    if eyes not in EYES:
+        raise ValueError(f"--vision_eyes={eyes} is not one of {sorted(EYES)}.")
+    # A fresh dict per eye: 'MIMoEnv.vision_setup' mutates the per-camera entries in place.
+    return {eye: {"width": resolution, "height": resolution, "fovy": fovy,
+                  "acuity": False, "foveation": False, "grayscale": grayscale,
+                  "shadows": shadows}
+            for eye in EYES[eyes]}
+
+
+def vision_obs_size(vision_params):
+    """ Number of values one vision observation contributes, summed over the cameras. """
+    if not vision_params:
+        return 0
+    return sum(params["width"] * params["height"] * (1 if params.get("grayscale") else 3)
+               for params in vision_params.values())
 
 # 26.08.2026 The 'angle' and 'intrinsic' goal functions were REMOVED. Two goal functions are
 # left, selected by '--goal_achievement_function':
@@ -207,6 +307,27 @@ class MIMoRollOverEnv(MIMoEnv):
                  # reset would pin the goal to one draw of the initial joint noise.
                  # Previously: --intrinsic_reference_samples
                  gravity_reference_samples=20,
+                 # 01.09.2026 Load the playroom variant of the scene: the same MIMo on the same
+                 # floor, with ten toys ringed around him just out of reach. Without it there is
+                 # nothing in either eye -- supine MIMo looks at a flat gradient skybox, prone he
+                 # looks at the floor 1 cm from his face -- so any vision-driven reward is
+                 # vacuous. Built by 'mimoEnv/assets/roll_over/generate_playroom_scenes.py'.
+                 playroom=False,
+                 # --- the looking reward --------------------------------------------------
+                 # 01.09.2026 Reward MIMo for what he can see rather than for how far he has
+                 # turned. See 'mimoEnv/envs/roll_over_look.py' for the mechanism and the
+                 # measurements behind the defaults. Requires 'playroom=True'.
+                 look_reward=False,
+                 look_w=100.0,
+                 look_habituation_steps=50,
+                 look_recovery_steps=150,
+                 look_fovea=0.35,
+                 look_eyes='left',
+                 # Whether rho contributes to the reward at all. '--no_rotation_reward' drops the
+                 # sparse/PBRS/success terms and leaves only the looking reward and the control
+                 # cost, which is the configuration that makes "does looking produce rolling" a
+                 # question the run can answer instead of assume. rho stays in 'info' either way.
+                 rotation_reward=True,
                  # 25.08.2026 Turns the scalar success test from the threshold
                  # 'achieved >= desired' into the band '|achieved - desired| <= goal_tolerance',
                  # None keeps the threshold, so every stored 'data.yml' reloads unchanged.
@@ -280,13 +401,37 @@ class MIMoRollOverEnv(MIMoEnv):
         # scenes at the same time.
         #if age == 18:  # default
         #    model_path = os.path.join(SCENE_DIRECTORY, "roll_over_prone_scene.xml")
-        if age_physio in AGES and age_morph in AGES:
-            model_path = os.path.join(SCENE_DIRECTORY,
-                "roll_over",
-                "prone",
-                f"scene_act_{age_physio}_body_{age_morph}.xml")
-        else:
-            raise ValueError("Allowed ages: 1, 3, 6, 9")
+        self.playroom = playroom
+        model_path = scene_path(age_physio, age_morph, playroom)
+
+        self.look_reward = look_reward
+        self.rotation_reward = rotation_reward
+        if look_reward and not playroom:
+            raise ValueError("'look_reward' needs the playroom -- without toys there is nothing "
+                             "to look at and the reward is identically zero. Pass "
+                             "'playroom=True' (--playroom).")
+        if not rotation_reward and not look_reward:
+            raise ValueError("'rotation_reward=False' with no 'look_reward' leaves nothing but "
+                             "the control cost, whose optimum is to lie still.")
+        if look_reward and not isr:
+            # Measured 01.09.2026, 10 episodes of 200 steps under a random policy from supine:
+            # 0.0 % of steps earned anything and 0/10 episodes saw a single toy. That is not a
+            # sparse reward, it is no reward -- supine the eye points at the sky and nothing a
+            # random policy does brings a toy into the fovea. With '--isr' the start angle is
+            # drawn from Beta(1,3) over 0-180 degrees, some episodes begin where the reward is
+            # non-zero, and the figure becomes 0.7 % of steps and 1/10 episodes (2.5 % and 2/10
+            # at '--look_fovea=0.6'). 'ISRCallback' then anneals it away at 75 % of training, so
+            # the final policy is still comparable to a non-ISR run.
+            print("WARNING: 'look_reward' without 'isr'. A random policy starting supine earns "
+                  "exactly zero looking reward -- there is nothing to bootstrap from. Pass "
+                  "'--isr' unless you are deliberately measuring that.")
+        if not rotation_reward and done_active:
+            # Terminating the episode on success would make rolling *cost* MIMo the rest of the
+            # episode's looking reward, i.e. the reward would actively select against the
+            # behaviour the experiment is about. Same reasoning as '--no_done_active' under HER.
+            raise ValueError("'rotation_reward=False' requires 'done_active=False' "
+                             "(--no_done_active): ending the episode on a roll deletes the "
+                             "looking reward the roll was supposed to earn.")
 
         self.reward_success=reward_success
         self.isr=isr
@@ -363,6 +508,14 @@ class MIMoRollOverEnv(MIMoEnv):
 
         self.init_position=self.data.qpos.copy()
         self.put_in_starting_position()
+
+        # Built here rather than above, because it needs the compiled model that
+        # 'super().__init__' produces.
+        self.look = None
+        if self.look_reward:
+            self.look = LookReward(self, cameras=EYES[look_eyes], weight=look_w,
+                                   habituation_steps=look_habituation_steps,
+                                   recovery_steps=look_recovery_steps, fovea=look_fovea)
 
         if self.goal_function == 'gravity':
             print("Creating prone and supine reference goals ('gravity').")
@@ -468,12 +621,16 @@ class MIMoRollOverEnv(MIMoEnv):
     def set_embodiment(self, morph_age, physio_age):
         """ Sets the embodiment to the MuJoCo .xml file that fits to the
         morphological age 'morph_age' and physiological age 'pyhsio_age'. """
-        xml_path = f"mimoEnv/assets/roll_over/prone/scene_act_{physio_age}_body_{morph_age}.xml"
+        xml_path = scene_path(physio_age, morph_age, self.playroom)
         self.model = mujoco.MjModel.from_xml_path(xml_path)
         self.data = mujoco.MjData(self.model)
         self.fix_top_camera_rotation_supine()
 
         self.initialize()
+        # Re-resolve the toy geom ids and rebuild the segmentation renderer against the new
+        # model, exactly as 'initialize()' does for the gravity goal's site and body ids.
+        if getattr(self, 'look', None) is not None:
+            self.look.initialize()
         mujoco.mj_resetData(self.model, self.data)
         mujoco.mj_forward(self.model, self.data)
         self.reset()
@@ -681,6 +838,10 @@ class MIMoRollOverEnv(MIMoEnv):
 
         self.goal = self.sample_goal()
         self._prev_achieved_goal = None
+
+        # Every episode starts with every toy novel again.
+        if self.look is not None:
+            self.look.reset()
 
         # self.set_state(self.init_qpos, self.init_qvel)
         self.put_in_starting_position()
@@ -975,6 +1136,15 @@ class MIMoRollOverEnv(MIMoEnv):
         # Goal-INDEPENDENT reward terms, stored so HER can reuse them verbatim for the virtual
         # transitions it builds. Requires HerReplayBuffer(copy_info_dict=True).
         info['ctrl_cost'] = self.compute_penalization()
+        if self.look is not None:
+            # Computed here and carried through 'info' for the same reason as the control cost:
+            # it depends on the rendered scene and on the habituation state, neither of which
+            # 'compute_reward' may touch. It is also goal-independent, so HER may reuse it
+            # verbatim on a relabelled transition.
+            look, visible = self.look.step()
+            info['look_reward'] = look
+            info['look_visible'] = float(visible.sum())
+            info['look_n_toys'] = float(np.count_nonzero(visible > 0.001))
         if self._prev_achieved_goal is not None:
             info['prev_achieved_goal'] = self._prev_achieved_goal
 
@@ -1045,6 +1215,15 @@ class MIMoRollOverEnv(MIMoEnv):
 
         success = self._success_mask(ag, dg)
 
+        look = self._info_column(info, 'look_reward', 0.0, n) if self.look_reward else 0.0
+
+        if not self.rotation_reward:
+            # rho contributes nothing. What is left is exactly what MIMo can see, minus what it
+            # costs him to move -- and rho is still measured, through 'info', so the run can be
+            # scored on rolling without rolling ever having been rewarded.
+            reward = np.broadcast_to(np.asarray(look, dtype=np.float64), (n,)) - quad_ctrl_cost
+            return reward if batched else float(np.asarray(reward).reshape(-1)[0])
+
         if self.sparse_reward:
             reward = np.where(success, 0.0, -1.0)
         else:
@@ -1058,7 +1237,7 @@ class MIMoRollOverEnv(MIMoEnv):
             # If the goal is reached, give a very high positive reward.
             reward = np.where(success, float(self.reward_success), reward)
 
-        reward = reward - quad_ctrl_cost
+        reward = reward - quad_ctrl_cost + look
         return reward if batched else float(reward[0])
 
     def _potential(self, achieved, desired):

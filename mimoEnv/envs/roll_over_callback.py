@@ -34,14 +34,27 @@ class RollOverCallback(BaseCallback):
         # which only looks at the final step. This is the quantity 'eval_rollover.py' reports, so
         # logging it makes the training curve comparable to the evaluation numbers.
         self.episode_rho_max = deque(maxlen=window_size)
+        # 01.09.2026 The looking reward, present only under '--look_reward'. Summed over the
+        # episode like 'raw_ctrl_cost' and for the same reason: a per-step mean would reward
+        # short episodes. 'look_n_toys' is the mean over steps of how many toys were in view at
+        # all, which is what separates "found one good view and froze" from "kept looking around"
+        # -- the failure mode habituation exists to prevent.
+        self.episode_look_reward = deque(maxlen=window_size)
+        self.episode_look_n_toys = deque(maxlen=window_size)
 
         # Aggregated raw control cost in an episode. Is reset to 0 after each episode.
         self.aggr_raw_ctrl_cost_in_episode=0
+        self.aggr_look_reward_in_episode=0.0
+        self.aggr_look_n_toys_in_episode=0.0
+        self.episode_step_count=0
 
     def _on_step(self) -> bool:
         # We are in a DummyVecEnv
         for i, info in enumerate(self.locals["infos"]):
             self.aggr_raw_ctrl_cost_in_episode += info['raw_ctrl_cost']
+            self.aggr_look_reward_in_episode += info.get('look_reward', 0.0)
+            self.aggr_look_n_toys_in_episode += info.get('look_n_toys', 0.0)
+            self.episode_step_count += 1
 
             # Is the episode finished?
             if "episode" in info:
@@ -59,6 +72,18 @@ class RollOverCallback(BaseCallback):
                 self.raw_ctrl_cost.append(self.aggr_raw_ctrl_cost_in_episode)
 
                 self.aggr_raw_ctrl_cost_in_episode = 0
+
+                if 'look_reward' in info:
+                    self.episode_look_reward.append(self.aggr_look_reward_in_episode)
+                    self.episode_look_n_toys.append(
+                        self.aggr_look_n_toys_in_episode / max(self.episode_step_count, 1))
+                    self.logger.record("rollout/ep_look_reward",
+                                       np.mean(self.episode_look_reward))
+                    self.logger.record("rollout/ep_look_n_toys_mean",
+                                       np.mean(self.episode_look_n_toys))
+                self.aggr_look_reward_in_episode = 0.0
+                self.aggr_look_n_toys_in_episode = 0.0
+                self.episode_step_count = 0
 
                 self.end_hip_deg.append(hip)
                 self.end_chest_deg.append(chest)

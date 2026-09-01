@@ -510,6 +510,12 @@ class MIMoEnv(MujocoEnv, utils.EzPickle):
             obs = self.get_vision_obs()
             for sensor in self.vision_params:
                 spaces_dict[sensor] = spaces.Box(0, 255, shape=obs[sensor].shape, dtype=np.uint8)
+            # 01.09.2026 Print it like the other modalities do. Vision dwarfs them all, and it
+            # used to be the one modality whose size you could only find out by crashing a GPU.
+            total = sum(int(np.prod(obs[sensor].shape)) for sensor in self.vision_params)
+            print(f"Using vision. Vision shapes: "
+                  f"{', '.join(f'{sensor} {obs[sensor].shape}' for sensor in self.vision_params)}"
+                  f" ({total} values per observation).")
         if self.vestibular:
             obs = self.get_vestibular_obs()
             print(f"Using vestibular. Vestibular shape: {obs.shape}.")

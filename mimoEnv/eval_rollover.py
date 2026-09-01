@@ -97,6 +97,12 @@ def env_kwargs(config, starting_position, goal):
         age_morph=config.get('morph_age', 9),
         freeze_arm=config.get('freeze_arm', False),
         freeze_leg=config.get('freeze_leg', False),
+        # 01.09.2026 The scene itself. Without this a run trained in the playroom is evaluated in
+        # the empty room, which does not change rho -- but under '--vision' it changes every
+        # pixel the policy is shown, silently and in the direction that flatters nothing.
+        # The looking reward is deliberately NOT rebuilt here: this protocol scores rho, the
+        # reward is never read, and each step of it costs a segmentation render.
+        playroom=config.get('playroom', False),
         # Protocol: ISR off, goal pinned to the full roll, episodes never cut short by success
         # so that every episode gets the same number of chances.
         isr=False,
@@ -115,6 +121,18 @@ def env_kwargs(config, starting_position, goal):
         kwargs['touch_params'] = None
     if isinstance(proprio, dict):
         kwargs['proprio_params'] = proprio
+    # 01.09.2026 Vision was never read here, so a run trained with --vision could not be
+    # evaluated at all: the policy expects the eye keys and the env did not produce them.
+    # 'vision_resolution' is absent from runs trained before the flag became configurable; those
+    # used DEFAULT_VISION_PARAMS, i.e. VISION_RESOLUTION_LEGACY.
+    if config.get('vision', False):
+        from mimoEnv.envs.roll_over import make_vision_params, VISION_RESOLUTION_LEGACY
+        kwargs['vision_params'] = make_vision_params(
+            resolution=config.get('vision_resolution', VISION_RESOLUTION_LEGACY),
+            grayscale=config.get('vision_grayscale', False),
+            eyes=config.get('vision_eyes', 'both'))
+    else:
+        kwargs['vision_params'] = None
     return kwargs
 
 

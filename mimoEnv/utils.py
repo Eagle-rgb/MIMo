@@ -989,6 +989,18 @@ def load_model_yaml(load_model):
                           f"the 'intrinsic' goal function was removed on 26.08.2026.")
                     del yaml_data[removed]
 
+            # 01.09.2026 '--vision' used to always mean DEFAULT_VISION_PARAMS, i.e. 256x256 RGB
+            # per eye. It is configurable now and defaults to 64x64, so a stored run that has
+            # 'vision' but no 'vision_resolution' predates the change and must be rebuilt at
+            # roll_over.VISION_RESOLUTION_LEGACY (256; not imported, that would be circular)
+            # or its observation space will not match its weights.
+            if yaml_data.get('vision', False) and 'vision_resolution' not in yaml_data:
+                print("data.yml has 'vision' but no 'vision_resolution': the run predates "
+                      "01.09.2026, rebuilding it at the old 256x256 RGB per eye.")
+                yaml_data['vision_resolution'] = 256
+                yaml_data['vision_grayscale'] = False
+                yaml_data['vision_eyes'] = "both"
+
             # Downwards-compatibility with flags 'proprio_only_qpos' and 'no_proprio'
             if 'proprio_only_qpos' in yaml_data:
                 if yaml_data['proprio_only_qpos']:

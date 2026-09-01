@@ -11,6 +11,7 @@ from typing import Dict
 import numpy as np
 import matplotlib.pyplot as plt
 from gymnasium.envs.mujoco import MujocoEnv
+import mujoco
 from mujoco import MjrRect
 import cv2
 
@@ -67,6 +68,15 @@ class SimpleVision(Vision):
             'other_camera_name': {'width': width, 'height': height, 'acuity': age_for_visual_acuity, 'foveation': strength_of_foveation},
         }
 
+    An optional per-camera key `'grayscale'` collapses the output to a single luminance channel,
+    i.e. shape `(height, width, 1)` instead of `(height, width, 3)`. Absent or ``False``, the
+    output is RGB as before.
+
+    An optional per-camera key `'shadows'` re-enables shadow casting and floor reflections for
+    that camera. Absent or ``False``, both are switched off for the duration of the vision render,
+    which is worth roughly a factor of eight in wall-clock time -- see the comment in
+    :meth:`.get_vision_obs`.
+
     The default MIMo model has two cameras, one in each eye, named `eye_left` and `eye_right`. Note that the cameras in
     the dictionary must exist in the scene xml or errors will occur!
 
@@ -89,6 +99,8 @@ class SimpleVision(Vision):
         self._viewports = {}
         self._acuity_functions = {}
         self._foveation = {}
+        self._grayscale = {}
+        self._shadows = {}
         for camera in camera_parameters:
             viewport = MjrRect(0, 0, camera_parameters[camera]["width"], camera_parameters[camera]["height"])
             self._viewports[camera] = viewport
@@ -99,6 +111,8 @@ class SimpleVision(Vision):
             else:
                 self._acuity_functions[camera] = None
             self._foveation[camera] = camera_parameters[camera]["foveation"]
+            self._grayscale[camera] = camera_parameters[camera].get("grayscale", False)
+            self._shadows[camera] = camera_parameters[camera].get("shadows", False)
 
     def get_vision_obs(self):
         """ Produces the current vision output.
@@ -111,7 +125,7 @@ class SimpleVision(Vision):
             Dict[str, np.ndarray]: A dictionary with camera names as keys and the corresponding rendered images as
             values.
         """
-        # We have to cycle render modes, camera names, camera ids and viewport sizes
+        # We have to cycle render modes, camera ids and viewport sizes
         old_mode = self.env.render_mode
         old_cam_name = self.env.camera_name
         old_cam_id = self.env.camera_id
@@ -122,6 +136,21 @@ class SimpleVision(Vision):
 
         rgb_viewer = self.env.mujoco_renderer._viewers["rgb_array"]
         old_viewport = rgb_viewer.viewport
+        # 01.09.2026 The camera is selected through 'MujocoRenderer.camera_id', NOT through the
+        # env. Under the pinned gymnasium 1.0.0, 'MujocoEnv.render()' is
+        # 'self.mujoco_renderer.render(self.render_mode)' -- it takes no camera arguments, and
+        # 'MujocoRenderer.render' passes its OWN 'self.camera_id' down to the viewer. Assigning
+        # 'self.env.camera_name' / 'self.env.camera_id', as this loop used to, therefore wrote two
+        # attributes nobody reads, and every "eye" was rendered with the renderer's stored camera
+        # -- the free camera (cam.type=0, fixedcamid=-1) for the roll-over env. Measured: the two
+        # eyes came back byte-identical and neither matched an actual eye render. Silent: the
+        # observation had the right shape and changed with the simulation, it was just a
+        # third-person view of MIMo instead of his own. Every '--vision' run before this date is
+        # invalid. The env attributes are still saved/restored below in case anything else reads
+        # them.
+        old_renderer_cam_id = self.env.mujoco_renderer.camera_id
+        old_shadow = rgb_viewer.scn.flags[mujoco.mjtRndFlag.mjRND_SHADOW]
+        old_reflection = rgb_viewer.scn.flags[mujoco.mjtRndFlag.mjRND_REFLECTION]
 
         self.env.render_mode = "rgb_array"
         self.env.camera_id = None
@@ -129,18 +158,38 @@ class SimpleVision(Vision):
         imgs = {}
         for camera in self.camera_parameters:
             self.env.camera_name = camera
+            # Re-resolved every call: 'MIMoRollOverEnv.set_embodiment' swaps in a new model
+            # mid-training, which invalidates any cached id.
+            self.env.mujoco_renderer.camera_id = self.env.model.camera(camera).id
+            # 01.09.2026 Shadows and floor reflections cost ~7x the render. Measured on the
+            # roll-over scene under osmesa at 64x64, one eye: 56.4 ms -> 14.3 ms without shadows
+            # -> 7.0 ms without shadows or reflections, against 2.5 ms for a whole simulation
+            # step. The scene asks for 'shadowsize="4096"', i.e. a 4096^2 shadow map software-
+            # rasterised per frame, and 'matplane' has 'reflectance="0.3"'. Neither depends on the
+            # output resolution, which is why 36x36 and 128x128 cost the same. This is the
+            # difference between 30 h and 3 h of rendering per 1M steps.
+            rgb_viewer.scn.flags[mujoco.mjtRndFlag.mjRND_SHADOW] = 1 if self._shadows[camera] else 0
+            rgb_viewer.scn.flags[mujoco.mjtRndFlag.mjRND_REFLECTION] = 1 if self._shadows[camera] else 0
             rgb_viewer.viewport = self._viewports[camera]
             img = self.env.render()
             if self._acuity_functions[camera] is not None: # Apply age-dependent visual acuity
                 img = self._apply_acuity(img, camera)
             if self._foveation[camera]: # Apply foveation
                 img = self._apply_foveation(img, self._foveation[camera])
+            if self._grayscale[camera]: # 01.09.2026 Cut the observation by a factor of three.
+                # Keep the trailing axis: stable_baselines3.common.preprocessing.is_image_space
+                # only accepts a three-dimensional box, so an (H, W) image would be treated as a
+                # flat vector and fed to an MLP instead of the CNN.
+                img = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)[:, :, np.newaxis]
             imgs[camera] = img
         self.sensor_outputs = imgs
 
         self.env.render_mode = old_mode
         self.env.camera_name = old_cam_name
         self.env.camera_id = old_cam_id
+        self.env.mujoco_renderer.camera_id = old_renderer_cam_id
+        rgb_viewer.scn.flags[mujoco.mjtRndFlag.mjRND_SHADOW] = old_shadow
+        rgb_viewer.scn.flags[mujoco.mjtRndFlag.mjRND_REFLECTION] = old_reflection
         rgb_viewer.viewport = old_viewport
 
         return imgs
@@ -160,8 +209,11 @@ class SimpleVision(Vision):
             raise RuntimeWarning("No image observations to save!")
         for camera_name in self.sensor_outputs:
             file_name = camera_name + suffix + ".png"
+            img = self.sensor_outputs[camera_name]
+            # A grayscale output is (H, W, 1), which imsave rejects; drop the axis and say so.
+            kwargs = {"cmap": "gray"} if img.ndim == 3 and img.shape[-1] == 1 else {}
             matplotlib.image.imsave(os.path.join(
-                directory, file_name), self.sensor_outputs[camera_name], vmin=0.0, vmax=1.0)
+                directory, file_name), np.squeeze(img), vmin=0.0, vmax=1.0, **kwargs)
 
     def _apply_acuity(self, img, camera):
         """ Applies age-dependent visual acuity to the image.

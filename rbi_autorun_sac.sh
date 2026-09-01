@@ -34,10 +34,11 @@ for i in $(seq 0 $((NUMBER_OF_RUNS-1))); do
 		"python mimoEnv/illustrations.py" \
 		"--train_for=1000000" \
 		"--save_every=200000" \
-		"--roll_over_starting_position=prone" \
+		"--roll_over_starting_position=supine" \
 		"--algorithm=SAC" \
 		"--her" \
 		"--sparse_reward" \
+		"--n_sampled_goal=8" \
 		"--eval_every=25000" \
 		"--eval_episodes=20" \
 		"--pen_factor=0.02" \

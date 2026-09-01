@@ -28,7 +28,7 @@ import cv2
 
 import mimoEnv
 from mimoEnv.envs.mimo_env import MIMoEnv
-from mimoEnv.envs.mimo_env import DEFAULT_PROPRIOCEPTION_PARAMS, PROPRIOCEPTION_PARAMS_ONLY_QPOS, DEFAULT_VISION_PARAMS
+from mimoEnv.envs.mimo_env import DEFAULT_PROPRIOCEPTION_PARAMS, PROPRIOCEPTION_PARAMS_ONLY_QPOS
 from mimoActuation.actuation import SpringDamperModel
 from mimoActuation.muscle import MuscleModel
 from mimoEnv.envs.mimo_env import SCENE_DIRECTORY
@@ -44,6 +44,8 @@ import yaml
 import numpy as np
 
 from mimoEnv.envs.roll_over import TOUCH_PARAMS as ROLL_OVER_TOUCH_PARAMS
+from mimoEnv.envs.roll_over import EYES as VISION_EYES, VISION_RESOLUTION_DEFAULT, \
+    make_vision_params, vision_obs_size
 from mimoEnv.envs.roll_over_callback import RollOverCallback, RollOverEvalCallback
 from mimoEnv.envs.morphological_curriculum import make_curriculum_callback
 from mimoEnv.envs.isr_callback import ISRCallback
@@ -593,9 +595,56 @@ An example is '251206_prone_linear_1e6_test'
                         "- limits\n" \
                         "- actuation\n\n" \
                         "Combine arguments using '|'.")
+    # 01.09.2026 The playroom and the looking reward. See mimoEnv/envs/roll_over_look.py for the
+    # mechanism, and mimoEnv/assets/roll_over/generate_playroom_scenes.py for the scene.
+    parser.add_argument("--playroom", action="store_true",
+                        help="Load the playroom variant of the scene: ten toys ringed around "
+                             "MIMo at 0.65 m, just out of reach. Without it both eyes see "
+                             "nothing -- supine a flat skybox, prone the floor 1 cm away.")
+    parser.add_argument("--look_reward", action="store_true",
+                        help="Reward MIMo for holding toys in his fovea, measured by a "
+                             "segmentation render from his own eye. Requires --playroom.")
+    parser.add_argument("--look_w", type=float, default=100.0,
+                        help="Scale of the looking reward (default: 100). The raw foveal share "
+                             "is of order 0.03 supine and 0.23 prone, so this makes the term "
+                             "worth roughly 3 to 23 per step, against at most 1.84 for the "
+                             "default control cost.")
+    parser.add_argument("--look_habituation_steps", type=int, default=50,
+                        help="Steps of holding a toy in view that halve what it pays "
+                             "(default: 50). Without habituation the reward is maximised by "
+                             "finding one view and freezing.")
+    parser.add_argument("--look_recovery_steps", type=int, default=150,
+                        help="Steps of not seeing a toy that halve its familiarity again "
+                             "(default: 150).")
+    parser.add_argument("--look_fovea", type=float, default=0.35,
+                        help="Width of the Gaussian weighting a toy by how central it is in the "
+                             "field of view, in units of half the image (default: 0.35). Set to "
+                             "0 to weight every pixel equally, which lets MIMo earn the reward "
+                             "by cranking his neck to its limits instead of turning over.")
+    parser.add_argument("--look_eyes", default='left', choices=sorted(VISION_EYES),
+                        help="Which eyes the looking reward renders from (default: left). Each "
+                             "one costs a render, and the eyes are 2.5 cm apart.")
+    parser.add_argument("--no_rotation_reward", action="store_true",
+                        help="Drop rho from the reward entirely, leaving only --look_reward and "
+                             "the control cost. rho is still measured and logged, so the run can "
+                             "be scored on rolling without rolling ever having been rewarded. "
+                             "Requires --no_done_active.")
     parser.add_argument("--vision", action="store_true",
                         help="Enable vision observation")
-    
+    # 01.09.2026 The three knobs on the size of that observation. Upstream's
+    # DEFAULT_VISION_PARAMS (256x256 RGB per eye, 393216 values) ran the cluster GPUs out of
+    # VRAM; see the comment above VISION_RESOLUTION_DEFAULT in envs/roll_over.py.
+    parser.add_argument("--vision_resolution", type=int, default=VISION_RESOLUTION_DEFAULT,
+                        help=f"Edge length of the square image rendered per eye "
+                             f"(default: {VISION_RESOLUTION_DEFAULT}). Must be >= 36, below "
+                             f"which SB3's NatureCNN has nothing left to convolve.")
+    parser.add_argument("--vision_grayscale", action="store_true",
+                        help="Return one luminance channel per eye instead of RGB. Cuts the "
+                             "vision observation by a factor of three.")
+    parser.add_argument("--vision_eyes", type=str, default="both", choices=sorted(VISION_EYES),
+                        help="Which eyes to render (default: both). A single eye halves the "
+                             "observation and one CNN; rolling needs no binocular disparity.")
+
     # Parse yaml if we specified '--load_model'.
     args, remaining_argv = parser.parse_known_args()
 
@@ -705,6 +754,16 @@ An example is '251206_prone_linear_1e6_test'
         else:
             proprio_params["components"] = parse_proprio(args.proprio_config)
 
+    vision_params = None
+    if args.vision:
+        vision_params = make_vision_params(resolution=args.vision_resolution,
+                                           grayscale=args.vision_grayscale,
+                                           eyes=args.vision_eyes)
+        print(f"Using vision: {args.vision_eyes} eye(s) at {args.vision_resolution}x"
+              f"{args.vision_resolution} "
+              f"{'grayscale' if args.vision_grayscale else 'RGB'}, "
+              f"{vision_obs_size(vision_params)} values per observation.")
+
     if freeze_arm or freeze_leg:
         print("Warning! Some limbs are frozen.")
 
@@ -789,10 +848,18 @@ An example is '251206_prone_linear_1e6_test'
             sparse_reward=sparse_reward,
             goal_low=goal_low,
             goal_high=goal_high,
+            playroom=args.playroom,
+            look_reward=args.look_reward,
+            look_w=args.look_w,
+            look_habituation_steps=args.look_habituation_steps,
+            look_recovery_steps=args.look_recovery_steps,
+            look_fovea=(None if args.look_fovea == 0 else args.look_fovea),
+            look_eyes=args.look_eyes,
+            rotation_reward=not args.no_rotation_reward,
             done_active=done_active,
             age_physio=physio_age,
             age_morph=morph_age,
-            vision_params=DEFAULT_VISION_PARAMS if args.vision else None)
+            vision_params=vision_params)
         # if log_actuations:
         #     wrapped_env = MIMoRollOverWrapper(env, log_file=os.path.join(save_dir,"actuation_log.csv"))
         # else:
@@ -917,6 +984,17 @@ An example is '251206_prone_linear_1e6_test'
         'goal_low': goal_low,
         'goal_high': goal_high,
         'no_done_active': args.no_done_active,
+        # The playroom and the looking reward define the task: a model trained on the looking
+        # reward and reloaded without --playroom would be evaluated in an empty room, and one
+        # reloaded without --no_rotation_reward would be scored against a reward it never saw.
+        'playroom': args.playroom,
+        'look_reward': args.look_reward,
+        'look_w': args.look_w,
+        'look_habituation_steps': args.look_habituation_steps,
+        'look_recovery_steps': args.look_recovery_steps,
+        'look_fovea': args.look_fovea,
+        'look_eyes': args.look_eyes,
+        'no_rotation_reward': args.no_rotation_reward,
         # The horizon in force, not args.episode_steps: eval_rollover.py reads this to evaluate
         # a run at the length it was trained on, and 'None' would send it back to the default.
         'episode_steps': episode_steps,
@@ -925,6 +1003,11 @@ An example is '251206_prone_linear_1e6_test'
         'eval_episodes': args.eval_episodes,
         'achieved_goal_in_observation': achieved_goal_in_observation,
         'vision': args.vision,
+        # These define the observation space, so they must round-trip: reloading a run at a
+        # different resolution would rebuild it with an observation space the weights do not fit.
+        'vision_resolution': args.vision_resolution,
+        'vision_grayscale': args.vision_grayscale,
+        'vision_eyes': args.vision_eyes,
         'n_sampled_goal': args.n_sampled_goal,
     }
     with open(f'{save_dir}/data.yml', 'w') as outfile:
@@ -960,8 +1043,19 @@ An example is '251206_prone_linear_1e6_test'
             # trained on would evaluate an out-of-distribution query.
             goal_low=(1.0 if args.goal_tolerance is not None else 0.95),
             goal_high=(1.0 if args.goal_tolerance is not None else 0.95),
+            playroom=args.playroom,
+            look_reward=args.look_reward,
+            look_w=args.look_w,
+            look_habituation_steps=args.look_habituation_steps,
+            look_recovery_steps=args.look_recovery_steps,
+            look_fovea=(None if args.look_fovea == 0 else args.look_fovea),
+            look_eyes=args.look_eyes,
+            rotation_reward=not args.no_rotation_reward,
             done_active=False,
-            vision_params=DEFAULT_VISION_PARAMS if args.vision else None,
+            # A second, independent dict: 'vision_setup' mutates the entries in place.
+            vision_params=(make_vision_params(resolution=args.vision_resolution,
+                                              grayscale=args.vision_grayscale,
+                                              eyes=args.vision_eyes) if args.vision else None),
             age_physio=physio_age, age_morph=morph_age).unwrapped
         eval_callback = RollOverEvalCallback(eval_env=eval_env,
                                              eval_every=args.eval_every,
