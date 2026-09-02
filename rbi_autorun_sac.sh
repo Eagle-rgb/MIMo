@@ -38,7 +38,7 @@ for i in $(seq 0 $((NUMBER_OF_RUNS-1))); do
 		"--algorithm=SAC" \
 		"--her" \
 		"--sparse_reward" \
-		"--n_sampled_goal=8" \
+		"--n_sampled_goal=64" \
 		"--eval_every=25000" \
 		"--eval_episodes=20" \
 		"--pen_factor=0.02" \
@@ -49,6 +49,8 @@ for i in $(seq 0 $((NUMBER_OF_RUNS-1))); do
 		"--save_model=${MODEL_NAME}_run_$((i))" \
 		"--morph_age=9" \
 		"--physio_age=9" \
+		"--vision" \
+		"--vision_grayscale" \
 		"--lr=0.0003" &
 done
 

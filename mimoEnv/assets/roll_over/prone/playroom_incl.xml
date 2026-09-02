@@ -10,14 +10,13 @@
     <material name="toy_purple" rgba="0.60 0.20 0.80 1" specular=".3" shininess=".4" />
     <material name="toy_pink" rgba="0.95 0.45 0.65 1" specular=".3" shininess=".4" />
     <material name="toy_cyan" rgba="0.10 0.80 0.85 1" specular=".3" shininess=".4" />
-    <material name="toy_post" rgba="0.55 0.40 0.28 1" specular=".3" shininess=".4" />
 
-    <mesh name="toy_truck_mesh" file="../../meshes/truck_000.stl" scale="0.03 0.03 0.03" />
-    <mesh name="toy_dinosaur_mesh" file="../../meshes/dinosaur_004.stl" scale="0.03 0.03 0.03" />
     <mesh name="toy_ball_mesh" file="../../meshes/ball_004.stl" scale="0.032 0.032 0.032" />
-    <mesh name="toy_train_mesh" file="../../meshes/train_017.stl" scale="0.03 0.03 0.03" />
+    <mesh name="toy_truck_mesh" file="../../meshes/truck_000.stl" scale="0.03 0.03 0.03" />
+    <mesh name="toy_airplane_mesh" file="../../meshes/airplane_021.stl" scale="0.042 0.042 0.042" />
     <mesh name="toy_cow_mesh" file="../../meshes/cow_001.stl" scale="0.03 0.03 0.03" />
-    <mesh name="toy_airplane_mesh" file="../../meshes/airplane_021.stl" scale="0.03 0.03 0.03" />
+    <mesh name="toy_dinosaur_mesh" file="../../meshes/dinosaur_004.stl" scale="0.03 0.03 0.03" />
+    <mesh name="toy_train_mesh" file="../../meshes/train_017.stl" scale="0.03 0.03 0.03" />
     <mesh name="toy_hammer_mesh" file="../../meshes/hammer_001.stl" scale="0.03 0.03 0.03" />
   </asset>
 
@@ -25,41 +24,40 @@
 
     <light directional="true" ambient="0.45 0.45 0.45" diffuse="0.35 0.35 0.35" specular="0 0 0" pos="0 0 3" dir="0 0 -1" castshadow="false" />
 
-    <!-- Floor ring. Static and non-colliding, see generate_playroom_scenes.py. -->
-    <body name="toy_truck" pos="0.6500 0.0000 0" euler="0 0 180">
-      <geom name="toy_truck" type="mesh" mesh="toy_truck_mesh" material="toy_red" pos="0 0 0.1078" contype="0" conaffinity="0" />
-    </body>
-    <body name="toy_dinosaur" pos="0.4596 0.4596 0" euler="0 0 225">
-      <geom name="toy_dinosaur" type="mesh" mesh="toy_dinosaur_mesh" material="toy_green" pos="0 0 0.0779" contype="0" conaffinity="0" />
-    </body>
-    <body name="toy_ball" pos="0.0000 0.6500 0" euler="0 0 270">
+    <!-- Static and non-colliding, see generate_playroom_scenes.py. -->
+    <body name="toy_ball" pos="0.6500 0.6000 0" euler="0 0 -137.3">
       <geom name="toy_ball" type="mesh" mesh="toy_ball_mesh" material="toy_orange" pos="0 0 0.0737" contype="0" conaffinity="0" />
     </body>
-    <body name="toy_train" pos="-0.4596 0.4596 0" euler="0 0 315">
-      <geom name="toy_train" type="mesh" mesh="toy_train_mesh" material="toy_blue" pos="0 0 0.0935" contype="0" conaffinity="0" />
+    <body name="toy_truck" pos="0.6500 -0.6000 0" euler="0 0 137.3">
+      <geom name="toy_truck" type="mesh" mesh="toy_truck_mesh" material="toy_red" pos="0 0 0.1078" contype="0" conaffinity="0" />
     </body>
-    <body name="toy_cow" pos="-0.6500 0.0000 0" euler="0 0 360">
+    <body name="toy_airplane" pos="0.7000 0.3500 0" euler="0 0 -153.4">
+      <geom name="toy_airplane" type="mesh" mesh="toy_airplane_mesh" material="toy_yellow" pos="0 0 0.1357" contype="0" conaffinity="0" />
+    </body>
+    <body name="toy_cow" pos="-0.7000 0.3000 0" euler="0 0 -23.2">
       <geom name="toy_cow" type="mesh" mesh="toy_cow_mesh" material="toy_white" pos="0 0 0.0666" contype="0" conaffinity="0" />
     </body>
-    <body name="toy_airplane" pos="-0.4596 -0.4596 0" euler="0 0 405">
-      <geom name="toy_airplane" type="mesh" mesh="toy_airplane_mesh" material="toy_yellow" pos="0 0 0.0969" contype="0" conaffinity="0" />
+    <body name="toy_dinosaur" pos="-0.7000 -0.3000 0" euler="0 0 23.2">
+      <geom name="toy_dinosaur" type="mesh" mesh="toy_dinosaur_mesh" material="toy_green" pos="0 0 0.0779" contype="0" conaffinity="0" />
     </body>
-    <body name="toy_hammer" pos="-0.0000 -0.6500 0" euler="0 0 450">
+    <body name="toy_train" pos="-0.9000 0.1500 0" euler="0 0 -9.5">
+      <geom name="toy_train" type="mesh" mesh="toy_train_mesh" material="toy_blue" pos="0 0 0.0935" contype="0" conaffinity="0" />
+    </body>
+    <body name="toy_hammer" pos="-0.4500 -0.7500 0" euler="0 0 59.0">
       <geom name="toy_hammer" type="mesh" mesh="toy_hammer_mesh" material="toy_purple" pos="0 0 0.0974" contype="0" conaffinity="0" />
     </body>
 
-    <!-- Raised tier, visible from prone with the head lifted. -->
-    <body name="toy_post_pink" pos="0.3500 0.6062 0">
-      <geom name="stand_toy_post_pink" type="cylinder" material="toy_post" size="0.012 0.0750" pos="0 0 0.0750" contype="0" conaffinity="0" />
-      <geom name="toy_post_pink" type="sphere" material="toy_pink" size="0.045" pos="0 0 0.1950" contype="0" conaffinity="0" />
+    <body name="toy_mobile" pos="-0.3380 0.1800 0.5000">
+      <geom name="toy_mobile" type="sphere" material="toy_cyan" size="0.05" contype="0" conaffinity="0" />
     </body>
-    <body name="toy_post_cyan" pos="-0.7000 0.0000 0">
-      <geom name="stand_toy_post_cyan" type="cylinder" material="toy_post" size="0.012 0.0750" pos="0 0 0.0750" contype="0" conaffinity="0" />
-      <geom name="toy_post_cyan" type="sphere" material="toy_cyan" size="0.045" pos="0 0 0.1950" contype="0" conaffinity="0" />
+    <body name="toy_ball_pink" pos="0.8000 -0.4500 0">
+      <geom name="toy_ball_pink" type="sphere" material="toy_pink" size="0.065" pos="0 0 0.065" contype="0" conaffinity="0" />
     </body>
-    <body name="toy_post_red" pos="0.3500 -0.6062 0">
-      <geom name="stand_toy_post_red" type="cylinder" material="toy_post" size="0.012 0.0750" pos="0 0 0.0750" contype="0" conaffinity="0" />
-      <geom name="toy_post_red" type="sphere" material="toy_red" size="0.045" pos="0 0 0.1950" contype="0" conaffinity="0" />
+    <body name="toy_ball_cyan" pos="-0.9000 -0.4500 0">
+      <geom name="toy_ball_cyan" type="sphere" material="toy_cyan" size="0.065" pos="0 0 0.065" contype="0" conaffinity="0" />
+    </body>
+    <body name="toy_ball_red" pos="-0.4500 0.6000 0">
+      <geom name="toy_ball_red" type="sphere" material="toy_red" size="0.065" pos="0 0 0.065" contype="0" conaffinity="0" />
     </body>
 
   </worldbody>

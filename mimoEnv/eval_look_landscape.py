@@ -14,6 +14,9 @@ reports the foveal toy share in two ways:
 
 - **neutral**: head joints at zero. This is what the reward looks like early in training, when the
   policy has not learned to move the head yet.
+- **cover**: how many *different* toys MIMo could collect from this posture by sweeping his head
+  over the comfortable range -- the quantity the coverage reward optimises. Measured for the
+  shipped layout: 3/10 supine, 5/10 side-lying, and 10/10 only from roll 160 degrees onward.
 - **best**: the maximum over a grid of comfortable 'head_tilt' and 'head_swivel' values (70 % of
   each joint's range by default -- the limits themselves are a contortion, and a landscape
   measured there says more about the neck than about the posture). This is the ceiling a competent
@@ -94,10 +97,15 @@ def landscape(env, look, rolls, head_fraction=0.7, head_grid=(5, 7)):
         rho = float(env.get_achieved_goal_cos()[0])
         neutral = float(look.visible_fractions().sum())
         best, best_pose, best_visible = -1.0, (0.0, 0.0), None
+        # Union over the head poses: how many DIFFERENT toys MIMo could collect from this posture
+        # if he swept his head over the comfortable range. This is the quantity the coverage
+        # reward optimises, and the one the playroom is arranged around.
+        reachable = np.zeros(len(look.toy_names), dtype=bool)
         for t in tilts:
             for s in swivels:
                 place(roll, t, s)
                 visible = look.visible_fractions()
+                reachable |= visible >= look.seen_threshold
                 total = float(visible.sum())
                 if total > best:
                     best, best_pose, best_visible = total, (t, s), visible
@@ -109,6 +117,8 @@ def landscape(env, look, rolls, head_fraction=0.7, head_grid=(5, 7)):
             "best_tilt_deg": float(np.degrees(best_pose[0])),
             "best_swivel_deg": float(np.degrees(best_pose[1])),
             "n_toys": int(np.count_nonzero(best_visible > 0.001)),
+            "coverage": int(reachable.sum()),
+            "n_total": len(look.toy_names),
             "toys": ",".join(n for n, v in zip(look.toy_names, best_visible) if v > 0.001),
         })
     return rows
@@ -146,11 +156,11 @@ def main():
     print(f"\nPlayroom look landscape -- fovea={args.fovea}, eyes={args.eyes}, "
           f"head range {args.head_fraction:.0%}, ages {args.morph_age}/{args.physio_age}")
     print(f"{'roll':>5s} {'rho':>6s} {'neutral':>8s} {'best':>8s}  "
-          f"{'tilt':>5s} {'swiv':>5s} {'#':>2s}  toys")
+          f"{'tilt':>5s} {'swiv':>5s} {'cover':>6s}  best view")
     for r in rows:
         print(f"{r['roll_deg']:5.0f} {r['rho']:6.3f} {r['neutral']:8.4f} {r['best']:8.4f}  "
-              f"{r['best_tilt_deg']:+5.0f} {r['best_swivel_deg']:+5.0f} {r['n_toys']:2d}  "
-              f"{r['toys'].replace('toy_', '')}")
+              f"{r['best_tilt_deg']:+5.0f} {r['best_swivel_deg']:+5.0f} "
+              f"{r['coverage']:3d}/{r['n_total']:<2d}  {r['toys'].replace('toy_', '')}")
 
     supine, prone = rows[0]["best"], rows[-1]["best"]
     peak = max(rows, key=lambda r: r["best"])
@@ -159,9 +169,26 @@ def main():
           f"\nsupine {supine:.4f} -> prone {prone:.4f}")
     print(f"best-head optimum at roll {peak['roll_deg']:.0f} deg (rho {peak['rho']:.3f})")
     if peak["roll_deg"] < 150:
-        print("WARNING: the optimum is not at prone. A policy maximising this reward has no "
-              "reason to finish the roll -- move the toys or widen the foveal weighting before "
-              "spending a run on it.")
+        print("NOTE: the per-step foveal share peaks before prone -- side-lying puts the eye along "
+              "the floor and takes in the most at once. That term alone would park a run there; it "
+              "is the coverage bonus ('--look_novelty_w', 200 per toy against a continuous term of "
+              "order 0.2 per step) that pays for finishing the roll. Worth checking that the two "
+              "are still balanced if you have changed either weight.")
+
+    full = [r for r in rows if r["coverage"] == r["n_total"]]
+    if not full:
+        print(f"WARNING: no roll angle reaches all {rows[0]['n_total']} toys at comfortable head "
+              f"poses (best {max(r['coverage'] for r in rows)}). Some toy can never be collected, "
+              f"so the coverage reward has an unreachable ceiling -- check the per-toy foveal "
+              f"shares before training.")
+    else:
+        first = min(r["roll_deg"] for r in full)
+        print(f"full coverage ({rows[0]['n_total']} toys) first reachable at roll {first:.0f} deg "
+              f"(rho {min(r['rho'] for r in full if r['roll_deg'] == first):.3f}); "
+              f"supine reaches {rows[0]['coverage']}/{rows[0]['n_total']}")
+        if first < 90:
+            print("WARNING: full coverage is already reachable from near-supine. The coverage "
+                  "reward then does not require the roll.")
 
     if args.csv:
         with open(args.csv, "w", newline="") as fh:

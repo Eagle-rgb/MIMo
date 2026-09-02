@@ -40,31 +40,66 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 PRONE = os.path.join(HERE, "prone")
 INCLUDE_NAME = "playroom_incl.xml"
 
-# MIMo lies along x and spans x in [-0.35, 0.35], y in [-0.29, 0.29], z <= 0.13 (measured at
-# reset, 9 months, both postures). A ring at 0.5 m therefore clears his fingertips by 0.15 m.
-# Measured, not guessed. 'mimoEnv/eval_look_landscape.py' sweeps MIMo through the roll and
-# reports how much toy he can get into the fovea at each angle. At 0.50 m the toys sit 0.22 m from
-# his face and a single cow fills a third of the eye; at 0.80 m the whole landscape flattens out.
-# 0.65 m puts them 0.37 m from either head position -- about an arm's length -- and gives
-# 0.027 foveal share supine against 0.231 prone, a factor of 8.5.
-RING_RADIUS = 0.65
-# The second tier. Supine the eye sits at z = 0.14 and looks straight up; prone it sits on the
-# floor and looks straight down. In both postures a floor-level toy is ~105 degrees off the eye
-# axis, i.e. far outside the 60 degree field of view, and only becomes visible once MIMo turns
-# onto his side. The raised toys are what he can see while prone with the head lifted -- without
-# them the look reward would peak at side-lying and pay nothing extra for completing the roll.
-PEDESTAL_HEIGHT = 0.15
-PEDESTAL_RADIUS = 0.70
+# 01.09.2026 The layout is measured, not arranged -- but read the correction below before
+# trusting the mechanism.
+#
+# What the toys have to do is make *coverage* -- how many different toys MIMo has looked at in one
+# episode -- cheaper from prone than from supine. Measured with the same segmentation renderer the
+# reward uses, counting a toy as seen at 0.01 foveal share:
+#
+#   roll     0  20  40  60  80 100 120 140 160 180
+#   comfortable head range (70 %)
+#   toys     3   4   4   5   5   5   6   8   9   8
+#   full head range
+#   toys    10  10  10  10  10  10  10  10  10  10
+#
+# So the honest statement is a **cost gradient, not a hard constraint**. At comfortable head poses
+# coverage climbs 3 -> 9 across the roll, which is the behaviour the reward is meant to select.
+# At full stretch MIMo reaches all ten from flat on his back, and no arrangement of toys on a
+# floor defeats that: his neck sweeps nearly a hemisphere (swivel +-111 deg, tilt -70..81,
+# tilt_side +-70), so posture barely limits which *directions* he can point the eye. The foveal
+# weighting in 'roll_over_look.py' is what converts "cheaper" into "actually preferred", because
+# the contorted pose only ever catches a toy at the edge of the field, where it is discounted.
+#
+# **Correction, same day.** An earlier version of this comment claimed full coverage was
+# geometrically unreachable from supine, on the strength of an 'mj_ray' probe that reported 39
+# prone-only positions and 0 supine-only. That probe was wrong: a ray from the supine eye at
+# z = 0.14 down to a toy at floor level grazes the floor plane and was counted as occluded, while
+# the same ray from the prone eye at z = 0.001 runs nearly parallel to it and hits nothing. The
+# 68-against-107 split it produced is that artefact, not occlusion by MIMo's own body. The
+# render-based numbers above supersede it.
+#
+# The layout is still built along the axis the probe suggested, because the rendered numbers agree
+# with it under the comfort constraint: three toys towards MIMo's feet, where he can pick them up
+# lying on his back and so has something to earn from the first step, and seven behind his head
+# and low to the floor, which is where the comfortable-pose gradient lives.
+#
+# The previous layout was a 0.65 m ring with three toys raised on 0.15 m stands. It scored 5 -> 8
+# on the same comfortable-range test, and the stands were actively counterproductive: height is
+# what makes a position easy to see from supine.
+#
+# One fact constrains any future rearrangement: **MIMo's head does not translate during a roll.**
+# Measured across 0..180 degrees it stays at x = -0.276; only the eye's optical axis rotates, from
+# +z through -y to -z. (The env's two reset poses do differ, -0.276 supine against +0.274 prone,
+# but that is 'get_starting_quat' using euler[1] = +-90 -- a rotation about y that swaps head and
+# feet, not a roll. A MIMo who rolls out of supine ends up mirrored head-to-toe from the 'prone'
+# reset pose.) So a layout can only exploit where the eye *points* and what MIMo's own body
+# occludes, never where his head has moved to.
 
-# name, mesh file, scale, material, angle around MIMo in degrees (0 = +x)
+# name, mesh file, scale, material, x, y
 TOYS = [
-    ("toy_truck",    "truck_000.stl",    0.030, "toy_red",     0),
-    ("toy_dinosaur", "dinosaur_004.stl", 0.030, "toy_green",   45),
-    ("toy_ball",     "ball_004.stl",     0.032, "toy_orange",  90),
-    ("toy_train",    "train_017.stl",    0.030, "toy_blue",    135),
-    ("toy_cow",      "cow_001.stl",      0.030, "toy_white",   180),
-    ("toy_airplane", "airplane_021.stl", 0.030, "toy_yellow",  225),
-    ("toy_hammer",   "hammer_001.stl",   0.030, "toy_purple",  270),
+    # --- visible from supine as well: the bootstrap set -------------------------------
+    ("toy_ball",     "ball_004.stl",     0.032, "toy_orange",  0.65,  0.60),
+    ("toy_truck",    "truck_000.stl",    0.030, "toy_red",     0.65, -0.60),
+    # Scaled up against the others: the mesh is flat (5.5 cm tall at 0.030) and a floor-
+    # level eye sees it almost edge-on, which left it at 0.0097 best foveal share -- just
+    # under the 0.01 seen threshold, i.e. a toy that could never be collected.
+    ("toy_airplane", "airplane_021.stl", 0.042, "toy_yellow",  0.70,  0.35),
+    # --- prone only: these are what force the roll ------------------------------------
+    ("toy_cow",      "cow_001.stl",      0.030, "toy_white",  -0.70,  0.30),
+    ("toy_dinosaur", "dinosaur_004.stl", 0.030, "toy_green",  -0.70, -0.30),
+    ("toy_train",    "train_017.stl",    0.030, "toy_blue",   -0.90,  0.15),
+    ("toy_hammer",   "hammer_001.stl",   0.030, "toy_purple", -0.45, -0.75),
 ]
 
 # Bright saturated colours, because that is both what infant toys look like and what a 64x64
@@ -79,27 +114,41 @@ MATERIALS = [
     ("toy_purple", "0.60 0.20 0.80 1"),
     ("toy_pink",   "0.95 0.45 0.65 1"),
     ("toy_cyan",   "0.10 0.80 0.85 1"),
-    ("toy_post",   "0.55 0.40 0.28 1"),
 ]
 
-# The raised tier: a coloured sphere on a thin post. Primitives rather than meshes, so the second
-# tier costs essentially nothing to rasterise.
-# The rewarding geoms are exactly those whose name starts with 'toy_' -- see
-# 'mimoEnv/envs/roll_over_look.py', which discovers them by that prefix rather than by a list it
-# would have to be kept in sync with. The stands are deliberately NOT called that: they are
-# furniture holding a toy up, not something to look at.
-PEDESTALS = [
-    ("toy_post_pink", "toy_pink", 60),
-    ("toy_post_cyan", "toy_cyan", 180),
-    ("toy_post_red",  "toy_red",  300),
+# Plain spheres resting on the floor -- no stands, see above. Same two groups.
+BALLS = [
+    ("toy_ball_pink", "toy_pink",  0.80, -0.45),   # visible from supine too
+    ("toy_ball_cyan", "toy_cyan", -0.90, -0.45),   # prone only
+    ("toy_ball_red",  "toy_red",  -0.45,  0.60),   # prone only
 ]
+# 6.5 cm rather than 5: at 5 cm the far ball peaked at 0.0127 foveal share, barely over
+# the seen threshold, so a small pose error made it uncollectable.
+BALL_RADIUS = 0.065
 
-
-def _ring(radius, angle_deg):
-    import math
-    a = math.radians(angle_deg)
-    return radius * math.cos(a), radius * math.sin(a)
-
+# 02.09.2026 The crib mobile -- the bootstrap that replaces '--isr'.
+#
+# Without it the looking reward is unreachable from a cold start. Measured: a toy only enters
+# MIMo's field of view after he has HELD a near-maximal head action for ~100 consecutive steps
+# (swivel 15.7 deg after 10 steps, 70.0 after 80, first toy over the 0.01 threshold at 100; a
+# single-step impulse then release reaches 1.9 deg and sees nothing). Uncorrelated exploration
+# never produces that, so a random policy saw a toy in 0 of 10 episodes and a 1M-step SAC run
+# plateaued at 1.6 of 10 toys with rho flat on its ISR baseline.
+#
+# A toy hanging over his face needs no head movement at all. Measured on a random policy, 200
+# steps: visible on 200/200 at heights 0.35, 0.45 and 0.60 m (foveal share 0.537 / 0.289 / 0.148).
+# It is offset in y so that it sits ~23 degrees off the optical axis at rest -- inside the 60
+# degree field but foveally discounted, so a small head turn is worth something and MIMo has a
+# gradient linking "turn head" to "see more" from the first episode.
+#
+# It does not become a free lunch: habituation halves what it pays every 50 steps of viewing and
+# '--look_recovery_steps=0' means it never recovers, so it is spent within a few hundred steps and
+# the floor toys -- which need the roll -- are the only source left. It counts as one more toy
+# towards coverage, so full coverage still requires turning over.
+#
+# The supine eye sits at (-0.338, 0.024, 0.139) and looks almost straight up. MIMo's head does not
+# translate during a roll, so the mobile stays over him throughout.
+MOBILE = ("toy_mobile", "toy_cyan", -0.338, 0.180, 0.50, 0.05)  # name, material, x, y, z, radius
 
 def build_include(z_offsets):
     """ Writes 'playroom_incl.xml'.
@@ -114,7 +163,7 @@ def build_include(z_offsets):
     for name, rgba in MATERIALS:
         lines.append(f'    <material name="{name}" rgba="{rgba}" specular=".3" shininess=".4" />')
     lines.append('')
-    for name, mesh, scale, _material, _angle in TOYS:
+    for name, mesh, scale, _material, _x, _y in TOYS:
         lines.append(f'    <mesh name="{name}_mesh" file="../../meshes/{mesh}" '
                      f'scale="{scale} {scale} {scale}" />')
     lines += ['  </asset>', '', '  <worldbody>', '']
@@ -127,24 +176,26 @@ def build_include(z_offsets):
     lines.append('    <light directional="true" ambient="0.45 0.45 0.45" diffuse="0.35 0.35 0.35" '
                  'specular="0 0 0" pos="0 0 3" dir="0 0 -1" castshadow="false" />')
     lines.append('')
-    lines.append('    <!-- Floor ring. Static and non-colliding, see generate_playroom_scenes.py. -->')
-    for name, _mesh, _scale, material, angle in TOYS:
-        x, y = _ring(RING_RADIUS, angle)
+    lines.append('    <!-- Static and non-colliding, see generate_playroom_scenes.py. -->')
+    for name, _mesh, _scale, material, x, y in TOYS:
         z = z_offsets.get(name, 0.0)
-        # Turned to face MIMo, so the recognisable side of each toy points inwards.
-        lines.append(f'    <body name="{name}" pos="{x:.4f} {y:.4f} 0" euler="0 0 {angle + 180}">')
+        # Yawed to face MIMo, so the recognisable side of each toy points inwards.
+        import math
+        yaw = math.degrees(math.atan2(-y, -x))
+        lines.append(f'    <body name="{name}" pos="{x:.4f} {y:.4f} 0" euler="0 0 {yaw:.1f}">')
         lines.append(f'      <geom name="{name}" type="mesh" mesh="{name}_mesh" '
                      f'material="{material}" pos="0 0 {z:.4f}" contype="0" conaffinity="0" />')
         lines.append('    </body>')
-    lines += ['', '    <!-- Raised tier, visible from prone with the head lifted. -->']
-    for name, material, angle in PEDESTALS:
-        x, y = _ring(PEDESTAL_RADIUS, angle)
+    lines.append('')
+    name, material, mx, my, mz, mr = MOBILE
+    lines.append(f'    <body name="{name}" pos="{mx:.4f} {my:.4f} {mz:.4f}">')
+    lines.append(f'      <geom name="{name}" type="sphere" material="{material}" '
+                 f'size="{mr}" contype="0" conaffinity="0" />')
+    lines.append('    </body>')
+    for name, material, x, y in BALLS:
         lines.append(f'    <body name="{name}" pos="{x:.4f} {y:.4f} 0">')
-        lines.append(f'      <geom name="stand_{name}" type="cylinder" material="toy_post" '
-                     f'size="0.012 {PEDESTAL_HEIGHT / 2:.4f}" pos="0 0 {PEDESTAL_HEIGHT / 2:.4f}" '
-                     f'contype="0" conaffinity="0" />')
         lines.append(f'      <geom name="{name}" type="sphere" material="{material}" '
-                     f'size="0.045" pos="0 0 {PEDESTAL_HEIGHT + 0.045:.4f}" '
+                     f'size="{BALL_RADIUS}" pos="0 0 {BALL_RADIUS}" '
                      f'contype="0" conaffinity="0" />')
         lines.append('    </body>')
     lines += ['', '  </worldbody>', '', '</mujocoinclude>', '']
@@ -164,7 +215,7 @@ def calibrate():
     """
     import mujoco
     scene = os.path.join(PRONE, "scene_act_9_body_9_playroom.xml")
-    offsets = {name: 0.0 for name, _m, _s, _mat, _a in TOYS}
+    offsets = {name: 0.0 for name, _m, _s, _mat, _x, _y in TOYS}
     # Iterated rather than solved in one shot: 'geom_aabb' is a bound on the mesh, and it does not
     # come back bit-identical between two compilations of the same mesh at different geom offsets
     # -- a single pass left the cow floating 1.5 cm and the truck sunk 0.5 cm. Three passes bring
@@ -176,7 +227,7 @@ def calibrate():
         data = mujoco.MjData(model)
         mujoco.mj_forward(model, data)
         residuals = {}
-        for name, _mesh, _scale, _material, _angle in TOYS:
+        for name, _mesh, _scale, _material, _x, _y in TOYS:
             gid = model.geom(name).id
             # Lowest point of the geom in the world. The toys are only yawed, and yaw about z
             # leaves the z extent of an axis-aligned box alone, so this needs no rotation.

@@ -14,13 +14,20 @@ which is the whole point. A purely geometric test (angle between the eye axis an
 position) is free, but it counts a toy hidden behind MIMo's own shoulder as seen, and getting the
 body out of the way of the view is precisely the behaviour this reward is meant to select for.
 
-**Interesting means novel.** A reward proportional to visible toy area alone is maximised by
-finding the best view once and holding still. Each toy therefore carries a familiarity that grows
-while it is in view and decays while it is not, and the reward is scaled by (1 - familiarity).
-Staring pays less and less; turning to something else pays again. This is what pushes MIMo past
-the first posture that reveals anything, which matters here: from a side-lying posture the eye
-looks along the floor and sees the whole ring of toys, so without habituation the reward landscape
-would have its optimum at side-lying and pay nothing extra for completing the roll to prone.
+**Interesting means new.** A reward proportional to visible toy area alone is maximised by
+finding the best view once and holding still, so the reward is built around *coverage*: how many
+different toys MIMo has managed to look at in this episode. Each toy pays a one-off bonus the
+first time it is properly in view (:attr:`.novelty_weight`), and a continuous term scaled by
+(1 - familiarity) supplies the gradient that gets it there. Familiarity grows while a toy is in
+view and, by default, never recovers inside an episode -- a toy already collected is worth nothing
+more, so the only way to keep earning is to find another one.
+
+That makes the layout do the real work. The playroom is arranged so that MIMo's reachable set of
+toys *while supine* is a strict subset of his reachable set *while prone*: three toys sit towards
+his feet where he can see them lying on his back, and seven sit behind his head and low to the
+floor, where his own body occludes the sight line until he has turned over. Full coverage is
+therefore unreachable without the roll, by geometry rather than by tuning. See the header of
+``mimoEnv/assets/roll_over/generate_playroom_scenes.py`` for the ray-cast probe behind that.
 
 **Purity.** The looking reward does not depend on the goal, so like the control cost it is
 computed in 'step()' and passed through 'info', where 'compute_reward' reads it back. See "The
@@ -62,7 +69,8 @@ class LookReward:
     """
 
     def __init__(self, env, cameras=("eye_left",), weight=100.0, habituation_steps=50,
-                 recovery_steps=150, resolution=SEGMENTATION_RESOLUTION, fovea=0.35):
+                 recovery_steps=0, resolution=SEGMENTATION_RESOLUTION, fovea=0.35,
+                 novelty_weight=200.0, seen_threshold=0.01):
         """ Constructor.
 
         Args:
@@ -76,6 +84,17 @@ class LookReward:
                 i.e. at most 1.84 per step.
             habituation_steps (int): Steps of holding a toy in full view that halve what it pays.
             recovery_steps (int): Steps of not seeing a toy that halve its familiarity again.
+                **0 disables recovery**, which is the default: within one episode a toy already
+                looked at stays spent, so the episode reward is essentially "how many different
+                toys did you find". Set it to a positive number to get the older decaying
+                habituation back.
+            novelty_weight (float): One-off bonus the first time a toy crosses
+                `seen_threshold`. Ten toys at the default 200 is 2000 per episode for full
+                coverage, against roughly 1500 for the continuous term over 500 steps, so
+                coverage is the dominant thing to optimise without the gradient term vanishing.
+            seen_threshold (float): Foveal share at which a toy counts as seen. 0.01 is about a
+                toy squarely in view rather than clipped by the edge of the field; it is not a
+                free parameter, see the note in :meth:`.step`.
             resolution (int): Edge length of the segmentation render.
             fovea (float): Width of the Gaussian that weights a toy by how central it is in the
                 field of view, in units of half the image. ``None`` weights every pixel equally.
@@ -89,7 +108,10 @@ class LookReward:
         # Per-step multiplicative factors, from the half-lives. 'habituation_rate' applies to the
         # gap to 1, so a toy held in full view for 'habituation_steps' ends at familiarity 0.5.
         self.habituation_rate = 1.0 - 0.5 ** (1.0 / max(habituation_steps, 1))
-        self.recovery_rate = 0.5 ** (1.0 / max(recovery_steps, 1))
+        self.recovery_rate = 1.0 if recovery_steps <= 0 else 0.5 ** (1.0 / recovery_steps)
+        self.novelty_weight = novelty_weight
+        self.seen_threshold = seen_threshold
+        self.seen = np.zeros(0, dtype=bool)
         self.toy_geoms = {}
         self.familiarity = np.zeros(0)
         self._camera_ids = []
@@ -143,6 +165,7 @@ class LookReward:
                 f"missing.")
         self._camera_ids = [model.camera(name).id for name in self.cameras]
         self.familiarity = np.zeros(len(self.toy_geoms))
+        self.seen = np.zeros(len(self.toy_geoms), dtype=bool)
         self._last_visible = np.zeros(len(self.toy_geoms))
         # Own renderer rather than the env's. Two reasons, both load-bearing:
         #  - gymnasium 1.0.0's 'OffScreenViewer.render(segmentation=True)' decodes the id colour
@@ -165,9 +188,15 @@ class LookReward:
         return list(self.toy_geoms)
 
     def reset(self):
-        """ Clears the familiarity. Every episode starts with every toy novel again. """
+        """ Clears the coverage. Every episode starts with every toy unseen again. """
         self.familiarity = np.zeros(len(self.toy_geoms))
+        self.seen = np.zeros(len(self.toy_geoms), dtype=bool)
         self._last_visible = np.zeros(len(self.toy_geoms))
+
+    @property
+    def coverage(self):
+        """ Fraction of the toys looked at so far this episode. """
+        return float(self.seen.mean()) if self.seen.size else 0.0
 
     def visible_fractions(self):
         """ Share of the field of view each toy currently occupies.
@@ -198,20 +227,25 @@ class LookReward:
 
         return totals / max(len(self._camera_ids), 1)
 
-    def close(self):
-        """ Releases the segmentation renderer's GL context. """
-        if self._renderer is not None:
-            self._renderer.close()
-            self._renderer = None
-
     def step(self):
         """ One step of the looking reward, advancing the habituation state.
 
         Returns:
             (float, np.ndarray): The reward for this step, and the per-toy visible fractions.
         """
+
         visible = self.visible_fractions()
-        reward = self.weight * float(np.sum(visible * (1.0 - self.familiarity)))
+
+        # Coverage. A toy counts once, the first time it is squarely in view. The threshold is
+        # what stops MIMo from collecting a toy by catching it in the far corner of a strained
+        # view: measured over the full head range, a toy clipped by the edge of the field scores
+        # a few thousandths of foveal share, while one he has actually turned towards scores
+        # 0.03-0.35.
+        newly = (~self.seen) & (visible >= self.seen_threshold)
+        self.seen |= newly
+
+        reward = (self.weight * float(np.sum(visible * (1.0 - self.familiarity)))
+                  + self.novelty_weight * float(np.count_nonzero(newly)))
         # Habituate on what is in view, recover on what is not. Both are applied every step, so a
         # toy at the edge of the field of view drifts towards an equilibrium rather than latching.
         self.familiarity += (1.0 - self.familiarity) * self.habituation_rate * np.minimum(
@@ -220,6 +254,12 @@ class LookReward:
             visible / _SATURATING_FRACTION, 1.0))
         self._last_visible = visible
         return reward, visible
+
+    def close(self):
+        """ Releases the segmentation renderer's GL context. """
+        if self._renderer is not None:
+            self._renderer.close()
+            self._renderer = None
 
 
 # What counts as "in full view" for the habituation clock. A single 15 cm toy at 0.5 m covers

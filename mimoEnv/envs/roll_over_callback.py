@@ -41,6 +41,9 @@ class RollOverCallback(BaseCallback):
         # -- the failure mode habituation exists to prevent.
         self.episode_look_reward = deque(maxlen=window_size)
         self.episode_look_n_toys = deque(maxlen=window_size)
+        # Share of the toys looked at in the episode, read at the final step. The headline metric:
+        # the playroom cannot reach 1.0 without a roll.
+        self.episode_look_coverage = deque(maxlen=window_size)
 
         # Aggregated raw control cost in an episode. Is reset to 0 after each episode.
         self.aggr_raw_ctrl_cost_in_episode=0
@@ -81,6 +84,9 @@ class RollOverCallback(BaseCallback):
                                        np.mean(self.episode_look_reward))
                     self.logger.record("rollout/ep_look_n_toys_mean",
                                        np.mean(self.episode_look_n_toys))
+                    self.episode_look_coverage.append(info.get('look_coverage', 0.0))
+                    self.logger.record("rollout/ep_look_coverage",
+                                       np.mean(self.episode_look_coverage))
                 self.aggr_look_reward_in_episode = 0.0
                 self.aggr_look_n_toys_in_episode = 0.0
                 self.episode_step_count = 0

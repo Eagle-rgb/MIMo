@@ -613,9 +613,18 @@ An example is '251206_prone_linear_1e6_test'
                         help="Steps of holding a toy in view that halve what it pays "
                              "(default: 50). Without habituation the reward is maximised by "
                              "finding one view and freezing.")
-    parser.add_argument("--look_recovery_steps", type=int, default=150,
-                        help="Steps of not seeing a toy that halve its familiarity again "
-                             "(default: 150).")
+    parser.add_argument("--look_recovery_steps", type=int, default=0,
+                        help="Steps of not seeing a toy that halve its familiarity again. "
+                             "0 (the default) means a toy already looked at stays spent for the "
+                             "rest of the episode, so the episode reward is 'how many different "
+                             "toys did you find'.")
+    parser.add_argument("--look_novelty_w", type=float, default=200.0,
+                        help="One-off bonus the first time a toy is squarely in view "
+                             "(default: 200). Ten toys is 2000 per episode for full coverage.")
+    parser.add_argument("--look_seen_threshold", type=float, default=0.01,
+                        help="Foveal share at which a toy counts as seen (default: 0.01). Lower "
+                             "values let MIMo collect a toy by catching it in the corner of a "
+                             "strained view instead of turning towards it.")
     parser.add_argument("--look_fovea", type=float, default=0.35,
                         help="Width of the Gaussian weighting a toy by how central it is in the "
                              "field of view, in units of half the image (default: 0.35). Set to "
@@ -629,6 +638,23 @@ An example is '251206_prone_linear_1e6_test'
                              "the control cost. rho is still measured and logged, so the run can "
                              "be scored on rolling without rolling ever having been rewarded. "
                              "Requires --no_done_active.")
+    # 02.09.2026 Colored exploration noise for the off-policy algorithms. The reason it exists:
+    # a toy only enters MIMo's field of view after he has HELD a near-maximal head action for
+    # about 100 consecutive steps (measured -- swivel reaches 15.7 deg after 10 steps, 70 deg
+    # after 80, and the first toy crosses the 0.01 seen threshold at step 100; a single-step
+    # impulse followed by release reaches 1.9 deg and sees nothing). Temporally uncorrelated
+    # exploration never produces that, which is why a random policy scored 0/10 episodes and why
+    # SAC's own Gaussian plateaued. Same 'pink.ColoredActionNoise' code path as
+    # 'eval_noise_baseline.py', so the two are directly comparable -- and that baseline
+    # independently found red noise to be the only kind that moves MIMo at all.
+    parser.add_argument("--action_noise", default="none",
+                        choices=["none", "white", "pink", "red"],
+                        help="Colored exploration noise added to the policy's action "
+                             "(off-policy algorithms only). white=beta 0, pink=beta 1, "
+                             "red=beta 2 (Brownian). Default: none.")
+    parser.add_argument("--action_noise_sigma", type=float, default=0.7,
+                        help="Scale of --action_noise (default: 0.7). Actions are clipped to "
+                             "[-1, 1] afterwards, so a sigma near 1 approaches bang-bang.")
     parser.add_argument("--vision", action="store_true",
                         help="Enable vision observation")
     # 01.09.2026 The three knobs on the size of that observation. Upstream's
@@ -677,6 +703,12 @@ An example is '251206_prone_linear_1e6_test'
     achieved_goal_in_observation=args.achieved_goal_in_observation
     pen_factor = args.pen_factor
     goal_function = args.goal_achievement_function
+
+    if args.action_noise != 'none' and args.algorithm not in OFF_POLICY_ALGORITHMS:
+        raise ValueError(
+            f"--action_noise needs an off-policy algorithm {OFF_POLICY_ALGORITHMS}, got "
+            f"--algorithm={args.algorithm}. PPO and A2C explore through their own policy "
+            f"distribution and SB3 gives them no action_noise hook.")
     freeze_arm = args.freeze_arm
     freeze_leg = args.freeze_leg
     side_lying = args.side_lying
@@ -853,6 +885,8 @@ An example is '251206_prone_linear_1e6_test'
             look_w=args.look_w,
             look_habituation_steps=args.look_habituation_steps,
             look_recovery_steps=args.look_recovery_steps,
+            look_novelty_w=args.look_novelty_w,
+            look_seen_threshold=args.look_seen_threshold,
             look_fovea=(None if args.look_fovea == 0 else args.look_fovea),
             look_eyes=args.look_eyes,
             rotation_reward=not args.no_rotation_reward,
@@ -935,6 +969,23 @@ An example is '251206_prone_linear_1e6_test'
                 replay_buffer_class=replay_buffer_class,
                 replay_buffer_kwargs=replay_buffer_kwargs,
                 verbose=1)
+            if args.action_noise != 'none':
+                from pink import ColoredActionNoise
+                beta = {'white': 0, 'pink': 1, 'red': 2}[args.action_noise]
+                # 'seq_len' is the episode horizon: the process is generated one episode at a
+                # time and SB3 calls 'reset()' on it at every episode boundary. An explicit rng,
+                # because without one 'powerlaw_psd_gaussian' reaches for a fresh
+                # 'np.random.default_rng()' that no seed touches -- the same trap
+                # 'eval_noise_baseline.py' documents.
+                off_policy_kwargs['action_noise'] = ColoredActionNoise(
+                    beta=beta,
+                    sigma=args.action_noise_sigma,
+                    action_dim=int(env.action_space.shape[0]),
+                    seq_len=episode_steps,
+                    rng=np.random.default_rng(args.seed) if hasattr(args, 'seed')
+                        else np.random.default_rng())
+                print(f"Using {args.action_noise} action noise (beta={beta}, "
+                      f"sigma={args.action_noise_sigma}, seq_len={episode_steps}).")
             model = RL("MultiInputPolicy", env, **off_policy_kwargs)
     else:
         if load_model:
@@ -992,9 +1043,15 @@ An example is '251206_prone_linear_1e6_test'
         'look_w': args.look_w,
         'look_habituation_steps': args.look_habituation_steps,
         'look_recovery_steps': args.look_recovery_steps,
+        'look_novelty_w': args.look_novelty_w,
+        'look_seen_threshold': args.look_seen_threshold,
         'look_fovea': args.look_fovea,
         'look_eyes': args.look_eyes,
         'no_rotation_reward': args.no_rotation_reward,
+        # Exploration defines the run: a policy trained under red noise reloaded without it is a
+        # different experiment.
+        'action_noise': args.action_noise,
+        'action_noise_sigma': args.action_noise_sigma,
         # The horizon in force, not args.episode_steps: eval_rollover.py reads this to evaluate
         # a run at the length it was trained on, and 'None' would send it back to the default.
         'episode_steps': episode_steps,
@@ -1048,6 +1105,8 @@ An example is '251206_prone_linear_1e6_test'
             look_w=args.look_w,
             look_habituation_steps=args.look_habituation_steps,
             look_recovery_steps=args.look_recovery_steps,
+            look_novelty_w=args.look_novelty_w,
+            look_seen_threshold=args.look_seen_threshold,
             look_fovea=(None if args.look_fovea == 0 else args.look_fovea),
             look_eyes=args.look_eyes,
             rotation_reward=not args.no_rotation_reward,

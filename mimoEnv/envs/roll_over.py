@@ -320,7 +320,11 @@ class MIMoRollOverEnv(MIMoEnv):
                  look_reward=False,
                  look_w=100.0,
                  look_habituation_steps=50,
-                 look_recovery_steps=150,
+                 # 0 = a toy already looked at stays spent for the rest of the episode, which is
+                 # what makes the episode reward "how many different toys did you find".
+                 look_recovery_steps=0,
+                 look_novelty_w=200.0,
+                 look_seen_threshold=0.01,
                  look_fovea=0.35,
                  look_eyes='left',
                  # Whether rho contributes to the reward at all. '--no_rotation_reward' drops the
@@ -515,7 +519,9 @@ class MIMoRollOverEnv(MIMoEnv):
         if self.look_reward:
             self.look = LookReward(self, cameras=EYES[look_eyes], weight=look_w,
                                    habituation_steps=look_habituation_steps,
-                                   recovery_steps=look_recovery_steps, fovea=look_fovea)
+                                   recovery_steps=look_recovery_steps, fovea=look_fovea,
+                                   novelty_weight=look_novelty_w,
+                                   seen_threshold=look_seen_threshold)
 
         if self.goal_function == 'gravity':
             print("Creating prone and supine reference goals ('gravity').")
@@ -1145,8 +1151,29 @@ class MIMoRollOverEnv(MIMoEnv):
             info['look_reward'] = look
             info['look_visible'] = float(visible.sum())
             info['look_n_toys'] = float(np.count_nonzero(visible > 0.001))
+            # Share of the toys looked at so far this episode. This is the headline metric of the
+            # experiment: the playroom is built so that it cannot reach 1.0 without a roll.
+            info['look_coverage'] = self.look.coverage
         if self._prev_achieved_goal is not None:
             info['prev_achieved_goal'] = self._prev_achieved_goal
+
+        # 02.09.2026 Recompute the reward now that 'info' is complete.
+        #
+        # 'MIMoEnv.step' calls 'compute_reward' from inside 'super().step(action)' above, i.e.
+        # BEFORE any of the keys written below exist. For 'ctrl_cost' and 'prev_achieved_goal'
+        # that is harmless -- '_info_column'/'_info_block' fall back to the live simulation
+        # values, which are exactly what those keys hold, so the two agree to the bit. For
+        # 'look_reward' there is no live fallback and the default is 0.0, so **the looking reward
+        # was computed, logged, and never actually paid**: under '--no_rotation_reward' the reward
+        # MIMo received was minus the control cost alone, whose optimum is to lie still. The
+        # symptom was 'ep_rew_mean' -202 against 'ep_look_reward' 400, with 'raw_ctrl_cost'
+        # falling monotonically as SAC learned to stop moving; under '--nopen' it became
+        # 'ep_rew_mean' exactly 0.0 while the looking reward was still being logged.
+        #
+        # Recomputing here rather than adding the term by hand keeps one definition of the reward,
+        # the one HER also calls. For every configuration without a looking reward this is a
+        # no-op by the argument above, which is what 'goalenv_check.py' verifies.
+        reward = self.compute_reward(self.get_achieved_goal(), self.goal, info)
 
         return obs, reward, terminated, truncated, info
 
