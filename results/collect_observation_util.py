@@ -412,7 +412,7 @@ def collect_kobayashi_site_y_displacement_series(env, model, n_tries=10, with_ac
         done = False
         deg_45_reached = False
         side_lying_reached = False
-        rho_max = float(env.unwrapped.get_achieved_goal_cos()[0])
+        rho_max = float(env.unwrapped.get_achieved_goal_cos_mean()[0])
         step = 0
 
         # For some reason, at the start of the episode, we do not start with
@@ -434,7 +434,7 @@ def collect_kobayashi_site_y_displacement_series(env, model, n_tries=10, with_ac
 
             side_lying_reached = side_lying_reached or (info['side_lying'] == 1.0)
             deg_45_reached = deg_45_reached or (info['45_deg'] == 1.0)
-            rho_max = max(rho_max, float(env.unwrapped.get_achieved_goal_cos()[0]))
+            rho_max = max(rho_max, float(env.unwrapped.get_achieved_goal_cos_mean()[0]))
 
             entry = get_site_relative_displacements()
             entry['Episode'] = n_successful_episodes + 1

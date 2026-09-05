@@ -132,7 +132,7 @@ def test_pbrs_regression():
         _, reward, terminated, truncated, _ = env.step(env.action_space.sample())
 
         penalty = env.compute_penalization()
-        succeeded = env.get_achieved_goal_cos()[0] >= 0.95
+        succeeded = env.get_achieved_goal_cos_mean()[0] >= 0.95
         if succeeded:
             expected = env.reward_success - penalty
         else:

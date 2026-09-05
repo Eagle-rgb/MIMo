@@ -114,11 +114,11 @@ def run_condition(env, condition, sigma, episodes, episode_steps, seed0, seq_len
     for episode in range(episodes):
         env.reset(seed=seed0 + episode)
         reset_noise()
-        rho = float(env.get_achieved_goal_cos()[0])
+        rho = float(env.get_achieved_goal_cos_mean()[0])
         best = rho
         for _ in range(episode_steps):
             env.step(sample())
-            rho = float(env.get_achieved_goal_cos()[0])
+            rho = float(env.get_achieved_goal_cos_mean()[0])
             best = max(best, rho)
         rho_max[episode] = best
         rho_end[episode] = rho
@@ -291,7 +291,7 @@ def render_episode(env, condition, sigma, episode, episode_steps, seed0, seq_len
         if not writer.isOpened():
             raise RuntimeError(f"OpenCV could not open a writer for {out_path}.")
 
-    rho = float(env.get_achieved_goal_cos()[0])
+    rho = float(env.get_achieved_goal_cos_mean()[0])
     best = rho
     # rho per *frame*, and frame i is the state after step i (frame 0 is the reset state), so this
     # trace indexes straight into the written video. That is what lets the keyframes be picked
@@ -301,7 +301,7 @@ def render_episode(env, condition, sigma, episode, episode_steps, seed0, seq_len
         for step in range(episode_steps + 1):
             if step:
                 env.step(sample())
-                rho = float(env.get_achieved_goal_cos()[0])
+                rho = float(env.get_achieved_goal_cos_mean()[0])
                 best = max(best, rho)
                 frame = grab()
             if overlay:

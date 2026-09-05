@@ -42,7 +42,10 @@ class MuscleModel(ActuationModel):
         activity (np.ndarray): Muscle activity.
     """
     def __init__(self, env, actuators):
-        super().__init__(env, actuators)
+        # 04.09.2026 These constants have to exist before ActuationModel.__init__ runs, because it
+        # calls initialize(), which now does the whole model-dependent setup rather than only
+        # building the action space. Previously that setup sat at the end of __init__ and was
+        # therefore never redone on an embodiment hot-swap -- see initialize().
         self.control_input = None
         self.lmax = 1.6
         self.lmin = 0.5
@@ -79,7 +82,47 @@ class MuscleModel(ActuationModel):
         self.mimo_actuated_joints = None
         self.mimo_actuated_qpos = None
         self.mimo_actuated_qvel = None
+        # The MjModel this model's parametrisation was built against. Guards initialize() against
+        # running twice on the same model -- see there.
+        self._parametrised_model = None
 
+        super().__init__(env, actuators)
+
+    def initialize(self):
+        """ Resolve every model-dependent quantity. Called on construction and on a hot-swap.
+
+        04.09.2026 This used to be the base class version, which only rebuilt the action space,
+        while `_set_max_forces`, `_get_actuated_joints` and `_set_muscles` ran once at the end of
+        `__init__`. `MIMoEnv.initialize` is also called by `MIMoRollOverEnv.set_embodiment`, which
+        replaces `self.model` and `self.data` with a different scene (`--mgc`), and after such a
+        swap the muscle model was left holding the *previous* model's parametrisation. Three
+        consequences, in descending order of severity:
+
+        * The new model's ``actuator_forcelimited`` was never cleared. The muscle model applies
+          torque by writing it into ``actuator_gear`` and driving ``ctrl = 1``, so with force
+          limits back on MuJoCo clips the actuator force to ``forcerange``, which is of order
+          +-1 N.m. Every muscle torque would be silently truncated to roughly a tenth of itself.
+        * The new model's ``jnt_stiffness`` was never zeroed and its ``dof_damping`` never
+          reduced, so MIMo's joint springs came back while the muscles stayed calibrated for a
+          model without them.
+        * ``fmax``/``vmax``, the joint indices and the moment arms stayed those of the old scene,
+          which is exactly what an age swap is supposed to change.
+
+        Each of the three helpers reads the model and writes back into it, so calling this twice on
+        the *same* model would compound: `_set_max_forces` would read the torque `_apply_torque`
+        left in ``actuator_gear`` as though it were the XML gear, and `_compute_parametrization`
+        would divide the damping by 20 a second time. That is safe here only because both call
+        sites hand it a freshly compiled model. Do not call it to "refresh" a live one.
+        """
+        super().initialize()
+        # Idempotent per model object. It has to be: MIMoEnv builds the actuation model (whose
+        # __init__ calls this) and then calls MIMoEnv.initialize(), which calls it a second time,
+        # so an unguarded version divides dof_damping by 20 twice -- 18.2485 -> 0.0456 instead of
+        # 0.9124 -- and reads the torque _apply_torque just wrote as though it were the XML gear.
+        # A genuine hot-swap hands us a different MjModel, which is what re-triggers the setup.
+        if self._parametrised_model is self.env.model:
+            return
+        self._parametrised_model = self.env.model
         self._set_max_forces()
         self._get_actuated_joints()
         self._set_muscles()
@@ -105,7 +148,15 @@ class MuscleModel(ActuationModel):
             action (numpy.ndarray): A numpy array with control values.
         """
         self.control_input = np.clip(action, self.action_space.low, self.action_space.high)
-        self.env.data.ctrl[self.actuators] = self._compute_muscle_action(self.control_input)
+        # 04.09.2026 advance_activity=False. MujocoEnv.do_simulation calls _set_action() once and
+        # then substep_update() once per physics step, so integrating the activation lag here as
+        # well advanced it frame_skip + 1 times per env step against frame_skip physics steps --
+        # 3 against 2 at the roll-over frame_skip, i.e. an effective tau of 0.0067 s rather than
+        # the 0.01 s the model declares. That lag is the muscle model's stand-in for calcium
+        # kinetics and electromechanical delay, and mimoEnv/eval_emg.py leans on it as the
+        # counterpart of Siegel's 50 Hz EMG envelope filter, so it needs to mean what it says.
+        self.env.data.ctrl[self.actuators] = self._compute_muscle_action(
+            self.control_input, advance_activity=False)
 
     def substep_update(self):
         """ Update muscle activity and torque.
@@ -275,10 +326,15 @@ class MuscleModel(ActuationModel):
         self.target_activity = np.zeros(self.action_space.shape)
         self._update_muscle_state()
 
-    def _update_muscle_state(self):
+    def _update_muscle_state(self, advance_activity=True):
         """ Computes the new muscle quantities needed to determine actuator torque.
+
+        Args:
+            advance_activity (bool): Whether to integrate the activation lag by one physics
+                timestep. ``False`` when only the target changed and no physics step has passed.
         """
-        self._update_activity()
+        if advance_activity:
+            self._update_activity()
         self._update_virtual_lengths()
         self._update_virtual_velocities()
         self._update_torque()
@@ -330,7 +386,7 @@ class MuscleModel(ActuationModel):
         """
         self.env.model.actuator_gear[self.actuators, 0] = self.joint_torque.copy()
 
-    def _compute_muscle_action(self, action=None, update_action=True):
+    def _compute_muscle_action(self, action=None, update_action=True, advance_activity=True):
         """ Take in the muscle action, compute all virtual quantities and set the correct torques.
 
         All-in-one function that updates muscle activity and computes muscle torques given current simulation state.
@@ -340,6 +396,8 @@ class MuscleModel(ActuationModel):
                 Default ``None``. This argument is ignored if "update_action" is ``False``.
             update_action: If ``True`` we set :attr:`~.target_activity` to the `action` argument. If ``False`` the
                 `action` argument is ignored.
+            advance_activity: If ``True`` the activation lag is integrated by one physics timestep.
+                Set ``False`` from :meth:`.action`, which runs between physics steps.
 
         Returns:
             np.ndarray: A dummy array consisting only of ones. We apply our muscle torque by reusing the torque motors
@@ -348,7 +406,7 @@ class MuscleModel(ActuationModel):
         assert not (update_action and action is None)
         if update_action:
             self.target_activity = np.clip(action, 0, 1).copy()
-        self._update_muscle_state()
+        self._update_muscle_state(advance_activity=advance_activity)
         self._apply_torque()
         return np.ones_like(self.joint_torque)
 

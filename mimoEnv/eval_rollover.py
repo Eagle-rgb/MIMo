@@ -21,6 +21,13 @@ The protocol, and why each rule is there:
 
 Reads the run's own data.yml so the evaluation environment matches how the model was trained.
 
+The floor is read from the run's data.yml like everything else, and printed in the header
+because it defines the task. Four flags override it: '--floor_softness',
+'--floor_friction' and '--floor_solimp_width' evaluate on a surface the run never trained on
+(the zero-shot direction -- how much does a compliant floor cost a rigid-floor policy), and
+'--rigid_floor' is the inverse for scoring a compliant-floor run on the default surface.
+'--floor_softness_sweep' does a whole range in one invocation, rebuilding the env per row.
+
 Group mode adds two rules on top:
 
 * **The last checkpoint, not the best one.** 'model_best.zip' is the EvalCallback's pick under
@@ -43,6 +50,7 @@ import gymnasium as gym
 import yaml
 
 import mimoEnv  # noqa: F401  (registers MIMoRollOver-v0)
+from mimoEnv.envs.roll_over import MISSING_LIMBS, MISSING_LIMB_MODES
 
 SIDE_LYING_THRESHOLD = 0.5
 ROLL_THRESHOLD = 0.95
@@ -95,8 +103,20 @@ def env_kwargs(config, starting_position, goal):
         achieved_goal_in_observation=config.get('achieved_goal_in_observation', False),
         age_physio=config.get('physio_age', 9),
         age_morph=config.get('morph_age', 9),
+        # 02.09.2026 The floor is part of the task. Absent from every data.yml written before
+        # this date, where None correctly reproduces the rigid floor those runs trained on.
+        floor_softness=config.get('floor_softness'),
+        floor_friction=config.get('floor_friction'),
+        floor_solimp_width=config.get('floor_solimp_width'),
         freeze_arm=config.get('freeze_arm', False),
         freeze_leg=config.get('freeze_leg', False),
+        # 04.09.2026 Missing limb. Absent from every data.yml written before that date and
+        # from every run with all limbs, where these defaults are exactly what the environment
+        # does anyway.
+        missing_limb=config.get('missing_limb'),
+        missing_limb_mode=config.get('missing_limb_mode', 'cut'),
+        ghost_obs=config.get('ghost_obs', 'rest'),
+        ghost_reference_samples=config.get('ghost_reference_samples', 20),
         # Protocol: ISR off, goal pinned to the full roll, episodes never cut short by success
         # so that every episode gets the same number of chances.
         isr=False,
@@ -108,6 +128,12 @@ def env_kwargs(config, starting_position, goal):
         done_active=False,
         render_mode='rgb_array',
     )
+    # 02.09.2026 The actuation model defines the action space, so a run trained with --use_muscle
+    # cannot be loaded against a spring-damper env. Absent from every data.yml written before this
+    # date, where False correctly reproduces the spring-damper model those runs trained on.
+    if config.get('use_muscle', False):
+        from mimoActuation.muscle import MuscleModel
+        kwargs['actuation_model'] = MuscleModel
     if config.get('touch', False):
         from mimoEnv.envs.roll_over import TOUCH_PARAMS
         kwargs['touch_params'] = TOUCH_PARAMS
@@ -128,6 +154,28 @@ def goal_label(config, goal):
     if config.get('goal_achievement_function', 'cos') == 'gravity':
         return "opposite-posture reference (gravity)"
     return f"{goal:.2f}"
+
+
+def floor_label(config):
+    """How to describe the support surface in the printed header.
+
+    Worth printing on every run, not only overridden ones: a compliant floor changes the task
+    (it removes the bounce-assisted rolls a rigid floor grants), so a table of roll rates that
+    does not say which floor it was measured on is not comparable to anything.
+    """
+    softness = config.get('floor_softness')
+    friction = config.get('floor_friction')
+    width = config.get('floor_solimp_width')
+    if softness is None and friction is None and width is None:
+        return "rigid (scene default)"
+    parts = []
+    if softness is not None:
+        parts.append(f"solref={softness:g}")
+    if width is not None:
+        parts.append(f"solimp_width={width:g}")
+    if friction is not None:
+        parts.append(f"friction={friction:g}")
+    return "compliant (" + ", ".join(parts) + ")"
 
 
 def build_env(config, starting_position, goal):
@@ -176,7 +224,7 @@ def evaluate(model, env, episodes, seed0=1000, policy_goal=None,
     rolled, side, rho_max, steps = [], [], [], []
     for episode in range(episodes):
         obs, _ = env.reset(seed=seed0 + episode)
-        best = float(env.get_achieved_goal_cos()[0])
+        best = float(env.get_achieved_goal_cos_mean()[0])
         step = 0
         first_success = None
         done = False
@@ -188,7 +236,7 @@ def evaluate(model, env, episodes, seed0=1000, policy_goal=None,
             action, _ = model.predict(obs, deterministic=True)
             obs, _, terminated, truncated, _ = env.step(action)
             step += 1
-            best = max(best, float(env.get_achieved_goal_cos()[0]))
+            best = max(best, float(env.get_achieved_goal_cos_mean()[0]))
             if first_success is None and best >= ROLL_THRESHOLD:
                 first_success = step
             done = terminated or truncated
@@ -336,6 +384,39 @@ def resolve_run(model_path, args):
         goal = ROLL_THRESHOLD
     # A run trained with --episode_steps is scored over its own horizon, not the default.
     episode_steps = args.episode_steps or config.get('episode_steps') or DEFAULT_EPISODE_STEPS
+    # 04.09.2026 '--missing_limb' deliberately overrides the data.yml. That is the zero-shot
+    # transfer: evaluate an intact-trained policy (whose data.yml says 'missing_limb: null') on
+    # a MIMo with a limb missing. Without the override that case would not be measurable at
+    # all, because the protocol otherwise reads everything from the data.yml. It only makes
+    # sense with 'ghost' -- a cut body has different spaces and the policy would not load --
+    # so the override forces that mode unless one is given explicitly. '--missing_limb=none'
+    # conversely forces the intact body for a run trained with a limb missing.
+    # 02.09.2026 The floor overrides work the same way and for the same reason: evaluating an
+    # intact-floor policy on a compliant floor is the zero-shot transfer the flags exist for, and
+    # the protocol otherwise reads everything from the data.yml. '--rigid_floor' is the inverse,
+    # for scoring a compliant-floor run on the rigid default.
+    floor_override = (args.rigid_floor
+                      or args.floor_softness is not None
+                      or args.floor_friction is not None
+                      or args.floor_solimp_width is not None)
+    if args.missing_limb is not None or args.ghost_obs is not None or floor_override:
+        config = dict(config)
+    if args.rigid_floor:
+        config['floor_softness'] = None
+        config['floor_friction'] = None
+        config['floor_solimp_width'] = None
+    if args.floor_softness is not None:
+        config['floor_softness'] = args.floor_softness
+    if args.floor_friction is not None:
+        config['floor_friction'] = args.floor_friction
+    if args.floor_solimp_width is not None:
+        config['floor_solimp_width'] = args.floor_solimp_width
+    if args.missing_limb is not None:
+        config['missing_limb'] = None if args.missing_limb == 'none' else args.missing_limb
+        if args.missing_limb != 'none':
+            config['missing_limb_mode'] = args.missing_limb_mode or 'ghost'
+    if args.ghost_obs is not None:
+        config['ghost_obs'] = args.ghost_obs
     return config, start, goal, episode_steps
 
 
@@ -432,6 +513,11 @@ def _print_group(rows, skipped, summary, args, episodes):
     print(f"checkpoint          : {args.checkpoint} "
           f"({'highest-numbered model_<n>.zip' if args.checkpoint == 'last' else args.checkpoint})")
     print(f"episodes            : {episodes} per run (deterministic, ISR off)")
+    if args.rigid_floor:
+        print(f"floor               : rigid (scene default), forced -- overrides each data.yml")
+    elif (args.floor_softness is not None or args.floor_friction is not None
+          or args.floor_solimp_width is not None):
+        print(f"floor               : {floor_label(vars(args))}, forced -- overrides each data.yml")
     if args.policy_goal is not None:
         print(f"policy was fed      : desired_goal={args.policy_goal:.2f} (constant)")
     print()
@@ -479,6 +565,64 @@ def write_csv(path, rows):
             writer.writerow([match.group(1) if match else row['run'], row['rolled']])
 
 
+def run_floor_softness_sweep(args, config, start, goal, episode_steps, algorithm, episodes):
+    """Score one policy across a range of floor softnesses, one row per value.
+
+    Unlike '--policy_goal_sweep', which only changes a number in the observation, the floor is
+    baked into the compiled MuJoCo model by 'MIMoRollOverEnv._apply_floor_properties', so every
+    row needs its own environment. One MIMo env is ~3.6 GB RSS, so the previous one is closed
+    before the next is built -- never hold two.
+
+    The policy is reloaded per row for the same reason it is loaded with an env at all: SB3
+    asserts on the env for anything saved with a HerReplayBuffer. Reloading is seconds against
+    the env build, and it avoids leaving the model holding a closed env.
+
+    Every row uses the same episode seeds, so the comparison across softnesses is paired.
+    """
+    values = parse_sweep(args.floor_softness_sweep)
+    label = args.label or os.path.basename(os.path.dirname(args.model))
+    payload = {'run': label, 'model': os.path.abspath(args.model), 'algorithm': algorithm,
+               'her': bool(config.get('her', False)),
+               'starting_position': start, 'goal': goal, 'episodes': episodes,
+               'episode_steps': episode_steps, 'sweep': 'floor_softness', 'rows': []}
+
+    print()
+    print(f"run                 : {label}")
+    print(f"episodes            : {episodes} per row (deterministic, ISR off, {start}, "
+          f"{episode_steps} steps)")
+    print(f"env goal            : {goal_label(config, goal)}")
+    print(f"baseline floor      : {floor_label(config)}")
+    print()
+    print(f"{'softness':>9}  {'roll':>6}  {'side':>6}  {'rho_max mean':>13}  {'min':>6}  "
+          f"{'max':>6}  {'steps':>7}")
+
+    env = None
+    try:
+        for value in values:
+            if env is not None:
+                env.close()
+                env = None
+            row_config = dict(config)
+            row_config['floor_softness'] = value
+            env = build_env(row_config, start, goal)
+            model = load_policy(args.model, algorithm, env)
+            r = evaluate(model, env, episodes, policy_goal=args.policy_goal,
+                         episode_steps=episode_steps)
+            finished = r['steps'][~np.isnan(r['steps'])]
+            steps = f"{finished.mean():7.1f}" if finished.size else f"{'-':>7}"
+            print(f"{value:>9.3f}  {r['rolled'].mean() * 100:>5.0f}%  "
+                  f"{r['side'].mean() * 100:>5.0f}%  {r['rho_max'].mean():>13.3f}  "
+                  f"{r['rho_max'].min():>6.3f}  {r['rho_max'].max():>6.3f}  {steps}", flush=True)
+            row = _row(r, policy_goal=args.policy_goal)
+            row['floor_softness'] = value
+            payload['rows'].append(row)
+    finally:
+        if env is not None:
+            env.close()
+
+    write_json(args.json, payload)
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--model', default=None, help="Path to a single model_*.zip.")
@@ -504,6 +648,27 @@ def main():
                         choices=['prone', 'supine'],
                         help="Defaults to the position recorded in data.yml, else supine.")
     parser.add_argument('--label', default=None, help="Name to print for this run.")
+    # 02.09.2026 Floor overrides. Without one, the floor comes from the run's own data.yml,
+    # which for every run trained before that date means the rigid scene default.
+    parser.add_argument('--floor_softness', default=None, type=float,
+                        help="Evaluate on a floor with this contact time constant (solref[0]) "
+                             "regardless of what the run trained on. 0.1 sinks ~2.8 mm. This is "
+                             "the zero-shot transfer: how much does a compliant surface cost a "
+                             "policy trained on the rigid one.")
+    parser.add_argument('--floor_friction', default=None, type=float,
+                        help="Override the floor's sliding friction (baseline 1.0).")
+    parser.add_argument('--floor_solimp_width', default=None, type=float,
+                        help="Override the floor's solimp width (baseline 0.001); makes the "
+                             "contact progressive rather than a linear spring.")
+    parser.add_argument('--rigid_floor', action='store_true',
+                        help="Force the rigid scene default, ignoring the floor settings in "
+                             "data.yml. The inverse of --floor_softness: it scores a "
+                             "compliant-floor run on the surface every older run used.")
+    parser.add_argument('--floor_softness_sweep', default=None,
+                        help="Evaluate one --model across a range of floor softnesses, one row "
+                             "each ('0.02:0.12:0.02' or '0.05,0.1,0.2'). The env is rebuilt per "
+                             "value, so this costs an env construction per row. Use it to size "
+                             "the manipulation before spending a training run on it.")
     parser.add_argument('--episode_steps', default=None, type=int,
                         help="Episode horizon. Defaults to the one recorded in the run's "
                              "data.yml, else 500. Override only to compare runs trained at "
@@ -526,6 +691,23 @@ def main():
                              "comma-separated list ('0.05,0.5,2.0') or 'low:high:step' "
                              "('0.25:0.95:0.05'). Prints one row per value. Locates the point "
                              "where goal conditioning stops working.")
+    parser.add_argument('--missing_limb', default=None, type=str,
+                        choices=sorted(MISSING_LIMBS) + ['none'],
+                        help="Override the missing limb stored in the run's data.yml. This is "
+                             "the zero-shot transfer: evaluate an intact-trained policy on a "
+                             "MIMo with a limb missing. Implies --missing_limb_mode=ghost "
+                             "unless one is given, because a cut body has different spaces and "
+                             "the policy would not load. 'none' conversely forces the intact "
+                             "body.")
+    parser.add_argument('--missing_limb_mode', default=None, type=str,
+                        choices=list(MISSING_LIMB_MODES),
+                        help="Override how the limb is removed. Only useful together with "
+                             "--missing_limb.")
+    parser.add_argument('--ghost_obs', default=None, type=str, choices=['rest', 'zero'],
+                        help="Override what proprioception reports for the missing limb. "
+                             "Together with --missing_limb this is the switch that isolates "
+                             "the distribution shift: 'rest' against 'zero' on an otherwise "
+                             "identical body.")
     parser.add_argument('--csv', default=None, type=str,
                         help="--group only. Write per-run success rates as Run,Success_Rate -- "
                              "the layout results/success_after_training_plot.py reads, so the "
@@ -539,6 +721,22 @@ def main():
     if bool(args.model) == bool(args.group):
         parser.error("Pass exactly one of --model (a single checkpoint) or --group (every run "
                      "of a training batch).")
+
+    if args.rigid_floor and (args.floor_softness is not None or args.floor_friction is not None
+                             or args.floor_solimp_width is not None):
+        parser.error("--rigid_floor forces the scene default; it does not combine with the "
+                     "individual floor overrides.")
+
+    if args.floor_softness_sweep is not None:
+        if args.group:
+            parser.error("--floor_softness_sweep evaluates one model across many floors; it does "
+                         "not combine with --group. Sweep a single --model instead.")
+        if args.floor_softness is not None:
+            parser.error("--floor_softness_sweep already sets the softness per row; drop "
+                         "--floor_softness.")
+        if args.policy_goal_sweep is not None:
+            parser.error("Sweep one axis at a time: --floor_softness_sweep and "
+                         "--policy_goal_sweep cannot be combined.")
 
     if args.group:
         if args.policy_goal_sweep is not None:
@@ -562,6 +760,10 @@ def main():
     episodes = args.episodes or 50
     config, start, goal, episode_steps = resolve_run(args.model, args)
     algorithm = config.get('algorithm', 'SAC')
+
+    if args.floor_softness_sweep is not None:
+        run_floor_softness_sweep(args, config, start, goal, episode_steps, algorithm, episodes)
+        return
 
     env = build_env(config, start, goal)
     model = load_policy(args.model, algorithm, env)
@@ -607,6 +809,7 @@ def main():
     print(f"reward              : {'sparse' if config.get('sparse_reward') else ('pbrs' if config.get('pbrs') else 'distance')}")
     print(f"episodes            : {episodes} (deterministic, ISR off, goal={goal_label(config, goal)}, "
           f"{start}, {episode_steps} steps)")
+    print(f"floor               : {floor_label(config)}")
     if args.policy_goal is not None:
         print(f"policy was fed      : desired_goal={args.policy_goal:.2f} (constant -- the score "
               f"below is still measured against {goal:.2f})")

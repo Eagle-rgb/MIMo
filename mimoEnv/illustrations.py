@@ -44,6 +44,7 @@ import yaml
 import numpy as np
 
 from mimoEnv.envs.roll_over import TOUCH_PARAMS as ROLL_OVER_TOUCH_PARAMS
+from mimoEnv.envs.roll_over import MISSING_LIMBS, MISSING_LIMB_MODES
 from mimoEnv.envs.roll_over_callback import RollOverCallback, RollOverEvalCallback
 from mimoEnv.envs.morphological_curriculum import make_curriculum_callback
 from mimoEnv.envs.isr_callback import ISRCallback
@@ -123,7 +124,7 @@ def test(wrapped_env, save_dir, model=None, render_video=False, render_frames=Fa
         for i, k in enumerate(('acc_x', 'acc_y', 'acc_z', 'gyro_x', 'gyro_y', 'gyro_z')):
             row[f'vestibular_{k}'] = float(vest[i])
         if is_roll_over:
-            row['rho'] = float(unw.get_achieved_goal_cos()[0])
+            row['rho'] = float(unw.get_achieved_goal_cos_mean()[0])
             row['hip_deg'] = float(unw.get_achieved_rotation_degrees('hip'))
             row['chest_deg'] = float(unw.get_achieved_rotation_degrees('chest'))
             row['dot_hip'] = float(unw.get_dot_local_x_to_global_z('hip'))
@@ -437,6 +438,12 @@ def main():
                              "from it without --goal_low/--goal_high (14/16 seeds against 3/16). "
                              "'angle' and 'intrinsic' were removed on 26.08.2026; see "
                              "docs/roll_over.md 3.4. Default: 'cos'.")
+    parser.add_argument("--cos_goal_pool", required=False, default="mean",
+                        choices=["mean", "max", "min", "none"],
+                        help="Sets the pooling function for the cosine goal with 'mean' as the " \
+                        "default setting. Choices: mean, max, min and none. Specifying 'none' mirrors " \
+                        "the 'gravity' goal, with the slight difference of us not estimating the gravity " \
+                        "iteratively but instead 'cheating' it by reading it from the global state.")
     # --- 'gravity' goal function -----------------------------------------------------------
     parser.add_argument('--gravity_goal_eps', '--intrinsic_goal_eps',  # Previously: --intrinsic_goal_eps
                         default=0.15, type=float, required=False,
@@ -536,7 +543,27 @@ An example is '251206_prone_linear_1e6_test'
     parser.add_argument('--pbrs_w', default=100, type=float,
                         help="Potential difference weighting in PBRS.")
     parser.add_argument('--isr', action='store_true',
-                        help="Use Initial State Randomization.")
+                        help="Use Initial State Randomization. NOT a default -- it is off in "
+                             "every headline roll-over configuration and inflates rho_max, "
+                             "because on a hard floor the landing alone completes a roll "
+                             "started past ~45 deg. Pass it only for the looking-reward "
+                             "experiments, which need it.")
+    # 02.09.2026 The support surface as an experimental variable. All three default to None,
+    # which leaves the floor exactly as the scenes compile it.
+    parser.add_argument('--floor_softness', default=None, type=float, required=False,
+                        help="Contact time constant of the floor in seconds (solref[0]). "
+                             "Larger is softer: 0.05 sinks ~1.2 mm, 0.10 sinks ~4.5 mm, "
+                             "against 0.11 mm for the default rigid floor. The scalar axis to "
+                             "sweep. Omit for the current hard floor.")
+    parser.add_argument('--floor_friction', default=None, type=float, required=False,
+                        help="Sliding friction coefficient of the floor (baseline 1.0). "
+                             "Independent of --floor_softness: MuJoCo's Coulomb friction is "
+                             "area-independent, so sinking in buys no grip by itself.")
+    parser.add_argument('--floor_solimp_width', default=None, type=float, required=False,
+                        help="Penetration depth over which the floor contact ramps from soft "
+                             "to firm (solimp[2], baseline 0.001). Turns the linear spring of "
+                             "--floor_softness into a progressive, foam-like response; 0.03 "
+                             "gives a ~13.5 mm mat-like indentation.")
     parser.add_argument('--obs_norm', action='store_true', default=False,
                         help="Use observation normalization.")
     parser.add_argument('--touch', action='store_true', default=False,
@@ -548,6 +575,35 @@ An example is '251206_prone_linear_1e6_test'
                         help="Freezes leg.")
     parser.add_argument('--freeze_arm', default=False, action='store_true', required=False,
                         help="Freezes arm.")
+    parser.add_argument('--missing_limb', default=None, type=str, required=False,
+                        choices=sorted(MISSING_LIMBS),
+                        help="Train or evaluate MIMo with a limb missing. See "
+                             "--missing_limb_mode for how it is removed.")
+    parser.add_argument('--missing_limb_mode', default='cut', type=str,
+                        choices=list(MISSING_LIMB_MODES),
+                        help="How the limb is removed. 'cut' (default) really deletes it: the "
+                             "body subtree, its joints, actuators and sensors are gone and the "
+                             "spaces shrink (46 -> 38 actuators, 305 -> 253 proprioception "
+                             "values for one limb). Use this to TRAIN a policy that never had "
+                             "the limb. 'ghost' removes only the physics -- mass, inertia and "
+                             "collisions -- and keeps the joints, actuators and sensors, so "
+                             "the spaces are unchanged and an intact-trained policy can be "
+                             "loaded onto it. Use this for TRANSFER (--load_model, or "
+                             "zero-shot via eval_rollover.py). A cut model cannot take an "
+                             "intact policy: SB3 refuses with 'Observation spaces do not "
+                             "match'. The cut scenes are pre-generated by "
+                             "mimoEnv/assets/roll_over/generate_amputated_scenes.py.")
+    parser.add_argument('--ghost_obs', default='rest', type=str, choices=['rest', 'zero'],
+                        help="Ghost mode only: what proprioception reports for the missing "
+                             "limb. 'rest' (default) the values measured on the INTACT body at "
+                             "rest, 'zero' a constant 0. 'rest' keeps a zero-shot transfer "
+                             "from also measuring the distribution shift -- 'robot:left_knee' "
+                             "rests at -0.115 rad, not at 0. Measured: an intact PPO policy on "
+                             "missing_limb=left_arm reaches 30 %% full roll with 'rest' "
+                             "against 10 %% with 'zero'.")
+    parser.add_argument('--ghost_reference_samples', default=20, type=int,
+                        help="Ghost mode only: how many ISR-free resets the rest pose for "
+                             "--ghost_obs=rest is averaged over.")
     parser.add_argument('--side_lying', default=False, action='store_true', required=False,
                         help="Yields success already at side lying instead of making MIMo " \
                         "do the full rollover.")
@@ -595,6 +651,7 @@ An example is '251206_prone_linear_1e6_test'
                         "Combine arguments using '|'.")
     parser.add_argument("--vision", action="store_true",
                         help="Enable vision observation")
+                        
     
     # Parse yaml if we specified '--load_model'.
     args, remaining_argv = parser.parse_known_args()
@@ -613,7 +670,7 @@ An example is '251206_prone_linear_1e6_test'
     train_for = args.train_for          # in yaml as 'num_train', but is not loaded when loading model.
     should_test = args.test             # not in yaml
     render = args.render_video          # not in yaml
-    use_muscle = args.use_muscle        # not in yaml
+    use_muscle = args.use_muscle
     roll_over_starting_position = args.roll_over_starting_position  # not in yaml
     roll_over_model_path_auto = args.roll_over_model_path_auto      # not in yaml
     render_actuations = args.render_actuations
@@ -630,6 +687,9 @@ An example is '251206_prone_linear_1e6_test'
     goal_function = args.goal_achievement_function
     freeze_arm = args.freeze_arm
     freeze_leg = args.freeze_leg
+    missing_limb = args.missing_limb
+    missing_limb_mode = args.missing_limb_mode
+    ghost_obs = args.ghost_obs
     side_lying = args.side_lying
     render_frames = args.render_frames
     morph_age = args.morph_age
@@ -785,6 +845,10 @@ An example is '251206_prone_linear_1e6_test'
             goal_tolerance=args.goal_tolerance,
             freeze_leg=freeze_leg,
             freeze_arm=freeze_arm,
+            missing_limb=missing_limb,
+            missing_limb_mode=missing_limb_mode,
+            ghost_obs=ghost_obs,
+            ghost_reference_samples=args.ghost_reference_samples,
             success_at_side_lying=side_lying,
             sparse_reward=sparse_reward,
             goal_low=goal_low,
@@ -792,6 +856,10 @@ An example is '251206_prone_linear_1e6_test'
             done_active=done_active,
             age_physio=physio_age,
             age_morph=morph_age,
+            floor_softness=args.floor_softness,
+            floor_friction=args.floor_friction,
+            floor_solimp_width=args.floor_solimp_width,
+            cos_goal_pool=args.cos_goal_pool,
             vision_params=DEFAULT_VISION_PARAMS if args.vision else None)
         # if log_actuations:
         #     wrapped_env = MIMoRollOverWrapper(env, log_file=os.path.join(save_dir,"actuation_log.csv"))
@@ -899,6 +967,18 @@ An example is '251206_prone_linear_1e6_test'
         'goal_tolerance': args.goal_tolerance,
         'freeze_leg': freeze_leg,
         'freeze_arm': freeze_arm,
+        # Experiment-defining: 'cut' changes the observation and action spaces, 'ghost'
+        # changes mass, inertia and collisions. A run reloaded without these would silently be
+        # evaluated on a different body.
+        'missing_limb': missing_limb,
+        'missing_limb_mode': missing_limb_mode,
+        'ghost_obs': ghost_obs,
+        'ghost_reference_samples': args.ghost_reference_samples,
+        # Experiment-defining: the floor is part of the task. A run trained on a compliant floor
+        # and reloaded without these would be evaluated on a rigid one.
+        'floor_softness': args.floor_softness,
+        'floor_friction': args.floor_friction,
+        'floor_solimp_width': args.floor_solimp_width,
         'side_lying': side_lying,
         'physio_age': physio_age,
         'morph_age': morph_age,
@@ -926,6 +1006,13 @@ An example is '251206_prone_linear_1e6_test'
         'achieved_goal_in_observation': achieved_goal_in_observation,
         'vision': args.vision,
         'n_sampled_goal': args.n_sampled_goal,
+        'cos_goal_pool': args.cos_goal_pool,
+        # 02.09.2026 Experiment-defining: the muscle model doubles the action space (2 antagonistic
+        # muscles per actuator) and replaces the actuation block of the proprioception observation,
+        # so a run trained with it cannot be loaded against a spring-damper env at all. It used to
+        # be on the deliberate exclusion list, which was wrong for the same reason 'vision' is on
+        # this one.
+        'use_muscle': use_muscle,
     }
     with open(f'{save_dir}/data.yml', 'w') as outfile:
         yaml.dump(yaml_data, outfile, default_flow_style=False)
@@ -953,6 +1040,10 @@ An example is '251206_prone_linear_1e6_test'
             gravity_reference_samples=args.gravity_reference_samples,
             goal_tolerance=args.goal_tolerance,
             freeze_leg=freeze_leg, freeze_arm=freeze_arm,
+            missing_limb=missing_limb,
+            missing_limb_mode=missing_limb_mode,
+            ghost_obs=ghost_obs,
+            ghost_reference_samples=args.ghost_reference_samples,
             success_at_side_lying=False,
             sparse_reward=sparse_reward,
             # Pin the goal to the full roll. Under --goal_tolerance that value is 1.0, not 0.95:
@@ -961,7 +1052,13 @@ An example is '251206_prone_linear_1e6_test'
             goal_low=(1.0 if args.goal_tolerance is not None else 0.95),
             goal_high=(1.0 if args.goal_tolerance is not None else 0.95),
             done_active=False,
+            # The floor is part of the task: evaluating a compliant-floor policy on the rigid
+            # default would silently measure a different environment than it trained on.
+            floor_softness=args.floor_softness,
+            floor_friction=args.floor_friction,
+            floor_solimp_width=args.floor_solimp_width,
             vision_params=DEFAULT_VISION_PARAMS if args.vision else None,
+            cos_goal_pool=args.cos_goal_pool,
             age_physio=physio_age, age_morph=morph_age).unwrapped
         eval_callback = RollOverEvalCallback(eval_env=eval_env,
                                              eval_every=args.eval_every,

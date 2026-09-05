@@ -39,7 +39,7 @@ onto the other side. The episode is a fixed 500 steps (`max_episode_steps=500` i
 `mimoEnv/__init__.py:75`), `frame_skip=2`, `dt = 0.01 s`, so an episode is 5 simulated seconds.
 
 The scalar progress measure — written **ρ** (rho) in the logs, the callbacks and this document —
-is `get_achieved_goal_cos()` (`roll_over.py:863`):
+is `get_achieved_goal_cos_mean()` (`roll_over.py:863`):
 
 ```
 d       = data.body(b).xmat[2, 0]         # dot product of the body's local x axis with global z

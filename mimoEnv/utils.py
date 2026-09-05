@@ -929,26 +929,75 @@ def get_actuation_values(model, data):
     return actuator_data
 
 def get_minimal_z_coordinate(model, data):
-    """ Returns the minimal z coordinate of all geometries of the model.
-    
+    """ The world z coordinate of the lowest point on MIMo.
+
+    Call ``mj_forward`` first: this reads ``data.geom_xpos``/``data.geom_xmat``.
+
+    02.09.2026 This used to iterate over *every* geom in the model and approximate each one's
+    lowest point as ``geom_xpos[2] - np.max(geom_size)``. Both halves were wrong:
+
+    * The floor plane was included, and for a plane ``size="0 0 .25"`` is the renderer's grid
+      spacing, not a physical extent. The plane sits at z = 0, so it contributed a constant
+      -0.25 that dominated the minimum in every scene and MIMo's own geometry never entered the
+      result at all. ``put_in_starting_position`` consequently placed him at a constant
+      z = 0.101 regardless of age or posture, i.e. it *dropped* him between 1.3 cm (age 9,
+      prone) and 4.8 cm (age 1, supine) at the start of every episode. The drop was therefore
+      correlated with both independent variables of the roll-over experiment, and after the 30
+      settle steps the root was still moving at 0.25-0.56 m/s.
+    * ``np.max(geom_size)`` is a bounding radius that ignores the geom's orientation, so even
+      without the plane it would have left a gap under every capsule and box.
+
+    The fix is to consider only MIMo's own geoms and to compute each one's lowest point exactly
+    from its type and orientation. ``geom_bodyid == 0`` is the worldbody, i.e. exactly the floor,
+    the skybox and any static scene props (the playroom toys), so skipping it leaves MIMo.
+
+    Note this measures MIMo against **z = 0**, the plane the roll-over scenes put the floor on.
+    A scene whose support surface sits at some other height (a mat modelled as a slab rather
+    than as contact parameters on the plane) would need that offset added by the caller.
+
     Args:
         model (mujoco.MjModel): The MuJoCo model object.
         data (mujoco.MjData): The data of the environment.
-        
+
     Returns:
-        z-coordinate (float): The minimal z coordinate of all geometries of the model.
+        float: World z of the lowest point on MIMo. Positive when he is clear of the floor.
     """
     min_z = float('inf')
 
     for i in range(model.ngeom):
-        geom_pos = data.geom_xpos[i]
-        geom_size = model.geom_size[i]
-        
-        # Simple assumption of the lowest part of the geometry.
-        current_bottom = geom_pos[2] - np.max(geom_size)
-        
-        if current_bottom < min_z:
-            min_z = current_bottom
+        # Body 0 is the worldbody: floor, skybox, static props. Everything else is MIMo.
+        if model.geom_bodyid[i] == 0:
+            continue
+
+        size = model.geom_size[i]
+        # Row 2 of the geom's world rotation matrix is the world z axis written in the geom's
+        # own frame. The lowest point is the geom's origin minus the shape's support distance
+        # along that direction, which is what each branch below computes.
+        u = data.geom_xmat[i].reshape(3, 3)[2, :]
+        geom_type = model.geom_type[i]
+
+        if geom_type == mujoco.mjtGeom.mjGEOM_SPHERE:
+            support = size[0]
+        elif geom_type == mujoco.mjtGeom.mjGEOM_CAPSULE:
+            # Segment along local z, capped by a sphere at each end.
+            support = size[1] * abs(u[2]) + size[0]
+        elif geom_type == mujoco.mjtGeom.mjGEOM_CYLINDER:
+            support = size[1] * abs(u[2]) + size[0] * np.linalg.norm(u[:2])
+        elif geom_type == mujoco.mjtGeom.mjGEOM_BOX:
+            support = np.abs(u).dot(size[:3])
+        elif geom_type == mujoco.mjtGeom.mjGEOM_ELLIPSOID:
+            support = np.linalg.norm(u * size[:3])
+        else:
+            # Meshes and anything else: fall back to the bounding sphere MuJoCo computed. This
+            # is conservative (it leaves a gap), never penetrating.
+            support = model.geom_rbound[i]
+
+        min_z = min(min_z, data.geom_xpos[i][2] - support)
+
+    if not np.isfinite(min_z):
+        raise RuntimeError(
+            "get_minimal_z_coordinate found no geoms outside the worldbody. The model has "
+            f"{model.ngeom} geoms, all of them attached to body 0.")
 
     return min_z
 

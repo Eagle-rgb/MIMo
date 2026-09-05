@@ -139,13 +139,13 @@ class RollOverEvalCallback(BaseCallback):
         rho_max, rolled, side, first = [], [], [], []
         for episode in range(self.n_episodes):
             obs, _ = self.eval_env.reset(seed=self.seed0 + episode)
-            best = float(self.eval_env.get_achieved_goal_cos()[0])
+            best = float(self.eval_env.get_achieved_goal_cos_mean()[0])
             step, hit, done = 0, None, False
             while not done and step < self.episode_steps:
                 action, _ = self.model.predict(obs, deterministic=True)
                 obs, _, terminated, truncated, _ = self.eval_env.step(action)
                 step += 1
-                best = max(best, float(self.eval_env.get_achieved_goal_cos()[0]))
+                best = max(best, float(self.eval_env.get_achieved_goal_cos_mean()[0]))
                 if hit is None and best >= self.ROLL_THRESHOLD:
                     hit = step
                 done = terminated or truncated
