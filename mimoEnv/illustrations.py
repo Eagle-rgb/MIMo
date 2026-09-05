@@ -416,6 +416,12 @@ def main():
                         help='Name of model to save')
     parser.add_argument('--render_video', action='store_true',
                         help='Renders a video for each episode during the test run.')
+    parser.add_argument('--legacy_muscle_action_space', action='store_true',
+                        help="Command the muscles on the original [0, 1] instead of the default "
+                             "[-1, 1]. Only for reproducing runs from before 05.09.2026: on "
+                             "[0, 1] SB3's Gaussian starts with half its mass below the lower "
+                             "bound, where every value means 'muscle off', so the policy's mean "
+                             "collapses onto the bound and its noise does the work.")
     parser.add_argument('--use_muscle', action='store_true',
                         help='Use the muscle actuation model instead of spring-damper model if provided.')
     parser.add_argument('--roll_over_starting_position', required=False,
@@ -571,6 +577,12 @@ An example is '251206_prone_linear_1e6_test'
     parser.add_argument('--achieved_goal_in_observation', action='store_true', default=False)
     parser.add_argument('--pen_factor', default=0.02, type=float, required=False,  # Previously, '--pen_fac'
                         help="Penalization factor when action penalization is active.")
+    parser.add_argument('--pen_metabolic', default=False, action='store_true', required=False,
+                        help="Pay the actuation model's own cost() -- a capacity-weighted mean of "
+                             "squared commands -- instead of the flat sum of squared commands. "
+                             "--pen_factor still applies; note cost() is <= 1/n_channels, so the "
+                             "same factor gives a ~2100x smaller penalty. Off by default: every "
+                             "stored run trained against the flat penalty.")
     parser.add_argument('--freeze_leg', default=False, action='store_true', required=False,
                         help="Freezes leg.")
     parser.add_argument('--freeze_arm', default=False, action='store_true', required=False,
@@ -671,6 +683,7 @@ An example is '251206_prone_linear_1e6_test'
     should_test = args.test             # not in yaml
     render = args.render_video          # not in yaml
     use_muscle = args.use_muscle
+    muscle_action_space = 'unit' if args.legacy_muscle_action_space else 'symmetric'
     roll_over_starting_position = args.roll_over_starting_position  # not in yaml
     roll_over_model_path_auto = args.roll_over_model_path_auto      # not in yaml
     render_actuations = args.render_actuations
@@ -684,6 +697,7 @@ An example is '251206_prone_linear_1e6_test'
     touch = args.touch
     achieved_goal_in_observation=args.achieved_goal_in_observation
     pen_factor = args.pen_factor
+    pen_metabolic = args.pen_metabolic
     goal_function = args.goal_achievement_function
     freeze_arm = args.freeze_arm
     freeze_leg = args.freeze_leg
@@ -839,6 +853,7 @@ An example is '251206_prone_linear_1e6_test'
             proprio_params=proprio_params,
             pbrs_w=pbrs_w,
             pen_factor=pen_factor,
+            pen_metabolic=pen_metabolic,
             goal_function=goal_function,
             gravity_goal_eps=args.gravity_goal_eps,
             gravity_reference_samples=args.gravity_reference_samples,
@@ -860,6 +875,7 @@ An example is '251206_prone_linear_1e6_test'
             floor_friction=args.floor_friction,
             floor_solimp_width=args.floor_solimp_width,
             cos_goal_pool=args.cos_goal_pool,
+            muscle_action_space=muscle_action_space,
             vision_params=DEFAULT_VISION_PARAMS if args.vision else None)
         # if log_actuations:
         #     wrapped_env = MIMoRollOverWrapper(env, log_file=os.path.join(save_dir,"actuation_log.csv"))
@@ -957,6 +973,7 @@ An example is '251206_prone_linear_1e6_test'
         'obs_norm': observation_normalization,
         'touch': touch,
         'pen_factor': pen_factor,
+        'pen_metabolic': pen_metabolic,
         # Experiment-defining: the goal function fixes the width of the goal space, so a model
         # reloaded without it cannot even be loaded, let alone evaluated.
         'goal_achievement_function': goal_function,
@@ -1013,6 +1030,9 @@ An example is '251206_prone_linear_1e6_test'
         # be on the deliberate exclusion list, which was wrong for the same reason 'vision' is on
         # this one.
         'use_muscle': use_muscle,
+        # Experiment-defining: SB3 stores the action space in the checkpoint, so a run trained on
+        # one range cannot be loaded against the other.
+        'muscle_action_space': muscle_action_space,
     }
     with open(f'{save_dir}/data.yml', 'w') as outfile:
         yaml.dump(yaml_data, outfile, default_flow_style=False)
@@ -1035,6 +1055,7 @@ An example is '251206_prone_linear_1e6_test'
             touch_params=ROLL_OVER_TOUCH_PARAMS if touch else None,
             achieved_goal_in_observation=achieved_goal_in_observation,
             proprio_params=proprio_params, pbrs_w=pbrs_w, pen_factor=pen_factor,
+            pen_metabolic=pen_metabolic,
             goal_function=goal_function,
             gravity_goal_eps=args.gravity_goal_eps,
             gravity_reference_samples=args.gravity_reference_samples,
@@ -1059,6 +1080,7 @@ An example is '251206_prone_linear_1e6_test'
             floor_solimp_width=args.floor_solimp_width,
             vision_params=DEFAULT_VISION_PARAMS if args.vision else None,
             cos_goal_pool=args.cos_goal_pool,
+            muscle_action_space=muscle_action_space,
             age_physio=physio_age, age_morph=morph_age).unwrapped
         eval_callback = RollOverEvalCallback(eval_env=eval_env,
                                              eval_every=args.eval_every,

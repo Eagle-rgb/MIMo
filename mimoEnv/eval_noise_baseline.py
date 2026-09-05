@@ -54,14 +54,16 @@ from mimoEnv.eval_rollover import (
 import gymnasium as gym
 
 
-def build_env(starting_position, age_morph, age_physio, render=False):
+def build_env(starting_position, age_morph, age_physio, render=False, use_muscle=False):
     """The evaluation env of eval_rollover.py.
 
     env_kwargs({}, ...) is the protocol: isr=False, goal pinned, done_active=False. The empty
     config is deliberate -- its defaults (PBRS off, pen_factor 0.02, dense reward) only shape a
     reward nothing here reads.
     """
-    kwargs = env_kwargs({}, starting_position, ROLL_THRESHOLD)
+    # env_kwargs already knows how to swap in MuscleModel; going through it keeps the noise
+    # baseline on exactly the same construction path as a real evaluation.
+    kwargs = env_kwargs({'use_muscle': use_muscle}, starting_position, ROLL_THRESHOLD)
     # The measurement pass never renders, and an unused renderer is memory for nothing.
     kwargs['render_mode'] = 'rgb_array' if render else None
     kwargs['age_morph'] = age_morph
@@ -94,9 +96,17 @@ def make_sampler(condition, sigma, env, seed, seq_len):
                                seq_len=seq_len,
                                rng=np.random.default_rng(int(seed)))
     low, high = env.action_space.low, env.action_space.high
+    # 02.09.2026 The noise is zero-mean, the action box is not necessarily. SpringDamperModel gives
+    # 46 actuators in [-1, 1], MuscleModel 92 muscles in [0, 1], and dropping zero-mean noise
+    # straight into the second one would clip half of every sample to zero -- the muscles would sit
+    # at rest most of the time and sigma would stop meaning what it means for the torque model.
+    # Mapping onto the box's centre and half-width instead keeps sigma in units of "fraction of the
+    # available range" for both, and is bit-identical for [-1, 1] (centre 0, half-width 1).
+    centre = (low + high) / 2.0
+    half_range = (high - low) / 2.0
     # Clipping matters at sigma=1: a Gaussian at the edge of the box spends a third of its mass
     # outside it, so sigma=1 is close to a bang-bang policy. That is the point of sweeping sigma.
-    return (lambda: np.clip(noise(), low, high)), noise.reset
+    return (lambda: np.clip(centre + half_range * noise(), low, high)), noise.reset
 
 
 BETAS = {'white': 0.0, 'pink': 1.0, 'red': 2.0}
@@ -464,6 +474,12 @@ def main():
     parser.add_argument('--seq_len', type=int, default=None,
                         help="Colored-noise sequence length; defaults to the episode horizon, "
                              "which is what the pink-noise paper prescribes.")
+    parser.add_argument('--use_muscle', action='store_true',
+                        help="Drive MuscleModel (92 muscles in [0, 1]) instead of the "
+                             "spring-damper model (46 actuators in [-1, 1]). Not comparable to a "
+                             "spring-damper baseline cell for cell: the muscle model also zeroes "
+                             "the stiffness of the unactuated spine joints and cuts their damping "
+                             "by 20, so the body itself differs.")
     parser.add_argument('--morph_age', type=int, default=9)
     parser.add_argument('--physio_age', type=int, default=9)
     parser.add_argument('--seed', type=int, default=1000,
@@ -516,11 +532,12 @@ def main():
             # The top-down camera brings its own renderer, so the env needs none -- and an
             # unused one is memory for nothing.
             env = build_env(posture, args.morph_age, args.physio_age,
-                            render=args.camera == 'env')
+                            render=args.camera == 'env', use_muscle=args.use_muscle)
             try:
                 for _, condition, sigma, episode in (s for s in specs if s[0] == posture):
+                    tag = '_muscle' if args.use_muscle else ''
                     out = os.path.join(args.render_dir,
-                                       f"{posture}_{condition}_s{sigma:g}_ep{episode}.mp4")
+                                       f"{posture}_{condition}_s{sigma:g}_ep{episode}{tag}.mp4")
                     print(f"Rendering {posture} {condition} sigma={sigma:g} episode {episode} "
                           f"(replaying {episode} episodes first to reach its noise stream)...",
                           flush=True)
@@ -563,14 +580,15 @@ def main():
             cells.append((colour, sigma))
 
     rows = []
+    model_name = 'MuscleModel' if args.use_muscle else 'SpringDamperModel'
     print(f"{args.episodes} episodes x {args.episode_steps} steps per cell, "
-          f"morph_age={args.morph_age} physio_age={args.physio_age}, "
+          f"morph_age={args.morph_age} physio_age={args.physio_age}, {model_name}, "
           f"success = rho_max >= {ROLL_THRESHOLD}\n")
     print(HEADER)
     print('-' * len(HEADER))
     for posture in postures:
         # Outer loop, so exactly one 3.6 GB env is alive at any moment.
-        env = build_env(posture, args.morph_age, args.physio_age)
+        env = build_env(posture, args.morph_age, args.physio_age, use_muscle=args.use_muscle)
         try:
             for condition, sigma in cells:
                 label = condition if sigma is None else f"{condition}_s{sigma:g}"
@@ -611,6 +629,7 @@ def main():
             'side_lying_threshold': SIDE_LYING_THRESHOLD,
             'morph_age': args.morph_age,
             'physio_age': args.physio_age,
+            'use_muscle': args.use_muscle,
             'seed': args.seed,
             'seq_len': seq_len,
             'isr': False,

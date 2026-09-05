@@ -130,14 +130,67 @@ class MuscleModel(ActuationModel):
     def get_action_space(self):
         """ Determines the actuation space attribute for the gym environment.
 
-        The actuation space consists of two opposing muscles for each motor in the simulation, each with range [0, 1].
+        Two opposing muscles per motor, each commanded on **[-1, 1]** and mapped affinely onto
+        activation [0, 1] in :meth:`.action`.
+
+        05.09.2026 The space used to be [0, 1] directly, matching the activation. That is the
+        natural range for a muscle but a bad one for the optimiser. SB3's PPO uses an unbounded
+        diagonal Gaussian initialised at mu = 0, sigma = 1 and clips only on the way into the
+        environment, while the policy gradient is computed on the *unclipped* sample
+        (``OnPolicyAlgorithm.collect_rollouts`` stores ``actions``, steps ``clipped_actions``).
+        On [0, 1] that puts half the initial probability mass below the lower bound, where the
+        whole negative half-line is behaviourally identical -- every value means "muscle off" --
+        so the advantage is constant there and nothing pushes mu back up or shrinks sigma.
+
+        Measured on a 1M-step run (26-09-05 ..._nopool_muscle_nopen_run_9, best checkpoint):
+        mu averaged -0.001 and sigma 0.925, i.e. still essentially the initialisation; **51 % of
+        the deterministic action sat exactly on the lower bound** and 71.8 % of samples were
+        clipped. The consequence was a policy whose *noise* solved the task and whose mean did
+        not: 50 % roll rate sampling against 5 % deterministic. The spring-damper baseline on
+        [-1, 1] shows 14.5 % at a bound and sigma converging to 0.63.
+
+        Symmetric bounds put the initialisation in the middle of the valid range and make the
+        clipping symmetric, which is the condition the spring-damper model already trains under.
+        Note this changes the meaning of a zero action from "no activation" to "both antagonists
+        at half activation" -- see :meth:`~mimoActuation.actuation.ActuationModel.neutral_action`,
+        which is what callers must use for a limp MIMo.
 
         Returns:
             spaces.Space: A gym spaces object with the actuation space.
         """
-        action_space = spaces.Box(low=-0.0, high=1.0, shape=(self.n_actuators * 2,), dtype=np.float32)
-        self.control_input = np.zeros(action_space.shape)  # Set initial control input to avoid NoneType Errors
+        low = -1.0 if self.symmetric_action_space else -0.0
+        action_space = spaces.Box(low=low, high=1.0, shape=(self.n_actuators * 2,),
+                                  dtype=np.float32)
+        # Neutral rather than zero: on the symmetric space zero is half activation.
+        self.control_input = np.full(action_space.shape, low)
         return action_space
+
+    @property
+    def symmetric_action_space(self):
+        """ Whether the action space is [-1, 1] (default) or the legacy [0, 1].
+
+        Read off the environment so that a checkpoint saved before 05.09.2026 can still be
+        loaded; 'unit' reproduces the space those models carry. Anything that does not set the
+        attribute gets the corrected default.
+        """
+        return getattr(self.env, "muscle_action_space", "symmetric") != "unit"
+
+    def neutral_action(self):
+        """ The action that leaves every muscle fully relaxed, i.e. activation 0. """
+        return np.full(self.action_space.shape, -1.0 if self.symmetric_action_space else 0.0)
+
+    def _action_to_activation(self, action):
+        """ Map a command on the action space onto muscle activation on [0, 1].
+
+        Args:
+            action (np.ndarray): Control values on the action space.
+
+        Returns:
+            np.ndarray: The corresponding activations.
+        """
+        if not self.symmetric_action_space:
+            return action
+        return 0.5 * (action + 1.0)
 
     def action(self, action):
         """ Set the control inputs for the next step.
@@ -148,6 +201,8 @@ class MuscleModel(ActuationModel):
             action (numpy.ndarray): A numpy array with control values.
         """
         self.control_input = np.clip(action, self.action_space.low, self.action_space.high)
+        # The action space is symmetric; the muscle model wants activation on [0, 1].
+        activation = self._action_to_activation(self.control_input)
         # 04.09.2026 advance_activity=False. MujocoEnv.do_simulation calls _set_action() once and
         # then substep_update() once per physics step, so integrating the activation lag here as
         # well advanced it frame_skip + 1 times per env step against frame_skip physics steps --
@@ -156,7 +211,7 @@ class MuscleModel(ActuationModel):
         # kinetics and electromechanical delay, and mimoEnv/eval_emg.py leans on it as the
         # counterpart of Siegel's 50 Hz EMG envelope filter, so it needs to mean what it says.
         self.env.data.ctrl[self.actuators] = self._compute_muscle_action(
-            self.control_input, advance_activity=False)
+            activation, advance_activity=False)
 
     def substep_update(self):
         """ Update muscle activity and torque.

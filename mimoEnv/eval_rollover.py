@@ -87,6 +87,7 @@ def env_kwargs(config, starting_position, goal):
         pbrs=config.get('pbrs', False),
         pbrs_w=config.get('pbrs_w', 100),
         pen_factor=config.get('pen_factor', 0.02),
+        pen_metabolic=config.get('pen_metabolic', False),
         nopen=config.get('nopen', False),
         sparse_reward=config.get('sparse_reward', False),
         # 26.08.2026 The goal function fixes the width of the goal space, so a run trained with
@@ -116,6 +117,16 @@ def env_kwargs(config, starting_position, goal):
         missing_limb=config.get('missing_limb'),
         missing_limb_mode=config.get('missing_limb_mode', 'cut'),
         ghost_obs=config.get('ghost_obs', 'rest'),
+        # 05.09.2026 'none' makes the cos goal 2-D (rho_hip, rho_chest) instead of a pooled
+        # scalar, so a run trained with it cannot even be loaded against the default 'mean' --
+        # SB3 rejects the observation space. Absent from every data.yml written before the
+        # option existed, where 'mean' correctly reproduces the scalar goal those runs used.
+        cos_goal_pool=config.get('cos_goal_pool', 'mean'),
+        # 05.09.2026 Legacy default on purpose. The muscle action space changed from [0, 1] to
+        # [-1, 1] on that date; SB3 stores the action space inside the checkpoint and refuses to
+        # load it against a different one. Every data.yml written before the change lacks the key,
+        # and 'unit' is what those models were trained and saved with.
+        muscle_action_space=config.get('muscle_action_space', 'unit'),
         ghost_reference_samples=config.get('ghost_reference_samples', 20),
         # Protocol: ISR off, goal pinned to the full roll, episodes never cut short by success
         # so that every episode gets the same number of chances.

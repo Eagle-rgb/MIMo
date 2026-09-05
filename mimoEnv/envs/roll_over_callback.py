@@ -17,6 +17,7 @@ class RollOverCallback(BaseCallback):
         self.save_intermediate = save_intermediate
         self.save_dir = save_dir
         self.raw_ctrl_cost = None
+        self.metabolic_cost = None
 
     def _on_training_start(self):
         window_size = self.model._stats_window_size
@@ -35,13 +36,21 @@ class RollOverCallback(BaseCallback):
         # logging it makes the training curve comparable to the evaluation numbers.
         self.episode_rho_max = deque(maxlen=window_size)
 
+        # Per-episode SUM of the actuation model's metabolic cost, over the same window. Logged
+        # whether or not '--pen_metabolic' is what the reward pays, so the effort of a run under
+        # either penalty can be read on one scale. Sum rather than mean for the same reason as
+        # 'raw_ctrl_cost': a mean rewards long episodes.
+        self.metabolic_cost = deque(maxlen=window_size)
+
         # Aggregated raw control cost in an episode. Is reset to 0 after each episode.
         self.aggr_raw_ctrl_cost_in_episode=0
+        self.aggr_metabolic_cost_in_episode=0
 
     def _on_step(self) -> bool:
         # We are in a DummyVecEnv
         for i, info in enumerate(self.locals["infos"]):
             self.aggr_raw_ctrl_cost_in_episode += info['raw_ctrl_cost']
+            self.aggr_metabolic_cost_in_episode += info.get('metabolic_cost', 0.0)
 
             # Is the episode finished?
             if "episode" in info:
@@ -60,6 +69,9 @@ class RollOverCallback(BaseCallback):
 
                 self.aggr_raw_ctrl_cost_in_episode = 0
 
+                self.metabolic_cost.append(self.aggr_metabolic_cost_in_episode)
+                self.aggr_metabolic_cost_in_episode = 0
+
                 self.end_hip_deg.append(hip)
                 self.end_chest_deg.append(chest)
                 self.side_lying_success.append(side_lying_success)
@@ -68,6 +80,7 @@ class RollOverCallback(BaseCallback):
                 self.logger.record("rollout/ep_end_chest_deg_mean", np.mean(self.end_chest_deg))
                 self.logger.record("rollout/side_lying_success_rate", np.mean(self.side_lying_success))
                 self.logger.record("rollout/raw_ctrl_cost", np.mean(self.raw_ctrl_cost))
+                self.logger.record("rollout/metabolic_cost_mean", np.mean(self.metabolic_cost))
 
                 if 'episode_rho_max' in info:
                     self.episode_rho_max.append(info['episode_rho_max'])

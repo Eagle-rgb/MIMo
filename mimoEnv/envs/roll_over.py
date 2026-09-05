@@ -295,6 +295,9 @@ class MIMoRollOverEnv(MIMoEnv):
                  achieved_goal_in_observation=False,
                  # Penalization factor for action penalization.
                  pen_factor=0.02,
+                 # Use the actuation model's own metabolic cost() instead of the flat sum of
+                 # squared commands. See 'compute_raw_penalization_of_action'.
+                 pen_metabolic=False,
                  pca=None,
                  # Which limb is missing: one of the keys of MISSING_LIMBS, or None.
                  missing_limb=None,
@@ -381,6 +384,13 @@ class MIMoRollOverEnv(MIMoEnv):
                  floor_solimp_width=None,
                  # The pooling function for the cos goal.
                  cos_goal_pool='mean',
+                 # 05.09.2026 Range of the muscle model's action space. 'symmetric' commands each
+                 # muscle on [-1, 1] and maps it onto activation [0, 1]; 'unit' is the original
+                 # [0, 1] and exists only so that checkpoints saved before the change can still be
+                 # loaded -- SB3 stores the action space in the model and rejects a mismatch. See
+                 # MuscleModel.get_action_space for why 'symmetric' is the right one to train on.
+                 # Ignored unless the actuation model is MuscleModel.
+                 muscle_action_space='symmetric',
                  **kwargs):
 
         if starting_position not in ["prone", "supine", "alternating"]:
@@ -491,6 +501,7 @@ class MIMoRollOverEnv(MIMoEnv):
         self.pbrs_w=pbrs_w
         self.steps_after_reset=steps_after_reset
         self.pen_factor=pen_factor
+        self.pen_metabolic=pen_metabolic
         self.goal_function=goal_function
         self.gravity_goal_eps=gravity_goal_eps
         self.gravity_reference_samples=gravity_reference_samples
@@ -524,6 +535,13 @@ class MIMoRollOverEnv(MIMoEnv):
 
 
         self.cos_goal_pool=cos_goal_pool
+
+        if muscle_action_space not in ("symmetric", "unit"):
+            raise ValueError("'muscle_action_space' must be 'symmetric' or 'unit', not "
+                             f"{muscle_action_space!r}.")
+        # Before 'super().__init__()': the actuation model is built inside
+        # '_initialize_simulation()', which runs from in there, and its action space depends on it.
+        self.muscle_action_space = muscle_action_space
 
         if (goal_low is None) != (goal_high is None):
             raise ValueError("Provide both 'goal_low' and 'goal_high', or neither.")
@@ -1256,8 +1274,11 @@ class MIMoRollOverEnv(MIMoEnv):
         # vestibular observation not stabilizing in the first ~20 steps.
         # Perform 20 steps with no actions to stabilize initial position.
         if self.steps_after_reset > 0:
-            actions = np.zeros(self.action_space.shape)
-            self._set_action(actions)
+            # 05.09.2026 The actuation model's own neutral action, not zeros: the muscle model
+            # commands on [-1, 1] mapped onto activation [0, 1], so a zero action there would
+            # settle MIMo with every muscle co-contracted at half activation instead of limp.
+            # Bit-identical for the spring-damper model, whose neutral action is zeros.
+            self._set_action(self.actuation_model.neutral_action())
             mujoco.mj_step(self.model, self.data, nstep=self.steps_after_reset)
 
     def reset_model(self):
@@ -1596,6 +1617,9 @@ class MIMoRollOverEnv(MIMoEnv):
         info['side_lying'] = 1.0 if achieved_goal >= 0.5 else 0.0
         info['45_deg'] = 1.0 if achieved_goal >= 0.25 else 0.0
         info['raw_ctrl_cost'] = self.compute_raw_penalization_of_action(action)
+        # Always logged, whether or not it is the term being paid, so a run under the flat
+        # penalty can still be compared against one under '--pen_metabolic'.
+        info['metabolic_cost'] = self.metabolic_cost()
 
         # Whether MIMo actually rolled over, independent of whatever goal was sampled or
         # relabelled for this episode. Under sampled goals 'is_success' can report a healthy
@@ -1620,10 +1644,50 @@ class MIMoRollOverEnv(MIMoEnv):
 
         return obs, reward, terminated, truncated, info
 
+    def metabolic_cost(self):
+        """ The actuation model's own cost function, ':meth:`~mimoActuation.actuation.ActuationModel.cost`'.
+
+        Both actuation models implement the same form -- a **capacity-weighted** mean of squared
+        commands, divided by the number of channels:
+
+        * ':class:`~mimoActuation.actuation.SpringDamperModel`':
+          :math:`\\sum_i u_i^2 T_{max,i} / (n \\sum_i T_{max,i})`, range [0, 1/46].
+        * ':class:`~mimoActuation.muscle.MuscleModel`':
+          :math:`\\sum_i a_i^2 f_{max,i} / (2n \\sum_i f_{max,i})`, range [0, 1/92].
+
+        The weighting is the difference to ':meth:`.penalized_control`', which counts every
+        actuator equally: under the flat penalty an eye motor ('gear' 0.0033) costs as much as
+        'act:hip_bend' ('gear' 8.93), a factor 2715 in torque. Weighted, the five largest
+        actuators carry 37 % of the cost and the twenty smallest 8 %; unweighted the twenty
+        smallest carry 43 %. ':math:`\\sum a^2 f_{max}`' with :math:`f_{max} \\propto` PCSA is the
+        standard metabolic proxy in biomechanics, which is where the name comes from.
+
+        Note the muscle model reads ':attr:`~mimoActuation.muscle.MuscleModel.activity`' -- the
+        activation *after* the tau = 0.01 s lag -- rather than the commanded 'target_activity'. So
+        under '--pen_metabolic' with '--use_muscle' the penalty is a function of the recent action
+        history rather than of this step's action alone. That is fine for HER, which reads the
+        value back from 'info', but it means the term cannot be reconstructed from an action
+        vector alone.
+
+        Returns:
+            float: The cost, in [0, 1/n_channels].
+        """
+        return float(self.actuation_model.cost())
+
     def compute_raw_penalization_of_action(self, action):
-        """ Computes penalization (sum of squared values) of the given action without
-        the penalization factor. """
-        return np.square(action).sum()
+        """ The action penalty *before* ':attr:`.pen_factor`', i.e. exactly 'ctrl_cost / pen_factor'.
+
+        Which quantity that is depends on ':attr:`.pen_metabolic`': the actuation model's
+        capacity-weighted ':meth:`.metabolic_cost`' when set, and the flat sum of squared commands
+        otherwise (the default, and what every stored run trained against).
+        """
+        if self.pen_metabolic:
+            return self.metabolic_cost()
+        # 05.09.2026 ':meth:`.penalized_control`', not the raw 'action'. They agree for the
+        # spring-damper model, whose control input *is* the clipped action, but the muscle model
+        # commands on [-1, 1] and actuates on [0, 1], so squaring the raw action there would
+        # report 92 for a fully relaxed MIMo and break the identity this docstring promises.
+        return np.square(self.penalized_control()).sum()
     
     def penalized_control(self):
         """ The control vector the quadratic action penalty squares.
@@ -1669,7 +1733,11 @@ class MIMoRollOverEnv(MIMoEnv):
         return target_activity
 
     def compute_penalization(self):
-        return 0 if self.nopen else self.pen_factor * np.square(self.penalized_control()).sum()
+        if self.nopen:
+            return 0
+        if self.pen_metabolic:
+            return self.pen_factor * self.metabolic_cost()
+        return self.pen_factor * np.square(self.penalized_control()).sum()
 
     def compute_reward(self, achieved_goal, desired_goal, info):
         """ Computes the reward.

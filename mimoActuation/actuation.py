@@ -101,6 +101,20 @@ class ActuationModel:
         """
         raise NotImplementedError
 
+    def neutral_action(self):
+        """ The action that means "do nothing", i.e. leave MIMo limp.
+
+        05.09.2026 Callers used to hardcode ``np.zeros(action_space.shape)`` for this. That is
+        only correct while zero happens to sit at the neutral point of the action space, which is
+        true for the spring-damper model but not for every actuation model -- the muscle model's
+        space is symmetric [-1, 1] mapped onto activation [0, 1], so its neutral action is -1 and
+        a zero action would co-contract every muscle at half activation.
+
+        Returns:
+            np.ndarray: An action of the model's own shape that produces no actuation.
+        """
+        return np.zeros(self.action_space.shape)
+
     def reset(self):
         """ Reset actuation model to the initial state.
         """
