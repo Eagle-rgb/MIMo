@@ -1616,7 +1616,9 @@ class MIMoRollOverEnv(MIMoEnv):
         achieved_goal = self.get_achieved_goal_cos_mean()
         info['side_lying'] = 1.0 if achieved_goal >= 0.5 else 0.0
         info['45_deg'] = 1.0 if achieved_goal >= 0.25 else 0.0
-        info['raw_ctrl_cost'] = self.compute_raw_penalization_of_action(action)
+        # raw_ctrl_cost: The raw value of sum(c^2) of all control values c - never the metabolic cost
+        # and always without a penalization factor.
+        info['raw_ctrl_cost'] = np.square(self.penalized_control()).sum()
         # Always logged, whether or not it is the term being paid, so a run under the flat
         # penalty can still be compared against one under '--pen_metabolic'.
         info['metabolic_cost'] = self.metabolic_cost()
