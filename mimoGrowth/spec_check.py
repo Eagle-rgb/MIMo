@@ -234,10 +234,13 @@ def test_amputated_scenes():
     lines behind them can go.
     """
     print("\ntest_amputated_scenes")
-    from mimoEnv.envs.roll_over import MISSING_LIMBS
+    from mimoEnv.envs.roll_over import MISSING_LIMBS, PREGENERATED_LIMBS
 
     worst_overall, worst_cell, missing = 0.0, "", []
-    for limb, bodies in MISSING_LIMBS.items():
+    # PREGENERATED_LIMBS, not all of MISSING_LIMBS: only these five have reference files.
+    # A limb combination added later is covered by the same 'spec.delete' path and needs no file.
+    for limb in PREGENERATED_LIMBS:
+        bodies = MISSING_LIMBS[limb]
         for morph, physio in itertools.product(AGES, AGES):
             path = os.path.join(PRONE, f"scene_act_{physio}_body_{morph}_{limb}.xml")
             if not os.path.exists(path):
@@ -253,12 +256,23 @@ def test_amputated_scenes():
             del reference, candidate
             gc.collect()
 
-    check("all pre-generated amputated scenes reproduce", worst_overall == 0.0,
-          f"worst {worst_overall:.3e}" + (f" at {worst_cell}" if worst_cell else ""))
-    check("no amputated scene was missing", not missing,
-          f"{len(missing)} absent, generate with "
-          "'python mimoEnv/assets/roll_over/generate_amputated_scenes.py'"
-          if missing else "")
+    # The amputated scenes are gitignored (a783ce6) -- unlike the 16 age scenes, they exist only
+    # where someone has run the generator. A fresh clone legitimately has none, so that is a skip
+    # with instructions rather than a failure; a *partial* set is a genuinely broken state and
+    # does fail.
+    expected = len(PREGENERATED_LIMBS) * len(AGES) ** 2
+    if len(missing) == expected:
+        print(f"  [SKIP] all {expected} amputated reference scenes absent (they are gitignored). "
+              "Generate them with\n"
+              "         python mimoEnv/assets/roll_over/generate_amputated_scenes.py")
+    else:
+        check("all present amputated scenes reproduce", worst_overall == 0.0,
+              f"{expected - len(missing)} compared, worst {worst_overall:.3e}"
+              + (f" at {worst_cell}" if worst_cell else ""))
+        check("the amputated reference set is complete", not missing,
+              f"{len(missing)} of {expected} absent, regenerate with "
+              "'python mimoEnv/assets/roll_over/generate_amputated_scenes.py'"
+              if missing else f"{expected} scenes")
 
     # The spaces really do shrink -- 'cut' is the mode you train in, so this is the property that
     # makes it different from 'ghost'.

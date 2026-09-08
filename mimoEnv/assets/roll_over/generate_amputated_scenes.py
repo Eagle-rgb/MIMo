@@ -43,7 +43,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..",
 
 # Imported rather than restated: the limb definitions belong to the environment, and a second
 # copy here would rot the first time a limb is added.
-from mimoEnv.envs.roll_over import AGES, MISSING_LIMBS
+from mimoEnv.envs.roll_over import AGES, MISSING_LIMBS, PREGENERATED_LIMBS
 
 SCENE_DIR = os.path.dirname(os.path.abspath(__file__))
 PRONE_DIR = os.path.join(SCENE_DIR, "prone")
@@ -236,9 +236,12 @@ def check(limbs):
 def main():
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--limbs", nargs="+", default=sorted(MISSING_LIMBS),
-                        choices=sorted(MISSING_LIMBS),
-                        help="Which limbs to generate. Default: all of them.")
+    # PREGENERATED_LIMBS, not every name in MISSING_LIMBS: this script is the reference the
+    # MjSpec route is checked against, and that reference is a fixed historical set. Limb
+    # combinations added since are built in memory and deliberately have no file here.
+    parser.add_argument("--limbs", nargs="+", default=list(PREGENERATED_LIMBS),
+                        choices=list(PREGENERATED_LIMBS),
+                        help="Which limbs to generate. Default: the pre-generated reference set.")
     parser.add_argument("--check", action="store_true",
                         help="Compile the generated scenes and print their model sizes.")
     args = parser.parse_args()

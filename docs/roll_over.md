@@ -91,26 +91,97 @@ assembled from independently configurable sensor modules. Registered as `MIMoRol
 
 ### 2.1 Scenes and ages
 
-Ages are **pre-generated scenes, not runtime growth.** The constructor picks
+**Changed 08.09.2026. Ages are now continuous and grown in memory.** The constructor takes one
+base scene,
 
 ```
-mimoEnv/assets/roll_over/prone/scene_act_<physio_age>_body_<morph_age>.xml
+mimoEnv/assets/roll_over/prone/scene_act_9_body_9.xml     # roll_over.BASE_SCENE
 ```
 
-for `physio_age, morph_age ∈ AGES = [1, 3, 6, 9]` (`roll_over.py:35`, `:246`) and then passes
-`age=None` up to `MIMoEnv` (`:326`), which skips `mimoGrowth.adjust_mimo_to_age` entirely
-(`mimo_env.py:378`). `mimoGrowth` writes a *temporary* scene XML and deletes it after loading
-(`mimo_env.py:391`); parallel runs on the cluster raced on creating and deleting the same
-temporary file, which is why roll-over bypasses it. All 16 combinations exist as checked-in files.
+parses it into an editable `mujoco.MjSpec`, and rescales MIMo inside it — `_build_model_spec()`
+calls `mimoGrowth.spec.grow_spec(BASE_SCENE, morph_age, physio_age, remove=...)`, and
+`MIMoEnv._initialize_simulation` compiles that spec instead of loading a path. Any
+`morph_age`/`physio_age` between 0 and 24 works, whole number or not: `--morph_age=4.5` is legal.
+`check_age()` is the only restriction, and it is the interval `mimoGrowth` has growth functions
+for.
 
-Adding an age means adding `mimoEnv/assets/mimo/age/{act,body}/*_mo.xml` and the corresponding
-scene files, and extending `AGES` in **both** `roll_over.py:35` and
-`mimoEnv/envs/morphological_curriculum.py:4`. It does not mean touching `mimoGrowth`.
+`AGES = [1, 3, 6, 9]` still exists in `roll_over.py` and
+`mimoEnv/envs/morphological_curriculum.py`, but it is now the **default curriculum ladder and the
+set every stored run used**, not a restriction. Adding an age means passing it. Nothing has to be
+generated, and `mimoEnv/assets/mimo/age/{act,body}/*_mo.xml` no longer has to grow.
 
-The two ages are independent by design, and the split is visible in the scene file: each scene
-includes `../../mimo/age/act/act_<physio>_mo.xml` (actuators — physiological age) and, inside the
-`mimo_location` body, `../../mimo/age/body/body_<morph>_mo.xml` (kinematic tree, geometry, masses
-— morphological age). So an actuation-9-month MIMo can be put in a 1-month body.
+#### What this replaced, and why it was there
+
+Until 08.09.2026 the constructor picked one of 16 checked-in files,
+`scene_act_<physio>_body_<morph>.xml`, and passed `age=None` up to `MIMoEnv` to skip
+`mimoGrowth.adjust_mimo_to_age` entirely. That was not arbitrary. The old growth wrote a
+*temporary* scene XML with a **fixed** name next to the original and deleted it after loading, so
+on the cluster — 18 machines, one shared home — they raced on that one filename and every machine
+but the first died, either on the write, on a half-written file, or because a neighbour deleted
+it between compile and read. Pre-generating the scenes was the way around that.
+
+It was also broken for these scenes in a second, quieter way: `create_growth_scene` locates the
+model and meta file by `"model" in include.attrib["file"]`, and the roll-over scenes include
+`act_<n>_mo.xml` / `body_<n>_mo.xml` / `scene_texture_incl.xml`, none of which match. Calling it
+raises `KeyError: 'model'`. So there was no "go back to runtime growth" available — only a
+rewrite.
+
+`MjSpec` removes both problems at once. `MjSpec.from_file` resolves every `<include>` and every
+relative texture path against the original file and hands back an editable model; `.compile()`
+produces the `MjModel` directly. **Nothing is written**, so the asset tree may be read-only and
+any number of processes can grow the same scene simultaneously. It is also not slower: parsing is
+0.01 s and compiling 0.86 s, against 0.96 s for `MjModel.from_xml_path` on the same scene.
+
+#### Nothing on disk was re-baselined
+
+The 96 pre-generated files (16 age pairs, plus 5 amputations of each) are **still on disk**, and
+they are the reference two acceptance-check scripts measure against. Note the split: the **16 age
+scenes are tracked in git**, the **80 amputated ones are gitignored** (a783ce6) and exist only
+where someone has run `generate_amputated_scenes.py`. Both check scripts skip the amputation
+comparisons with a printed instruction when the whole set is absent — a fresh clone is a legitimate
+state — but fail on a *partial* set, which is not.
+
+| | |
+|---|---|
+| `mimoGrowth/spec_check.py` | 12 sections, 40 assertions — the growth itself. Growing the one base scene reproduces all 96 files, `0.000e+00` over geom size/pos/quat/type, body pos/mass/inertia/ipos, joint pos/range, site pos, `actuator_gear`, `dof_damping`, `jnt_stiffness`. ~20 min. |
+| `mimoEnv/embodiment_check.py` | 7 sections, 35 assertions — the *environment's* use of it: that the model reaching MuJoCo after `__init__` and after every `set_embodiment` is the one the corresponding stored scene compiles to. A different claim, because the env also patches the compiled model (floor, ghost limb) and re-runs `initialize()`. |
+
+Do not delete those files. They are the regression gate, not dead weight.
+
+**Two things do not come out bit-identical**, and both are measured rather than tolerated
+silently:
+
+* Four `KOBAYASHI_*` marker sites, **≤ 0.43 mm**. The stored `body_<n>_mo.xml` carry hand-typed
+  numbers; the growth schema has derived them since `e81cd38`, and the schema value is the more
+  correct of the two. They feed `framelinvel` sensors read by `results/kobayashi/` and
+  `eval_emg.py`, never the observation or the physics. `KOBAYASHI_Torso` agrees exactly at every
+  age; the deviation on the other four is non-systematic (0.43 / 0.002 / 0.28 / 0.04 mm across
+  the four ages), which is what a hand-typed number looks like.
+* FMAX on a *reused* spec, **3.9e-16 relative** — one double epsilon, not a compounding drift.
+  The rule is multiplicative (see below), so re-growing one spec chains ratios instead of
+  applying one. Geometry and gear stay bit-identical because the growth schema supplies absolute
+  sizes rather than scale factors.
+
+#### The two ages stay independent
+
+That was previously visible in the scene file — each scene included
+`act_<physio>_mo.xml` for the actuators and `body_<morph>_mo.xml` for the kinematic tree. It is
+now visible in `mimoGrowth.spec.apply_growth`: geom sizes, positions and masses, body, joint and
+site positions all follow `morph_age`, and only `actuator_gear` follows `physio_age`. An
+actuation-9-month MIMo in a 1-month body is still exactly what it was, and
+`embodiment_check.py:test_set_embodiment_matches_stored_scenes` checks the off-diagonal pairs
+specifically — a single-age implementation would pass the diagonal and fail there.
+
+**Under `--use_muscle` the physiological age also scales FMAX.** `MuscleModel` reads FMAX/VMAX
+from the actuators' `user` attribute and never looks at `gear`, so growing gear alone would leave
+`--physio_age` a no-op — the bug `generate_age_actuators.py` was written to repair for the four
+pre-generated ages. `scale_fmax_with_gear` applies the same rule,
+`FMAX(age) = FMAX * gear_new / gear_old`, expressed against the actuator's *current* gear so it
+needs no knowledge of the base scene's age and no access to `MIMo_meta.xml`. VMAX is a normalised
+fibre velocity, carries no length scale, and is left alone. So `--physio_age` is live under
+`--use_muscle` at every age, fractional included; the four `act_<n>_mo.xml` files are now only the
+reference `spec_check.py:test_muscle_fmax` compares against, relatively, because they are written
+with `%.6g` and 5.9e-06 is their own precision.
 
 ### 2.2 Both postures use the `prone/` scene directory
 
@@ -222,26 +293,51 @@ sampled. Used for reproducible evaluation; `results/diss/` holds the analyses th
 
 ### 2.7 Hot-swapping the embodiment
 
-`set_embodiment(morph_age, physio_age)` (`:395`) rebuilds `self.model`/`self.data` from a
-different scene XML, re-runs `initialize()`, resets MuJoCo and calls `reset()`. It is driven by
-the morphological growth curriculum (`--mgc`, `mimoEnv/envs/morphological_curriculum.py`):
+`set_embodiment(morph_age, physio_age)` re-grows MIMo: it rebuilds the spec through the same
+`_build_model_spec()` the constructor uses, compiles it into `self.model`/`self.data`, re-runs
+`initialize()`, resets MuJoCo and calls `reset()`. Going through the same builder is what keeps an
+amputated limb missing across a swap instead of silently restoring an intact body —
+`embodiment_check.py:test_missing_limb_cut` checks exactly that.
+
+A swap costs **~0.9 s**, essentially all of it the compile; re-parsing the base scene is 0.01 s of
+it. Swaps only fire on episode boundaries (`any(self.locals["dones"])`), because replacing the
+model mid-episode corrupts the simulation state, so this is not on the hot path.
+
+It is driven by the morphological growth curriculum (`--mgc`,
+`mimoEnv/envs/morphological_curriculum.py`):
 
 | `--mgc` | Behaviour |
 |---|---|
-| `growth` | 1M → 3M → 6M → 9M, 250 000 steps per phase |
-| `inverse` | 9M → 6M → 3M → 1M, same phase length |
-| `stochastic` | uniform random age from `AGES` every `--mgc_stochastic_interval` steps (default 20 000) |
+| `growth` | youngest → oldest, 1M → 3M → 6M → 9M by default, 250 000 steps per phase |
+| `inverse` | oldest → youngest, same ladder reversed, same phase length |
+| `stochastic` | uniform random age from the ladder every `--mgc_stochastic_interval` steps (default 20 000) |
 | `none` | no callback at all (baseline) |
 
 All three call `set_embodiment(age, age)` — morphological and physiological age are always swapped
-**together**, even though the method takes them separately. The swap only fires on episode
-boundaries (`any(self.locals["dones"])`), because replacing the model mid-episode corrupts the
-simulation state.
+**together**, even though the method takes them separately.
+
+**`--mgc_stages N` (added 08.09.2026) sets how many ages the ladder has.** Before that date the
+ladder *was* `AGES`, and `AGES` was the set of ages that happened to have a scene file on disk —
+the module comment read "Fest durch verfuegbare XML-Dateien". Now that MIMo is grown in memory the
+ladder is free:
+
+* **Unset** (the default) gives `[1, 3, 6, 9]` at 250 000 steps each. This is byte-for-byte the
+  old behaviour, which is what keeps a new MGC run comparable with the ones on disk.
+* **`--mgc_stages=30`** spreads 30 ages evenly over 1→9 months (step 0.276 months) and **divides
+  the same 1 M-step budget**, giving ~33 333 steps per stage. It is a *finer* curriculum, not a
+  7.5 M-step one. `age_ladder(stages)` is the single place that decides this, and
+  `DEFAULT_TOTAL_STEPS` is the budget it divides.
+
+`mgc` and `mgc_stages` are both stored in `data.yml` — a curriculum defines the run. Note the
+consequence for runs saved from 08.09.2026 onward: continuing one that carries `mgc: growth` with
+`--load_model` restarts its curriculum. Runs saved before carry neither key and fall back to
+`none`, i.e. what they actually did.
 
 ### 2.8 Missing limbs
 
-`--missing_limb` (one of `MISSING_LIMBS`) removes a limb. `--missing_limb_mode` decides how, and
-the two modes are for different questions:
+`--missing_limb` removes a limb — one of the four, a group shorthand, or any combination of them
+(see "no longer a fixed vocabulary" below). `--missing_limb_mode` decides *how*, and the two modes
+are for different questions:
 
 | mode | what goes | spaces | use for |
 |---|---|---|---|
@@ -256,16 +352,60 @@ missing limb: `rest` (default) the values measured on the intact body at rest, a
 Measured: an intact PPO policy on `missing_limb=left_arm` reaches 30 % full roll with `rest`
 against 10 % with `zero`.
 
-Cut scenes are pre-generated by `mimoEnv/assets/roll_over/generate_amputated_scenes.py` —
-regenerate rather than hand-edit. `--missing_limb` does not combine with `--touch`, and
-`--missing_limb_mode=cut` does not combine with `--freeze_arm`/`--freeze_leg`; both raise.
+**Since 08.09.2026 a `cut` limb is removed in memory too.** `_build_model_spec` passes the body
+names from `limb_bodies()` to `mimoGrowth.spec.grow_spec`, which calls `spec.delete(body)` — and
+MuJoCo prunes everything that referenced the subtree along with it: the joints, their actuators,
+the sensors, the contact pairs and exclusions. A dangling reference raises at compile time, so
+there is nothing silent to get wrong. This reproduces the 80 pre-generated amputated scenes
+exactly, all of them (`spec_check.py:test_amputated_scenes`, `0.000e+00`), including the sizes:
+`nbody` 21, `nq` 48, `nu` 38, `nsensor` 24 for one arm.
+
+**The consequence is that `--missing_limb` is no longer a fixed vocabulary.** The value goes
+through `parse_missing_limb`, which accepts
+
+* one of the four `LIMBS` — `left_arm`, `right_arm`, `left_leg`, `right_leg`;
+* one of the `LIMB_GROUPS` shorthands — `left_side`, `right_side`;
+* **any combination**, joined by `+` (or `,`): `--missing_limb=left_arm+right_leg`.
+
+Order does not matter — the result is sorted into `LIMBS` order, so `right_leg+left_arm` and
+`left_arm+right_leg` produce the same canonical string and therefore the same `data.yml` and the
+same run. A set that is exactly a group is named by that group, so `left_arm+left_leg` and
+`left_side` are one run, not two. Naming a limb twice (`left_side+left_arm`) **raises** rather
+than being tolerated: it is a typo, and silently ignoring the repeat would train a different body
+than the one asked for.
+
+`resolve_limb_bodies` is what turns any of those spellings into body names; index `MISSING_LIMBS`
+directly only when the value cannot have come from the CLI.
+
+#### The reference set is history and does not grow
+
+`PREGENERATED_LIMBS` is the five combinations that have scene files —
+`left_arm`, `right_arm`, `left_leg`, `right_leg`, `left_side`. `right_side` and everything
+`parse_missing_limb` composes have **no file counterpart by design**, and none needs generating:
+they go through the same `spec.delete` path, which those 80 files already verify.
+
+`spec_check.py:test_amputated_scenes` therefore iterates `PREGENERATED_LIMBS`, not
+`MISSING_LIMBS` — iterating the full vocabulary would report a documented decision as a broken
+state. Structural coverage for the rest is in `embodiment_check.py`, which checks that the spaces
+shrink and that a swap keeps the limb missing, without needing a stored file.
+
+`mimoEnv/assets/roll_over/generate_amputated_scenes.py` and its 338 lines of hand-written
+ElementTree pruning across `<sensor>`, `<equality>`, `<tendon>` and `<contact>` are therefore
+redundant for *running* anything. It is kept as the reference the checks compare against, its
+output is gitignored, and running it is optional. Do not extend it: a new limb is an entry in
+`LIMBS` (or `LIMB_GROUPS`) and nothing else.
+
+`--missing_limb` does not combine with `--touch`, and `--missing_limb_mode=cut` does not combine
+with `--freeze_arm`/`--freeze_leg`; both raise.
 
 ### 2.9 The floor
 
 Three flags make the support surface a variable of the experiment. All default to `None`, which
 leaves the floor exactly as the scenes compile it, so every stored run reloads unchanged. They are
 written onto the compiled model in `_apply_floor_properties` (called from `initialize()`), not into
-the XMLs, because the age scenes are pre-generated and `set_embodiment` swaps between them.
+the XMLs, because `set_embodiment` recompiles the model from a freshly grown spec and would discard
+anything written into a scene file. The reasoning survives the 08.09.2026 change unaltered: these
+are runtime patches on the finished model, and `initialize()` re-applies them after every swap.
 
 | Flag | Meaning | Baseline |
 |---|---|---|
@@ -366,7 +506,7 @@ configurations without complaint:
   outside, i.e. a single step leaving the goal region paid **−50001.0**, and the critic loss
   reached ~2.8e7 within 1000 updates.
 The environment validates its own arguments — unknown posture, unknown goal function, unknown
-`cos_goal_pool`, an age outside `AGES`, a `goal_low`/`goal_high` mismatch, a non-positive
+`cos_goal_pool`, an age outside 0–24 months (`check_age`), a `goal_low`/`goal_high` mismatch, a non-positive
 `goal_tolerance` or `gravity_goal_eps`, `--goal_tolerance` combined with `gravity` (which is a
 point goal with a radius already), and the missing-limb combinations of §2.8 — but it knows
 nothing about the combination above.
@@ -1073,7 +1213,13 @@ pattern when renaming, and keep the `# Previously: --old_name` comments the fork
 (`--pen_factor` was `--pen_fac`).
 
 Deliberately **not** stored, because they describe the invocation rather than the model:
-`save_model`, `save_every`, `test`, `render_video`, `use_muscle`, `roll_over_starting_position`.
+`save_model`, `save_every`, `test`, `render_video`, `roll_over_starting_position`.
+
+`use_muscle` **was** on that list and moved into the yaml on 02.09.2026
+(`illustrations.py:1145`): it doubles the action space and replaces the actuation block of the
+observation, so it defines the model rather than the invocation. `eval_rollover.py:env_kwargs`
+reads it back. Runs saved before that date carry no key and correctly default to the
+spring-damper model.
 
 Not stored, but arguably should be — treat these as gaps rather than decisions:
 
@@ -1084,9 +1230,10 @@ Not stored, but arguably should be — treat these as gaps rather than decisions
   normally surfaces as a space-mismatch error rather than a wrong number — but you have to know to
   re-pass `--proprio_config` by hand. The legacy `proprio_only_qpos` shim still works; the
   `no_proprio` one does not (§8).
-- **`--mgc` / `--mgc_stochastic_interval`.** A curriculum run's `data.yml` does not record that
-  the embodiment was swapped during training; `morph_age`/`physio_age` record only the values the
-  env was constructed with.
+- **`--mgc_stochastic_interval`.** Not stored, so a stochastic curriculum reloads at the default
+  20 000 steps. `--mgc` and `--mgc_stages` **are** stored, as of 08.09.2026 — a curriculum defines
+  the run. `morph_age`/`physio_age` still record only the values the env was *constructed* with,
+  so for a curriculum run they say where it started, not where it ended.
 
 `train_for` is stored as `num_train` and is deliberately not read back into `--train_for`.
 
@@ -1210,8 +1357,8 @@ purpose. "yaml" marks the flags that round-trip through `data.yml` (§7).
 | Flag | Type / default | yaml | Note |
 |---|---|---|---|
 | `--roll_over_starting_position` | choice `supine\|prone\|alternating`, default `prone` | — | `alternating` flips every reset |
-| `--morph_age` | int, `9` | ✓ | body age; must be in `AGES = [1,3,6,9]` |
-| `--physio_age` | int, `9` | ✓ | actuation age; same restriction |
+| `--morph_age` | float, `9` | ✓ | body age in months, 0–24, fractional allowed (§2.1) |
+| `--physio_age` | float, `9` | ✓ | actuation age, same range; independent of `--morph_age` |
 | `--use_muscle` | flag | ✓ | muscle instead of spring-damper actuation; **does not work with `gravity`** (§3.5) |
 | `--missing_limb` | choice, `None` | ✓ | §2.8 |
 | `--missing_limb_mode` | choice `cut\|ghost`, default `cut` | ✓ | `cut` to train, `ghost` to transfer |
@@ -1220,7 +1367,8 @@ purpose. "yaml" marks the flags that round-trip through `data.yml` (§7).
 | `--floor_softness`, `--floor_friction`, `--floor_solimp_width` | float, `None` | ✓ | §2.9; `None` = the floor the scenes compile |
 | `--freeze_arm`, `--freeze_leg` | flag | ✓ | substitutes `SpringDamperModel_Stationary_Limbs` (see §8) |
 | `--isr` | flag | ✓ | Initial State Randomization, off at 75 % of training |
-| `--mgc` | choice `growth\|inverse\|stochastic\|none`, default `none` | — | morphological growth curriculum |
+| `--mgc` | choice `growth\|inverse\|stochastic\|none`, default `none` | ✓ | morphological growth curriculum (§2.7) |
+| `--mgc_stages` | int, `None` | ✓ | ages in the ladder; unset = `[1,3,6,9]` at 250k each. A value divides the same 1M budget (§2.7) |
 | `--mgc_stochastic_interval` | int, `20000` | — | only for `--mgc=stochastic` |
 
 ### Observation

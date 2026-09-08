@@ -88,14 +88,55 @@ because a curriculum needs *some* default, not because the others are unavailabl
 # constants ('body_subtreemass', 'dof_M0') have to be recomputed or the dynamics are wrong,
 # but 'mj_setConst' leaves 'data.qpos' modified -- 5 cm of offset in the body positions,
 # measured -- so the state is saved and restored around it.
-MISSING_LIMBS = {
-    'left_arm':  ('left_upper_arm',),
-    'right_arm': ('right_upper_arm',),
-    'left_leg':  ('left_upper_leg',),
-    'right_leg': ('right_upper_leg',),
-    'left_side': ('left_upper_arm', 'left_upper_leg'),
+LIMBS = {
+    'left_arm':  'left_upper_arm',
+    'right_arm': 'right_upper_arm',
+    'left_leg':  'left_upper_leg',
+    'right_leg': 'right_upper_leg',
 }
-""" Body subtrees removed by '--missing_limb'. The key is the CLI value. """
+""" The four limbs '--missing_limb' can remove, and the body each subtree is rooted at.
+
+The order is the canonical one: a combination is always spelled with its limbs in this order,
+so 'right_leg+left_arm' and 'left_arm+right_leg' name the same run.
+"""
+
+LIMB_GROUPS = {
+    'left_side':  ('left_arm', 'left_leg'),
+    'right_side': ('right_arm', 'right_leg'),
+}
+""" Named shorthands for a combination, for the hemiplegia-like cases that get used a lot.
+
+Anything else is spelled out: '--missing_limb=left_arm+right_leg'. A group is only a spelling --
+':func:`parse_missing_limb`' expands it and then prefers the short name again when the resulting
+set is exactly a group, so 'left_arm+left_leg' and 'left_side' produce the identical run and the
+identical 'data.yml'.
+"""
+
+LIMB_SEPARATORS = '+,'
+""" Accepted between limbs. The first is canonical, the second is a convenience. """
+
+MISSING_LIMBS = {
+    **{name: (body,) for name, body in LIMBS.items()},
+    **{name: tuple(LIMBS[limb] for limb in limbs) for name, limbs in LIMB_GROUPS.items()},
+}
+""" Body subtrees per *named* configuration -- the four limbs plus the groups.
+
+08.09.2026 This used to be the whole vocabulary of '--missing_limb', and a combination existed
+only if it had a key here (and, before MjSpec, 16 pre-generated scene files behind it). It is
+kept because it is the readable form of the mapping and several call sites index it by name, but
+the flag itself now goes through ':func:`parse_missing_limb`', which accepts any combination of
+:data:`LIMBS`. Use ':func:`resolve_limb_bodies`' rather than indexing this dict when the value
+may have come from the CLI.
+"""
+
+PREGENERATED_LIMBS = ('left_arm', 'right_arm', 'left_leg', 'right_leg', 'left_side')
+""" The amputations that exist as pre-generated scene files under 'roll_over/prone/'.
+
+Those files are the reference 'mimoGrowth/spec_check.py' compares 'spec.delete' against, so this
+tuple is history and must not grow: a limb combination added to :data:`LIMBS` or
+:data:`LIMB_GROUPS` has no file counterpart by design, and none needs to be generated. See
+:data:`BASE_SCENE`.
+"""
 
 MISSING_LIMB_MODES = ('cut', 'ghost')
 """ How the limb is removed. See the comment above. """
@@ -154,6 +195,78 @@ def check_age(age, label):
                          f"Must be between {AGE_MIN} and {AGE_MAX} months.")
 
 
+def parse_missing_limb(value):
+    """ Normalise a '--missing_limb' value to its canonical spelling.
+
+    Accepts a single limb ('left_arm'), a group ('right_side'), or any combination of them
+    joined by one of :data:`LIMB_SEPARATORS` ('left_arm+right_leg'). Order does not matter --
+    the result is sorted into :data:`LIMBS` order, so two spellings of the same amputation
+    produce the same string and therefore the same 'data.yml'. A set that happens to be exactly
+    a :data:`LIMB_GROUPS` entry is named by that group instead of spelled out.
+
+    Naming a limb twice raises rather than being tolerated: 'left_side+left_arm' is a typo, and
+    silently ignoring the repeat would train a different body than the one that was asked for.
+
+    Arguments:
+        value (str|None): The CLI value, or ``None``. ``'none'`` and ``''`` mean intact.
+
+    Returns:
+        str|None: Canonical name, or ``None`` for an intact MIMo.
+
+    Raises:
+        ValueError: On an unknown limb or a repeated one.
+    """
+    if value is None:
+        return None
+    text = str(value).strip()
+    if text == '' or text.lower() == 'none':
+        return None
+    for separator in LIMB_SEPARATORS[1:]:
+        text = text.replace(separator, LIMB_SEPARATORS[0])
+
+    limbs = []
+    for token in [part.strip() for part in text.split(LIMB_SEPARATORS[0]) if part.strip()]:
+        if token in LIMB_GROUPS:
+            expanded = LIMB_GROUPS[token]
+        elif token in LIMBS:
+            expanded = (token,)
+        else:
+            raise ValueError(
+                f"Unknown limb {token!r} in 'missing_limb' {value!r}. Allowed: "
+                f"{sorted(LIMBS)} and the groups {sorted(LIMB_GROUPS)}, combined with "
+                f"{LIMB_SEPARATORS[0]!r} -- for example 'left_arm+right_leg'.")
+        for limb in expanded:
+            if limb in limbs:
+                raise ValueError(f"Limb {limb!r} named twice in 'missing_limb' {value!r}.")
+            limbs.append(limb)
+
+    if not limbs:
+        return None
+    order = list(LIMBS)
+    limbs.sort(key=order.index)
+    for name, group in LIMB_GROUPS.items():
+        if sorted(group, key=order.index) == limbs:
+            return name
+    return LIMB_SEPARATORS[0].join(limbs)
+
+
+def resolve_limb_bodies(missing_limb):
+    """ The body subtrees a '--missing_limb' value names, in either mode.
+
+    Arguments:
+        missing_limb (str|None): Any value ':func:`parse_missing_limb`' accepts.
+
+    Returns:
+        tuple[str, ...]: Body names, empty for an intact MIMo.
+    """
+    name = parse_missing_limb(missing_limb)
+    if name is None:
+        return ()
+    if name in MISSING_LIMBS:
+        return MISSING_LIMBS[name]
+    return tuple(LIMBS[limb] for limb in name.split(LIMB_SEPARATORS[0]))
+
+
 def limb_bodies(missing_limb, missing_limb_mode='cut'):
     """ The body subtrees to delete from the spec before the model is compiled.
 
@@ -162,7 +275,7 @@ def limb_bodies(missing_limb, missing_limb_mode='cut'):
     patched afterwards, in ':meth:`._apply_ghost_limb`'.
 
     Arguments:
-        missing_limb (str|None): A key of :data:`MISSING_LIMBS`, or ``None``.
+        missing_limb (str|None): Any value ':func:`parse_missing_limb`' accepts.
         missing_limb_mode (str): ``'cut'`` or ``'ghost'``.
 
     Returns:
@@ -170,7 +283,7 @@ def limb_bodies(missing_limb, missing_limb_mode='cut'):
     """
     if missing_limb is None or missing_limb_mode != 'cut':
         return ()
-    return MISSING_LIMBS[missing_limb]
+    return resolve_limb_bodies(missing_limb)
 
 ROLL_OVER_XML = os.path.join(SCENE_DIRECTORY, "roll_over_prone_scene.xml")
 """ Path to the roll over scene.
@@ -476,9 +589,10 @@ class MIMoRollOverEnv(MIMoEnv):
         # --- Missing limb -----------------------------------------------------------
         # Before 'super().__init__()', because 'initialize()' runs from in there and needs
         # these attributes to exist already.
-        if missing_limb is not None and missing_limb not in MISSING_LIMBS:
-            raise ValueError(f"Unknown 'missing_limb' {missing_limb!r}. "
-                             f"Allowed: {sorted(MISSING_LIMBS)}.")
+        # Normalise here rather than trusting the caller: 'data.yml' and the CLI both reach
+        # this constructor, and only a canonical value makes two spellings of the same
+        # amputation the same run. Raises on an unknown or repeated limb.
+        missing_limb = parse_missing_limb(missing_limb)
         if missing_limb_mode not in MISSING_LIMB_MODES:
             raise ValueError(f"'missing_limb_mode' must be one of {list(MISSING_LIMB_MODES)}, "
                              f"not {missing_limb_mode!r}.")
@@ -730,7 +844,7 @@ class MIMoRollOverEnv(MIMoEnv):
         model and every cached id would be stale.
         """
         bodies = []
-        for root_name in MISSING_LIMBS[self.missing_limb]:
+        for root_name in resolve_limb_bodies(self.missing_limb):
             root = self.model.body(root_name).id
             bodies.append(root)
             for b in range(self.model.nbody):

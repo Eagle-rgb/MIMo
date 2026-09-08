@@ -50,7 +50,8 @@ import gymnasium as gym
 import yaml
 
 import mimoEnv  # noqa: F401  (registers MIMoRollOver-v0)
-from mimoEnv.envs.roll_over import MISSING_LIMBS, MISSING_LIMB_MODES
+from mimoEnv.envs.roll_over import (LIMBS, LIMB_GROUPS, MISSING_LIMB_MODES,
+                                    parse_missing_limb)
 
 SIDE_LYING_THRESHOLD = 0.5
 ROLL_THRESHOLD = 0.95
@@ -470,8 +471,11 @@ def resolve_run(model_path, args):
     if args.floor_solimp_width is not None:
         config['floor_solimp_width'] = args.floor_solimp_width
     if args.missing_limb is not None:
-        config['missing_limb'] = None if args.missing_limb == 'none' else args.missing_limb
-        if args.missing_limb != 'none':
+        # Canonicalised here rather than in the constructor so a typo in a '--group' run fails
+        # before the first env is built, not after the first checkpoint has been loaded.
+        # 'none' parses to None, which is how the intact body is forced.
+        config['missing_limb'] = parse_missing_limb(args.missing_limb)
+        if config['missing_limb'] is not None:
             config['missing_limb_mode'] = args.missing_limb_mode or 'ghost'
     if args.ghost_obs is not None:
         config['ghost_obs'] = args.ghost_obs
@@ -793,8 +797,10 @@ def main():
                              "('0.25:0.95:0.05'). Prints one row per value. Locates the point "
                              "where goal conditioning stops working.")
     parser.add_argument('--missing_limb', default=None, type=str,
-                        choices=sorted(MISSING_LIMBS) + ['none'],
-                        help="Override the missing limb stored in the run's data.yml. This is "
+                        metavar='LIMB[+LIMB...]|none',
+                        help="Override the missing limbs stored in the run's data.yml. One limb "
+                             "(%s), a group (%s), or any combination joined with '+'. This is "
+                             % (', '.join(sorted(LIMBS)), ', '.join(sorted(LIMB_GROUPS))) +
                              "the zero-shot transfer: evaluate an intact-trained policy on a "
                              "MIMo with a limb missing. Implies --missing_limb_mode=ghost "
                              "unless one is given, because a cut body has different spaces and "

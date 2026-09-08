@@ -168,15 +168,30 @@ def test_fractional_ages():
 
 
 def test_missing_limb_cut():
-    """ A cut limb is gone before compilation, and stays gone across a swap. """
+    """ A cut limb is gone before compilation, and stays gone across a swap.
+
+    The amputated reference scenes are gitignored (a783ce6), so on a fresh clone they do not
+    exist. The structural half of this section runs regardless; only the comparisons against
+    those files are skipped, with the command that would produce them.
+    """
     print("\ntest_missing_limb_cut")
+    references = {(9, 9): "scene_act_9_body_9_left_arm.xml",
+                  (1, 3): "scene_act_3_body_1_left_arm.xml"}
+    absent = [name for name in references.values()
+              if not os.path.exists(os.path.join(PRONE, name))]
+    if absent:
+        print(f"  [SKIP] {len(absent)} amputated reference scene(s) absent (gitignored). "
+              "Generate with\n"
+              "         python mimoEnv/assets/roll_over/generate_amputated_scenes.py")
+
     env = make_env(missing_limb='left_arm', missing_limb_mode='cut')
-    compare_to_scene(env.model, "scene_act_9_body_9_left_arm.xml", "cut left_arm at (9, 9)")
+    if not absent:
+        compare_to_scene(env.model, references[(9, 9)], "cut left_arm at (9, 9)")
     check("action space shrank", env.action_space.shape == (38,), str(env.action_space.shape))
 
     env.set_embodiment(1, 3)
-    compare_to_scene(env.model, "scene_act_3_body_1_left_arm.xml",
-                     "cut left_arm, swapped to (1, 3)")
+    if not absent:
+        compare_to_scene(env.model, references[(1, 3)], "cut left_arm, swapped to (1, 3)")
     check("the swap kept the limb missing", env.action_space.shape == (38,),
           "an embodiment swap must not silently restore an amputated limb")
 

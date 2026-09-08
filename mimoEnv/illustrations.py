@@ -44,7 +44,8 @@ import yaml
 import numpy as np
 
 from mimoEnv.envs.roll_over import TOUCH_PARAMS as ROLL_OVER_TOUCH_PARAMS
-from mimoEnv.envs.roll_over import MISSING_LIMBS, MISSING_LIMB_MODES
+from mimoEnv.envs.roll_over import (LIMBS, LIMB_GROUPS, MISSING_LIMB_MODES,
+                                    parse_missing_limb)
 from mimoEnv.envs.roll_over_callback import RollOverCallback, RollOverEvalCallback
 from mimoEnv.envs.morphological_curriculum import make_curriculum_callback
 from mimoEnv.envs.isr_callback import ISRCallback
@@ -384,6 +385,18 @@ def parse_proprio(proprio_args_string: str):
     return separated
 
 
+def missing_limb_arg(value):
+    """ argparse wrapper around 'parse_missing_limb'.
+
+    argparse discards a ValueError's message and prints only "invalid value", which would hide
+    the list of allowed limbs -- exactly the thing someone who mistyped one needs to see.
+    """
+    try:
+        return parse_missing_limb(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError(str(error)) from error
+
+
 def main():
     """ CLI for the demonstration environments.
 
@@ -640,10 +653,15 @@ An example is '251206_prone_linear_1e6_test'
                         help="Freezes leg.")
     parser.add_argument('--freeze_arm', default=False, action='store_true', required=False,
                         help="Freezes arm.")
-    parser.add_argument('--missing_limb', default=None, type=str, required=False,
-                        choices=sorted(MISSING_LIMBS),
-                        help="Train or evaluate MIMo with a limb missing. See "
-                             "--missing_limb_mode for how it is removed.")
+    parser.add_argument('--missing_limb', default=None, type=missing_limb_arg, required=False,
+                        metavar='LIMB[+LIMB...]',
+                        help="Train MIMo with limbs missing. One limb (%s), a group "
+                             "(%s), or any combination of them joined with '+' -- for example "
+                             "'--missing_limb=left_arm+right_leg'. Order does not matter and "
+                             "the value is normalised, so 'left_arm+left_leg' and 'left_side' "
+                             "are the same run. See --missing_limb_mode for how they are "
+                             "removed."
+                             % (', '.join(sorted(LIMBS)), ', '.join(sorted(LIMB_GROUPS))))
     parser.add_argument('--missing_limb_mode', default='cut', type=str,
                         choices=list(MISSING_LIMB_MODES),
                         help="How the limb is removed. 'cut' (default) really deletes it: the "
