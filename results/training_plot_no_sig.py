@@ -65,10 +65,14 @@ def get_model_training_data_aggregated(dates, suffixes, haltungen, tags, xmax):
     return model_data
 
 def plot_data(data, labels: list[str], max_x: int, save_file: str, append_num_runs_to_label: bool=False,
-              legend_title: str=None):
+              legend_title: str=None, ylabel: str="Mean Success Rate", ncol: int=2):
     x_axis = np.linspace(0, max_x, N_POINTS)
 
-    plt.figure(figsize=(3,3))
+    # (5.6,3) is the default to use in my thesis for a 2col plot.
+    width = 5.6
+    if ncol == 1:
+        width *= 0.48
+    plt.figure(figsize=(width,3))
     color_idx = 0
 
     for model_data in data:
@@ -79,11 +83,11 @@ def plot_data(data, labels: list[str], max_x: int, save_file: str, append_num_ru
         if append_num_runs_to_label:
             label += f", {model_data['num_runs']} runs"
 
-        plt.plot(x_axis, values, label=label, color=icdlplot.PLT_COLORS[color_idx])
+        plt.plot(x_axis, values, label=label, color=icdlplot.COLORS[color_idx % len(icdlplot.COLORS)])
         # Prevent drawing over 1.0 or under 0.0 for success rate.
         std_min = np.clip(values - model_data['std'], 0.0, 1.0)
         std_max = np.clip(values + model_data['std'], 0.0, 1.0)
-        plt.fill_between(x_axis, std_min, std_max, alpha=0.15, color=icdlplot.PLT_COLORS[color_idx])
+        plt.fill_between(x_axis, std_min, std_max, alpha=0.15, color=icdlplot.COLORS[color_idx])
         color_idx += 1
 
     if legend_title:
@@ -91,7 +95,7 @@ def plot_data(data, labels: list[str], max_x: int, save_file: str, append_num_ru
     else:
         plt.legend()
     plt.xlabel('Steps')
-    plt.ylabel('Mean Success Rate')
+    plt.ylabel(ylabel)
     plt.grid(True, linestyle='--', alpha=0.5)
     plt.tight_layout()
     plt.savefig(f'{save_file}.pdf',
@@ -118,6 +122,8 @@ if __name__ == "__main__":
     parser.add_argument('--legend_title', type=str, required=False, help="Title for legend.")
     parser.add_argument('--tag', type=str, default="rollout/success_rate", required=False,
                         help="Tag to load. Default: rollout/success_rate.")
+    parser.add_argument('--ylabel', type=str, default="Mean Success Rate", help="y label")
+    parser.add_argument("--ncol", type=int, default=2, choices=[1,2], help="Width of this (1 or 2)")
 
     for i in range(1,max_models+1):
         parser.add_argument(f'--date{i}', required=i==1, type=valid_date, help=f"Date of the runs {i}")
@@ -171,4 +177,4 @@ if __name__ == "__main__":
         raise ValueError("No models specified...")
     
     data: pd.DataFrame = get_model_training_data_aggregated(dates, suffixes, haltungen, tags, 1e6)
-    plot_data(data, labels, 1e6, args.name, args.num_runs_in_label, args.legend_title)
+    plot_data(data, labels, 1e6, args.name, args.num_runs_in_label, args.legend_title, args.ylabel, args.ncol)

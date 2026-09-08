@@ -1,4 +1,4 @@
-{% from "_macros.html" import rho_meter with context %}
+{% from "_macros.html" import rho_meter, actuation_chip with context %}
 <div class="toolbar">
   <span class="count">{{ groups|length }} experiment{{ '' if groups|length == 1 else 's' }} &mdash; {{ total }} runs</span>
 </div>
@@ -25,6 +25,7 @@
       <td>
         <span class="chip {{ g.posture }}">{{ g.posture }}</span>
         <span class="chip muted">{{ g.algorithm or '?' }}</span>
+        {{ actuation_chip(g.use_muscle) }}
         {% if g.her %}<span class="chip ok">her</span>{% endif %}
         <span class="chip muted">{{ g.reward_shape }}</span>
         {% if g.goal_fn and g.goal_fn != 'cos' %}<span class="chip goalfn">{{ g.goal_fn }}</span>{% endif %}

@@ -25,10 +25,10 @@
 {% endif %}
 {%- endmacro %}
 
-{% macro tri(field, title, params) -%}
+{% macro tri(field, title, params, labels=('any', 'yes', 'no')) -%}
 <div class="facet">
   <h3>{{ title }}</h3>
-  {% for value, label in [('', 'any'), ('1', 'yes'), ('0', 'no')] %}
+  {% for value, label in [('', labels[0]), ('1', labels[1]), ('0', labels[2])] %}
   <label>
     <input type="radio" name="{{ field }}" value="{{ value }}"
            {% if (params.get(field) or '') == value %}checked{% endif %}>

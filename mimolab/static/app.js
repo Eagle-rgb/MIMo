@@ -28,6 +28,62 @@
     refreshCharts();
   });
 
+  /* ---------- figure style (rcParams) ----------------------------------------------------- */
+
+  function renderStyle(data) {
+    document.getElementById('styletext').value = data.text || '';
+    var base = document.getElementById('stylebase');
+    base.innerHTML = '';
+    Object.keys(data.base).forEach(function (key) {
+      var dt = document.createElement('dt'); dt.textContent = key;
+      var dd = document.createElement('dd'); dd.textContent = data.base[key];
+      base.appendChild(dt); base.appendChild(dd);
+    });
+    document.getElementById('styleblocked').textContent =
+      'Ignored from every source: ' + data.blocked.join(', ') +
+      ' \u2014 they would change the page size or the renderer.';
+    document.getElementById('stylenote').textContent = data.offline
+      ? 'offline mode: read-only'
+      : Object.keys(data.base).length + ' rcParams from ' + data.source;
+    var box = document.getElementById('styleerr');
+    box.hidden = !(data.errors && data.errors.length);
+    if (!box.hidden) box.textContent = 'Not saved \u2014 ' + data.errors.join('  |  ');
+  }
+
+  function loadStyle() {
+    fetch('/api/style').then(function (r) { return r.json(); }).then(renderStyle);
+  }
+
+  document.addEventListener('click', function (e) {
+    if (!e.target.closest) return;
+    if (e.target.closest('[data-settings]')) {
+      loadStyle();
+      document.getElementById('settings').showModal();
+      return;
+    }
+    if (e.target.closest('[data-style-revert]')) { loadStyle(); return; }
+    var save = e.target.closest('[data-style-save]');
+    if (!save) return;
+    var body = new FormData();
+    body.append('text', document.getElementById('styletext').value);
+    save.disabled = true;
+    fetch('/api/style', { method: 'POST', body: body })
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        renderStyle(data);
+        if (!data.errors || !data.errors.length) {
+          document.getElementById('stylenote').textContent = 'Saved. Redrawing the figures.';
+          refreshCharts();
+        }
+      })
+      .catch(function () {
+        var box = document.getElementById('styleerr');
+        box.hidden = false;
+        box.textContent = 'Could not reach the server.';
+      })
+      .finally(function () { save.disabled = false; });
+  });
+
   /* ---------- charts --------------------------------------------------------------------- */
   /* Charts are server-rendered PNGs, so the theme has to travel with the request. */
 
@@ -108,19 +164,130 @@
   }
 
   /* The two palettes the renderer uses, mirrored so the swatch beside a label input matches the
-     line it will name. Thesis mode uses results/icdlplot.py's colours, darkened for the line. */
+     line it will name. Thesis mode uses the tab palette of results/icdlplot.py. */
   var SCREEN_COLORS = ['#2a78d6', '#eb6834', '#1baf7a', '#eda100',
                        '#e87ba4', '#008300', '#4a3aa7', '#e34948'];
-  var THESIS_COLORS = ['#5e9e5e', '#9e5e5e', '#5e5e9e', '#626262', '#099491', '#88910b'];
+  // plots.TAB_HEX -- matplotlib's tab cycle, reordered orange / grey / green / blue.
+  var THESIS_COLORS = ['#ff7f0e', '#7f7f7f', '#2ca02c', '#1f77b4',
+                       '#d62728', '#9467bd', '#8c564b', '#e377c2', '#bcbd22', '#17becf'];
+
+  /* The picker. The tab cycle carries its matplotlib name; results/icdlplot.py's age ramp is
+     appended, and age 9 is a note on tab:orange rather than an eleventh colour, because that is
+     exactly what icdlplot maps it to -- two entries would mean two inks for one age. */
+  var TAB_NAMES = ['orange', 'gray', 'green', 'blue', 'red',
+                   'purple', 'brown', 'pink', 'olive', 'cyan'];
+  var AGE_NOTE = { '#ff7f0e': 'age 9' };
+  var AGE_COLORS = [['#808080', 'age 1'], ['#aa805a', 'age 3'], ['#d57f34', 'age 6']];
+
+  function pickedColors() {
+    var out = {};
+    document.querySelectorAll('#labelrows tr[data-color]').forEach(function (tr) {
+      out[tr.getAttribute('data-series-row')] = tr.getAttribute('data-color');
+    });
+    return out;
+  }
+
+  function colorParams() {
+    var picked = pickedColors();
+    return Object.keys(picked).map(function (key) {
+      return 'color=' + encodeURIComponent(key + '=' + picked[key]);
+    }).join('&');
+  }
 
   function paintSwatches() {
     var thesis = (document.getElementById('style') || {}).value === 'thesis';
     var palette = thesis ? THESIS_COLORS : SCREEN_COLORS;
-    document.querySelectorAll('[data-swatch]').forEach(function (el) {
-      var i = parseInt(el.getAttribute('data-swatch'), 10);
-      el.style.background = palette[i % palette.length];
+    /* Colour follows position, so the swatch is read off the row's current index rather than the
+       index the server rendered -- otherwise reordering repaints nothing and the swatches lie.
+       A pinned colour wins, and says so with a ring. */
+    document.querySelectorAll('[data-swatch]').forEach(function (el, i) {
+      var row = el.closest('tr');
+      var pinned = row && row.getAttribute('data-color');
+      el.style.background = pinned || palette[i % palette.length];
+      el.setAttribute('data-pinned', pinned ? '1' : '0');
     });
   }
+
+  function closePicker() {
+    var open = document.querySelector('.colorpop');
+    if (open) open.remove();
+  }
+
+  function openPicker(swatch) {
+    closePicker();
+    var row = swatch.closest('tr');
+    var pop = document.createElement('div');
+    pop.className = 'colorpop';
+    var entries = THESIS_COLORS.map(function (hex, i) {
+      var note = AGE_NOTE[hex];
+      return [hex, 'tab:' + TAB_NAMES[i] + (note ? ' \u00b7 ' + note : '')];
+    }).concat(AGE_COLORS.map(function (pair) {
+      return [pair[0], 'icdlplot \u00b7 ' + pair[1]];
+    }));
+    entries.forEach(function (entry) {
+      var b = document.createElement('button');
+      b.type = 'button';
+      b.setAttribute('data-color-pick', entry[0]);
+      b.innerHTML = '<i style="background:' + entry[0] + '"></i><span>' + entry[1] + '</span>';
+      pop.appendChild(b);
+    });
+    var auto = document.createElement('button');
+    auto.type = 'button';
+    auto.className = 'auto';
+    auto.setAttribute('data-color-pick', '');
+    auto.textContent = 'Follow legend position';
+    pop.appendChild(auto);
+
+    row.querySelector('td').appendChild(pop);
+    pop.addEventListener('click', function (e) {
+      var choice = e.target.closest('[data-color-pick]');
+      if (!choice) return;
+      var value = choice.getAttribute('data-color-pick');
+      if (value) row.setAttribute('data-color', value);
+      else row.removeAttribute('data-color');
+      closePicker();
+      drawMain();
+      swatch.focus();
+    });
+  }
+
+  document.addEventListener('click', function (e) {
+    var swatch = e.target.closest && e.target.closest('.swatch[data-swatch]');
+    if (swatch) {
+      e.preventDefault();
+      if (document.querySelector('.colorpop')) closePicker();
+      else openPicker(swatch);
+      return;
+    }
+    if (!e.target.closest || !e.target.closest('.colorpop')) closePicker();
+  });
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape') closePicker();
+  });
+
+  /* Legend order. The rows of the label editor are the order of the legend, and the server is
+     told about it as a list of series keys -- the same keys the labels are keyed on. */
+  function orderParams() {
+    var rows = document.querySelectorAll('#labelrows tr[data-series-row]');
+    if (rows.length < 2) return '';
+    return Array.prototype.map.call(rows, function (tr) {
+      return 'order=' + encodeURIComponent(tr.getAttribute('data-series-row'));
+    }).join('&');
+  }
+
+  document.addEventListener('click', function (e) {
+    var button = e.target.closest && e.target.closest('[data-move]');
+    if (!button) return;
+    e.preventDefault();
+    var row = button.closest('tr');
+    var sibling = button.getAttribute('data-move') === 'up'
+      ? row.previousElementSibling : row.nextElementSibling;
+    if (!sibling) return;
+    if (button.getAttribute('data-move') === 'up') row.parentNode.insertBefore(row, sibling);
+    else row.parentNode.insertBefore(sibling, row);
+    button.focus();
+    drawMain();
+  });
 
   function labelParams() {
     var parts = [];
@@ -144,7 +311,8 @@
     var band = (document.getElementById('bandsel') || {}).value || 'std';
     var query = base + 'tag=' + encodeURIComponent(tag) + '&aggregate=' + agg +
                 '&smooth=' + smooth + '&style=' + style + '&band=' + band;
-    ['ylabelin=ylabel', 'xlabelin=xlabel', 'legendloc=legend_loc'].forEach(function (pair) {
+    ['ylabelin=ylabel', 'xlabelin=xlabel', 'legendloc=legend_loc',
+     'legendtitle=legend_title'].forEach(function (pair) {
       var bits = pair.split('=');
       var el = document.getElementById(bits[0]);
       var value = el && (el.value || '').trim();
@@ -152,8 +320,18 @@
         query += '&' + bits[1] + '=' + encodeURIComponent(value);
       }
     });
+    ['figw=figw', 'figh=figh'].forEach(function (pair) {
+      var bits = pair.split('=');
+      var el = document.getElementById(bits[0]);
+      var value = el && (el.value || '').trim();
+      if (value) query += '&' + bits[1] + '=' + encodeURIComponent(value);
+    });
     var labels = labelParams();
     if (labels) query += '&' + labels;
+    var order = orderParams();
+    if (order) query += '&' + order;
+    var colors = colorParams();
+    if (colors) query += '&' + colors;
     paintSwatches();
     img.src = chartUrl(query);
     setExportLink(document.getElementById('exportmain'), exportHref(query));
@@ -216,7 +394,8 @@
 
   var labelTimer = null;
   document.addEventListener('input', function (e) {
-    if (!e.target.matches || !e.target.matches('.labelin, #ylabelin, #xlabelin')) return;
+    if (!e.target.matches ||
+        !e.target.matches('.labelin, #ylabelin, #xlabelin, #legendtitle, #figw, #figh')) return;
     clearTimeout(labelTimer);
     labelTimer = setTimeout(drawMain, 350);
   });

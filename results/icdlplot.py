@@ -2,21 +2,26 @@ import matplotlib.pyplot as plt
 
 plt.rcParams.update({
     "font.family": "serif",
-    "font.serif": ["STIXGeneral"],
+    "mathtext.fontset": "cm",
     "font.size": 10,
-    "mathtext.fontset": "stix", 
     "axes.labelsize": 10,
+    "axes.titlesize": 12,
     "xtick.labelsize": 9,
     "ytick.labelsize": 9,
-    "legend.fontsize": 6,
+    "legend.fontsize": 10,
+    "axes.linewidth": 1.0,
+    "lines.linewidth": 2.0,
+    "figure.dpi": 300,
+    "savefig.dpi": 300,
+    "savefig.bbox": "tight",
 })
 
-PLT_COLORS = ["#99ff99",
-    "#ff9999",
-    "#9999ff",
-    "#9f9f9f",
-    "#0FEFEB",
-    "#DCEB12"]
+COLORS = {
+    1: "#808080",
+    3: "#aa805a",
+    6: "#d57f34",
+    9: "tab:orange",
+}
 
 def figsize(fac, doublecol=False):
     # single column width and height.

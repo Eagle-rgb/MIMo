@@ -64,6 +64,32 @@ FULL_ROLL_GOAL = 1.0
 DEFAULT_EPISODE_STEPS = 500
 
 
+# 08.09.2026 Laterality: which side MIMo rolled over, and which end of the trunk led.
+#
+# Left is +y in *both* postures: 'get_starting_quat' rotates by +-90 deg about the global y axis,
+# so prone and supine differ by a head-over-heels flip, not by a log roll. Measured at both reset
+# poses, KOBAYASHI_LAnkle sits at y = +0.048 and KOBAYASHI_RAnkle at y = -0.048.
+#
+# rho cannot carry the direction. It is built from R[2, 0], the cosine between a body's local x
+# axis and global z, and a cosine has no sign: rolled 90 deg left and 90 deg right both read 0.
+# Under the mirror y -> -y, R[2, 0] is invariant and R[2, 1] -- the local y axis (his left) against
+# global z -- flips. So rho is the symmetric half of the orientation and R[2, 1] the antisymmetric
+# half; logging rho_hip and rho_chest gives the same direction-blind quantity twice. Measured on a
+# left-rolling and a right-rolling seed, the rho traces are near-identical (0.15/0.35/0.61 against
+# 0.13/0.38/0.63) while R[2, 1] mirrors cleanly (+0.44/+0.91/+0.92 against -0.35/-0.82/-0.95).
+#
+# Read at the first side-lying crossing, where |R[2, 1]| is near 1 and the sign is unambiguous.
+# Not at the end of the episode: MIMo overshoots past 180 deg (measured 214-271 deg) and rocks
+# back, so late samples pass through the second side lying and invert.
+#
+# The older heuristic -- the y displacement of KOBAYASHI_Torso between reset and the final step --
+# agrees on all 24 rolls measured here, but it is an indirect proxy: it assumes he rolls rather
+# than slides, and the site sits 5.2 cm in front of the upper_body origin, so the offset alone
+# sweeps +-4.9 cm through y with *opposite* sign in the two postures. That is 15-25 % of the
+# 20-35 cm the root travels, so it does not flip a decisive roll but biases a marginal one.
+LATERALITY_BODIES = ('hip', 'chest')
+
+
 def load_run_config(model_path):
     """Read the data.yml that sits next to a saved model, if there is one."""
     config_path = os.path.join(os.path.dirname(model_path), 'data.yml')
@@ -231,13 +257,21 @@ def evaluate(model, env, episodes, seed0=1000, policy_goal=None,
 
     'episode_steps' is the horizon. build_env returns the unwrapped environment, so the TimeLimit
     from the registration is gone and this loop is what ends an episode.
+
+    LP 08.09.2026 Now also records the direction of the roll per episode: 'left', 'right', or
+    'none' when MIMo never reached the goal. See the comment above LATERALITY_BODIES for why the
+    direction is read off R[2, 1] rather than off rho or off the y displacement of
+    KOBAYASHI_Torso. We read the direction of rolling when MIMo first reaches side lying. There,
+    we take the mean of the upward part of the hip and chest y axis (the axis pointing left/right to
+    the saggital x axis).
     """
-    rolled, side, rho_max, steps = [], [], [], []
+    rolled, side, rho_max, steps, direction = [], [], [], [], []
     for episode in range(episodes):
         obs, _ = env.reset(seed=seed0 + episode)
         best = float(env.get_achieved_goal_cos_mean()[0])
         step = 0
         first_success = None
+        left_up = None
         done = False
         while not done and step < episode_steps:
             if policy_goal is not None:
@@ -250,18 +284,27 @@ def evaluate(model, env, episodes, seed0=1000, policy_goal=None,
             best = max(best, float(env.get_achieved_goal_cos_mean()[0]))
             if first_success is None and best >= ROLL_THRESHOLD:
                 first_success = step
+            if left_up is None and best >= SIDE_LYING_THRESHOLD:
+                left_up = np.mean([env.data.body(body).xmat.reshape(3, 3)[2, 1]
+                                   for body in LATERALITY_BODIES])
             done = terminated or truncated
         rolled.append(1.0 if best >= ROLL_THRESHOLD else 0.0)
         side.append(1.0 if best >= SIDE_LYING_THRESHOLD else 0.0)
         rho_max.append(best)
         steps.append(first_success if first_success is not None else np.nan)
+        # His left side going down is what "rolled left" means, so the sign is inverted here.
+        direction.append(('left' if left_up < 0 else 'right') if best >= ROLL_THRESHOLD else 'none')
+
     return dict(rolled=np.array(rolled), side=np.array(side),
-                rho_max=np.array(rho_max), steps=np.array(steps, dtype=float))
+                rho_max=np.array(rho_max), steps=np.array(steps, dtype=float),
+                direction=np.array(direction))
 
 
 def _row(results, policy_goal=None):
     """One result row, in the same numbers the table prints."""
     finished = results['steps'][~np.isnan(results['steps'])]
+    left = int((results['direction'] == 'left').sum())
+    right = int((results['direction'] == 'right').sum())
     return {
         'policy_goal': policy_goal,
         'rolled': float(results['rolled'].mean()),
@@ -272,6 +315,10 @@ def _row(results, policy_goal=None):
         'steps_mean': float(finished.mean()) if finished.size else None,
         'steps_std': float(finished.std()) if finished.size else None,
         'steps_n': int(finished.size),
+        # Over the episodes that rolled: +1 always left, -1 always right, 0 an even split.
+        'left': left,
+        'right': right,
+        'laterality': float((left - right) / (left + right)) if left + right else None,
     }
 
 
@@ -489,8 +536,32 @@ def evaluate_group(run_dirs, args, episodes):
     return rows, skipped
 
 
+def _committed_side(row):
+    """'left', 'right', 'mixed' or None for one run: the side it rolled to, if it kept to one.
+
+    None means the run carries no direction at all -- either it never rolled, or it was evaluated
+    before 08.09.2026, when the direction was not recorded.
+    """
+    left, right = row.get('left'), row.get('right')
+    if left is None or right is None or left + right == 0:
+        return None
+    if right == 0:
+        return 'left'
+    if left == 0:
+        return 'right'
+    return 'mixed'
+
+
 def _summarise(rows, threshold):
     rolled = np.array([row['rolled'] for row in rows], dtype=float)
+    # Laterality of the *successful* runs only. A run below the success line rolls a handful of
+    # times, so "it always went left" says nothing about it -- and pooling it with the rest turns
+    # a clean result into a muddy one. Counted per run, not per episode: the question is how many
+    # seeds committed to a side, not how many rolls went that way.
+    sides = [_committed_side(row) for row in rows
+             if row.get('successful', row['rolled'] > threshold)]
+    n_successful = len(sides)
+    sides = [side for side in sides if side is not None]
     rho = np.array([row['rho_mean'] for row in rows], dtype=float)
     steps = np.array([row['steps_mean'] for row in rows if row['steps_mean'] is not None],
                      dtype=float)
@@ -508,6 +579,13 @@ def _summarise(rows, threshold):
         'band_successful_90': int((rolled > 0.9).sum()),
         'band_not_successful_10': int((rolled < 0.1).sum()),
         'band_ambiguous': int(len(rows) - (rolled > 0.9).sum() - (rolled < 0.1).sum()),
+        # Successful runs by the side they committed to. 'known' is how many of them carry a
+        # direction at all; the difference to 'successful' is runs evaluated before 08.09.2026.
+        'side_successful': n_successful,
+        'side_known': len(sides),
+        'side_left': sides.count('left'),
+        'side_right': sides.count('right'),
+        'side_ambiguous': sides.count('mixed'),
     }
 
 
@@ -533,12 +611,13 @@ def _print_group(rows, skipped, summary, args, episodes):
         print(f"policy was fed      : desired_goal={args.policy_goal:.2f} (constant)")
     print()
     print(f"{'run':<{width}}  {'roll':>6}  {'side':>6}  {'rho mean':>8}  {'rho min':>7}  "
-          f"{'steps':>7}  status")
+          f"{'steps':>7}  {'L/R':>7}  status")
     for row in rows:
         steps = f"{row['steps_mean']:.1f}" if row['steps_mean'] is not None else "-"
+        lateral = f"{row['left']}/{row['right']}" if row['laterality'] is not None else "-"
         print(f"{row['run'][len(prefix):]:<{width}}  {row['rolled'] * 100:>5.0f}%  "
               f"{row['side'] * 100:>5.0f}%  {row['rho_mean']:>8.3f}  {row['rho_min']:>7.3f}  "
-              f"{steps:>7}  {'successful' if row['successful'] else '-'}")
+              f"{steps:>7}  {lateral:>7}  {'successful' if row['successful'] else '-'}")
     for name, reason in skipped:
         print(f"{name[len(prefix):]:<{width}}  skipped: {reason}")
     print()
@@ -550,6 +629,17 @@ def _print_group(rows, skipped, summary, args, episodes):
     print(f"rho_max mean        : {summary['rho_mean']:.3f}")
     if summary['steps_mean'] is not None:
         print(f"steps to roll       : {summary['steps_mean']:.1f} (mean over runs that rolled)")
+    if summary['side_known']:
+        parts = [f"{summary['side_left']} always left", f"{summary['side_right']} always right"]
+        if summary['side_ambiguous']:
+            parts.append(f"{summary['side_ambiguous']} ambiguous")
+        missing = summary['side_successful'] - summary['side_known']
+        note = f" ({missing} without a recorded direction)" if missing else ""
+        print(f"successful by side  : {' / '.join(parts)} "
+              f"of {summary['side_successful']} successful{note}")
+    elif summary['side_successful']:
+        print(f"successful by side  : --- (no direction recorded for "
+              f"{summary['side_successful']} successful runs)")
     print(f"thesis banding      : successful >90%: {summary['band_successful_90']} | "
           f"ambiguous: {summary['band_ambiguous']} | "
           f"not successful <10%: {summary['band_not_successful_10']}")
@@ -831,6 +921,13 @@ def main():
         print(f"steps to roll       : {finished.mean():.1f} +- {finished.std():.1f} (n={finished.size})")
     else:
         print(f"steps to roll       : n/a (no episode reached the goal)")
+    left = int((results['direction'] == 'left').sum())
+    right = int((results['direction'] == 'right').sum())
+    if left + right:
+        print(f"laterality          : {left} left / {right} right "
+              f"(index {(left - right) / (left + right):+.2f})")
+    else:
+        print(f"laterality          : n/a (no episode reached the goal)")
 
     payload['rows'].append(_row(results, policy_goal=args.policy_goal))
     write_json(args.json, payload)

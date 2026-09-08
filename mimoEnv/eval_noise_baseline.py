@@ -54,7 +54,8 @@ from mimoEnv.eval_rollover import (
 import gymnasium as gym
 
 
-def build_env(starting_position, age_morph, age_physio, render=False, use_muscle=False):
+def build_env(starting_position, age_morph, age_physio, render=False, use_muscle=False,
+              muscle_action_space='symmetric'):
     """The evaluation env of eval_rollover.py.
 
     env_kwargs({}, ...) is the protocol: isr=False, goal pinned, done_active=False. The empty
@@ -63,7 +64,12 @@ def build_env(starting_position, age_morph, age_physio, render=False, use_muscle
     """
     # env_kwargs already knows how to swap in MuscleModel; going through it keeps the noise
     # baseline on exactly the same construction path as a real evaluation.
-    kwargs = env_kwargs({'use_muscle': use_muscle}, starting_position, ROLL_THRESHOLD)
+    # 'muscle_action_space' is passed explicitly because env_kwargs defaults it to 'unit' -- the
+    # right default *there*, where it reconstructs a stored run and every saved muscle checkpoint
+    # predates 59e5302. Nothing is being reconstructed here, so the baseline follows the current
+    # model instead.
+    kwargs = env_kwargs({'use_muscle': use_muscle, 'muscle_action_space': muscle_action_space},
+                        starting_position, ROLL_THRESHOLD)
     # The measurement pass never renders, and an unused renderer is memory for nothing.
     kwargs['render_mode'] = 'rgb_array' if render else None
     kwargs['age_morph'] = age_morph
@@ -76,9 +82,16 @@ def make_sampler(condition, sigma, env, seed, seq_len):
 
     'condition' is 'zero', 'uniform', or a colour name mapping to a spectral exponent.
     """
-    if condition == 'zero':
-        zero = np.zeros(env.action_space.shape, dtype=env.action_space.dtype)
-        return (lambda: zero), (lambda: None)
+    if condition == 'rest':
+        # 05.09.2026 Was 'np.zeros(action_space.shape)'. That is the do-nothing action only while
+        # zero sits at the model's neutral point, which stopped being true when MuscleModel moved
+        # to a symmetric [-1, 1] space (59e5302): there a zero action co-contracts *every* muscle
+        # at half activation, which is the opposite of limp, and the floor row would have measured
+        # maximal co-contraction instead of rest. 'neutral_action' is the model's own answer -- -1
+        # for symmetric muscle, 0 for the spring-damper model and for the legacy [0, 1] space, so
+        # the spring-damper numbers are unchanged.
+        rest = np.asarray(env.actuation_model.neutral_action(), dtype=env.action_space.dtype)
+        return (lambda: rest), (lambda: None)
 
     if condition == 'uniform':
         # Gymnasium keeps env.np_random and action_space._np_random separate, so reset(seed=...)
@@ -96,12 +109,13 @@ def make_sampler(condition, sigma, env, seed, seq_len):
                                seq_len=seq_len,
                                rng=np.random.default_rng(int(seed)))
     low, high = env.action_space.low, env.action_space.high
-    # 02.09.2026 The noise is zero-mean, the action box is not necessarily. SpringDamperModel gives
-    # 46 actuators in [-1, 1], MuscleModel 92 muscles in [0, 1], and dropping zero-mean noise
-    # straight into the second one would clip half of every sample to zero -- the muscles would sit
-    # at rest most of the time and sigma would stop meaning what it means for the torque model.
-    # Mapping onto the box's centre and half-width instead keeps sigma in units of "fraction of the
-    # available range" for both, and is bit-identical for [-1, 1] (centre 0, half-width 1).
+    # The noise is zero-mean, the action box is not necessarily. SpringDamperModel gives 46
+    # actuators in [-1, 1] and MuscleModel 92 muscles in [-1, 1] since 59e5302 -- but in [0, 1]
+    # under '--legacy_muscle_action_space', and dropping zero-mean noise straight into *that* box
+    # would clip half of every sample to zero, leaving the muscles at rest most of the time and
+    # making sigma mean something different than it does for the torque model. Mapping onto the
+    # box's centre and half-width keeps sigma in units of "fraction of the available range" for
+    # every model, and is bit-identical on [-1, 1] (centre 0, half-width 1).
     centre = (low + high) / 2.0
     half_range = (high - low) / 2.0
     # Clipping matters at sigma=1: a Gaussian at the edge of the box spends a third of its mass
@@ -469,17 +483,21 @@ def main():
                              "distinguish 'noise does not roll' from 'this amplitude does not'.")
     parser.add_argument('--no_uniform', action='store_true',
                         help="Drop the action_space.sample() reference row.")
-    parser.add_argument('--no_zero', action='store_true',
+    # Previously: --no_zero (the row was called 'zero' while it hardcoded a zero action).
+    parser.add_argument('--no_rest', '--no_zero', action='store_true', dest='no_rest',
                         help="Drop the do-nothing floor row.")
     parser.add_argument('--seq_len', type=int, default=None,
                         help="Colored-noise sequence length; defaults to the episode horizon, "
                              "which is what the pink-noise paper prescribes.")
     parser.add_argument('--use_muscle', action='store_true',
-                        help="Drive MuscleModel (92 muscles in [0, 1]) instead of the "
-                             "spring-damper model (46 actuators in [-1, 1]). Not comparable to a "
-                             "spring-damper baseline cell for cell: the muscle model also zeroes "
-                             "the stiffness of the unactuated spine joints and cuts their damping "
-                             "by 20, so the body itself differs.")
+                        help="Drive MuscleModel (92 muscles, [-1, 1] mapped onto activation "
+                             "[0, 1]) instead of the spring-damper model (46 actuators in "
+                             "[-1, 1]). Not comparable to a spring-damper baseline cell for cell: "
+                             "the muscle model also zeroes the stiffness of the unactuated spine "
+                             "joints and cuts their damping by 20, so the body itself differs.")
+    parser.add_argument('--legacy_muscle_action_space', action='store_true',
+                        help="Use the pre-59e5302 muscle action space [0, 1] instead of the "
+                             "symmetric [-1, 1]. Same spelling as illustrations.py.")
     parser.add_argument('--morph_age', type=int, default=9)
     parser.add_argument('--physio_age', type=int, default=9)
     parser.add_argument('--seed', type=int, default=1000,
@@ -521,6 +539,7 @@ def main():
     colours = [c for c in args.colours.split(',') if c]
     sigmas = [float(s) for s in args.sigmas.split(',') if s]
     seq_len = args.seq_len or args.episode_steps
+    muscle_action_space = 'unit' if args.legacy_muscle_action_space else 'symmetric'
     for colour in colours:
         if colour not in BETAS:
             raise SystemExit(f"Unknown colour {colour!r}; choose from {sorted(BETAS)}.")
@@ -532,7 +551,8 @@ def main():
             # The top-down camera brings its own renderer, so the env needs none -- and an
             # unused one is memory for nothing.
             env = build_env(posture, args.morph_age, args.physio_age,
-                            render=args.camera == 'env', use_muscle=args.use_muscle)
+                            render=args.camera == 'env', use_muscle=args.use_muscle,
+                            muscle_action_space=muscle_action_space)
             try:
                 for _, condition, sigma, episode in (s for s in specs if s[0] == posture):
                     tag = '_muscle' if args.use_muscle else ''
@@ -571,8 +591,8 @@ def main():
     # (condition, sigma). sigma is None where it has no meaning, which keeps the reference rows in
     # the same table instead of in a footnote.
     cells = []
-    if not args.no_zero:
-        cells.append(('zero', None))
+    if not args.no_rest:
+        cells.append(('rest', None))
     if not args.no_uniform:
         cells.append(('uniform', None))
     for colour in colours:
@@ -580,7 +600,8 @@ def main():
             cells.append((colour, sigma))
 
     rows = []
-    model_name = 'MuscleModel' if args.use_muscle else 'SpringDamperModel'
+    model_name = (f"MuscleModel[{muscle_action_space}]" if args.use_muscle
+                  else 'SpringDamperModel')
     print(f"{args.episodes} episodes x {args.episode_steps} steps per cell, "
           f"morph_age={args.morph_age} physio_age={args.physio_age}, {model_name}, "
           f"success = rho_max >= {ROLL_THRESHOLD}\n")
@@ -588,7 +609,9 @@ def main():
     print('-' * len(HEADER))
     for posture in postures:
         # Outer loop, so exactly one 3.6 GB env is alive at any moment.
-        env = build_env(posture, args.morph_age, args.physio_age, use_muscle=args.use_muscle)
+        env = build_env(posture, args.morph_age, args.physio_age,
+                        use_muscle=args.use_muscle,
+                        muscle_action_space=muscle_action_space)
         try:
             for condition, sigma in cells:
                 label = condition if sigma is None else f"{condition}_s{sigma:g}"
@@ -630,6 +653,7 @@ def main():
             'morph_age': args.morph_age,
             'physio_age': args.physio_age,
             'use_muscle': args.use_muscle,
+            'muscle_action_space': muscle_action_space if args.use_muscle else None,
             'seed': args.seed,
             'seq_len': seq_len,
             'isr': False,

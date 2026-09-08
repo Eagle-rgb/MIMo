@@ -11,14 +11,17 @@ labelled and a legend is always present, so identity is never carried by colour 
 
 import contextlib
 import contextvars
+import importlib.util
 import io
 import math
 import re
+from pathlib import Path
 
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
+import yaml
 
 from . import db
 from .config import SETTINGS
@@ -57,43 +60,181 @@ def _series_key(key):
     """The identity of one aggregated series: date|posture|model_name."""
     return "|".join("" if part is None else str(part) for part in key)
 
-# Paper style for exported figures, mirroring results/icdlplot.py so a figure exported here and a
-# figure produced by the analysis scripts sit on the same page without looking like two documents.
-# fonttype 42 embeds TrueType rather than matplotlib's default Type 3, which several thesis and
-# journal templates reject outright.
-PAPER_RC = {
-    "font.family": "serif",
-    "font.serif": ["STIXGeneral", "DejaVu Serif"],
-    "font.size": 10,
-    "mathtext.fontset": "stix",
-    "axes.labelsize": 10,
-    "xtick.labelsize": 9,
-    "ytick.labelsize": 9,
-    "legend.fontsize": 8,
-    "pdf.fonttype": 42,
-    "ps.fonttype": 42,
-}
+# Paper style for exported figures. The base is read from results/icdlplot.py itself rather than
+# restated here, so a change there (lines.linewidth 3 -> 2, say) reaches the app without an edit:
+# the module is executed inside an rc_context and the rcParams it touched are the diff. Executing
+# it plainly would apply serif type and 300 dpi to the on-screen charts too, because rcParams are
+# process-global.
+#
+# On top of that sits paper_rc.yml, the overrides the Settings dialog writes -- a file under
+# .mimolab/, not a row in the index, because the index is a cache that can be deleted at any time
+# and a style is not something to lose that way.
+ICDL_PATH = Path(__file__).resolve().parent.parent / "results" / "icdlplot.py"
 
-# results/icdlplot.py: single column is 3.5 in wide. A chart on screen is much wider than that,
-# so the export is not the screen figure re-encoded -- it is re-laid out at the target width.
-COLUMN_WIDTHS = {"single": (3.5, 2.6), "double": (7.0, 3.9)}
+# fonttype 42 embeds TrueType rather than matplotlib's default Type 3, which several thesis and
+# journal templates reject outright. Not negotiable from either source, so it is applied last.
+RC_ENFORCED = {"pdf.fonttype": 42, "ps.fonttype": 42}
+
+# Dropped from both sources. savefig.bbox="tight" is set in icdlplot.py and would trim the page
+# down to whatever the content happens to need, so a figure asked for at 2.8 in comes out at some
+# other width and \includegraphics needs a scale factor again -- the thing the column setting
+# exists to avoid. _emit also passes bbox_inches=None, so this is belt and braces. 'backend' would
+# swap the renderer out from under a running server.
+RC_BLOCKED = {"savefig.bbox", "savefig.pad_inches", "backend", "interactive"}
+
+_ICDL_CACHE = {}
+
+
+def icdl_rc():
+    """The rcParams results/icdlplot.py sets, read live from the file (cached on its mtime)."""
+    try:
+        mtime = ICDL_PATH.stat().st_mtime
+    except OSError:
+        return {}
+    if _ICDL_CACHE.get("mtime") == mtime:
+        return dict(_ICDL_CACHE["rc"])
+
+    rc = {}
+    try:
+        with matplotlib.rc_context():
+            before = dict(matplotlib.rcParams)
+            spec = importlib.util.spec_from_file_location("mimolab_icdlplot", ICDL_PATH)
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            rc = {k: v for k, v in matplotlib.rcParams.items()
+                  if before.get(k) != v and k not in RC_BLOCKED}
+    except Exception:
+        # A syntax error in the analysis script must not take the app's charts down with it.
+        rc = {}
+    _ICDL_CACHE.update(mtime=mtime, rc=rc)
+    return dict(rc)
+
+
+def validate_rc(mapping):
+    """Split a mapping into rcParams matplotlib accepts and human-readable complaints."""
+    clean, errors = {}, []
+    for key, value in (mapping or {}).items():
+        key = str(key).strip()
+        if key in RC_BLOCKED:
+            errors.append(f"{key}: not settable here -- it would change the page size or backend")
+            continue
+        if key not in matplotlib.rcParams:
+            errors.append(f"{key}: not an rcParam")
+            continue
+        try:
+            matplotlib.rcParams.validate[key](value)
+        except Exception as exc:                      # matplotlib raises ValueError or KeyError
+            errors.append(f"{key}: {exc}")
+            continue
+        clean[key] = value
+    return clean, errors
+
+
+def rc_overrides_text():
+    """The raw text of paper_rc.yml, as typed. Empty when nothing was ever saved."""
+    try:
+        return SETTINGS.rc_path.read_text()
+    except OSError:
+        return ""
+
+
+def rc_overrides():
+    """The saved overrides, parsed and validated. Invalid entries are dropped, never raised."""
+    text = rc_overrides_text().strip()
+    if not text:
+        return {}
+    try:
+        parsed = yaml.safe_load(text)
+    except yaml.YAMLError:
+        return {}
+    if not isinstance(parsed, dict):
+        return {}
+    clean, _errors = validate_rc(parsed)
+    return clean
+
+
+def save_rc_overrides(text):
+    """Persist the Settings dialog's text. Returns the complaints; nothing is written if any."""
+    text = text or ""
+    try:
+        parsed = yaml.safe_load(text) if text.strip() else {}
+    except yaml.YAMLError as exc:
+        return [f"could not parse: {exc}"]
+    if parsed is None:
+        parsed = {}
+    if not isinstance(parsed, dict):
+        return ["expected 'key: value' lines (YAML or JSON), not a list or a bare value"]
+    _clean, errors = validate_rc(parsed)
+    if errors:
+        return errors
+    SETTINGS.ensure_dirs()
+    SETTINGS.rc_path.write_text(text)
+    return []
+
+
+def paper_rc():
+    """The effective paper style: icdlplot.py, then the saved overrides, then what is enforced."""
+    rc = icdl_rc()
+    rc.update(rc_overrides())
+    rc.update(RC_ENFORCED)
+    return rc
+
+
+# The thesis text block is 5.6 in wide, so "2 columns" is the full text width and "1 column" is
+# half of it. A chart on screen is much wider than that, so the export is not the screen figure
+# re-encoded -- it is re-laid out at the target width. Heights keep the previous aspect ratios.
+COLUMN_WIDTHS = {"single": (2.8, 2.1), "double": (5.6, 3.1)}
 
 # results/training_plot_no_sig.py draws a square 3x3 in figure; the reference figure
 # (results/proprio_ablations/26-08-12_proprio_ablations.pdf) is that shape. A thesis figure is
 # rendered at its final size so \includegraphics needs no scaling -- scaling is what makes the
 # type in one figure disagree with the type in the next.
-THESIS_SIZES = {"single": (3.4, 3.2), "double": (6.9, 3.6)}
+THESIS_SIZES = {"single": (2.8, 2.6), "double": (5.6, 2.9)}
 
-# The palette of results/icdlplot.py, so a curve drawn here sits beside one drawn by the analysis
-# scripts without looking like a different document.
-ICDL_COLORS = ["#99ff99", "#ff9999", "#9999ff", "#9f9f9f", "#0FEFEB", "#DCEB12"]
+# A figure that has to match a neighbour on the page, or a wide one for a landscape plate, is not
+# covered by two presets -- so an explicit size wins over the column. Clamped: below ~1.5 in the
+# 10 pt type and the tick labels do not fit, and above 20 in a PDF page stops being a figure.
+SIZE_LIMITS = (1.5, 20.0)
 
-# Those pastels are too light to read as lines on white; the scripts draw them at full width on a
-# pale band of the same hue. Darkened here for the line, kept pale for the band.
-def _darken(hex_color, factor=0.62):
-    hex_color = hex_color.lstrip("#")
-    rgb = [int(hex_color[i:i + 2], 16) for i in (0, 2, 4)]
-    return "#%02x%02x%02x" % tuple(int(c * factor) for c in rgb)
+
+def clamp_size(width, height):
+    """An explicit figure size in inches, or None if neither dimension was given."""
+    if width is None and height is None:
+        return None
+    lo, hi = SIZE_LIMITS
+    width = float(width) if width else float(height) * 1.4
+    height = float(height) if height else width / 1.4
+    return (min(max(width, lo), hi), min(max(height, lo), hi))
+
+# matplotlib's "tab" categorical cycle, reordered so the first four are orange, grey, green and
+# blue -- the colours of the reference figure (example_plot.png). Named colours rather than hex so
+# a figure drawn here and one drawn by a results/ script asking for "tab:orange" are the same ink.
+# The tail is the rest of the cycle, for selections wider than four series.
+TAB_COLORS = ["tab:orange", "tab:gray", "tab:green", "tab:blue",
+              "tab:red", "tab:purple", "tab:brown", "tab:pink", "tab:olive", "tab:cyan"]
+
+# The same values as hex, for anything that cannot resolve a matplotlib colour name -- the legend
+# swatches in the browser (static/app.js mirrors this list).
+TAB_HEX = ["#ff7f0e", "#7f7f7f", "#2ca02c", "#1f77b4",
+           "#d62728", "#9467bd", "#8c564b", "#e377c2", "#bcbd22", "#17becf"]
+
+# results/icdlplot.py's age ramp, which the age figures in the thesis are drawn in. Age 9 is not a
+# colour of its own there -- icdlplot maps it to "tab:orange" -- so it is a note on that swatch
+# rather than an eleventh entry, and picking "age 9" and "tab:orange" cannot yield two inks.
+AGE_COLORS = {1: "#808080", 3: "#aa805a", 6: "#d57f34", 9: "#ff7f0e"}
+
+# What the per-series colour picker offers. A series colour normally follows its position in the
+# legend; an explicit pick overrides that, and is validated against this list rather than trusted,
+# so a hand-edited URL cannot push an arbitrary string into matplotlib.
+PICKER_COLORS = TAB_HEX + [c for c in AGE_COLORS.values() if c not in TAB_HEX]
+
+
+def valid_color(value):
+    """A colour from the picker, or None. Case-insensitive; unknown values are dropped."""
+    if not value:
+        return None
+    value = value.strip().lower()
+    return value if value in PICKER_COLORS else None
 
 # Render options for the request being served. A ContextVar rather than module state because
 # matplotlib's rcParams are global and FastAPI serves sync handlers on a threadpool: two
@@ -102,26 +243,32 @@ _OPTS = contextvars.ContextVar("mimolab_render_opts", default=None)
 
 
 def _opts():
-    return _OPTS.get() or {"fmt": "png", "paper": False, "size": None, "thesis": False}
+    return _OPTS.get() or {"fmt": "png", "paper": False, "size": None, "thesis": False,
+                           "exact": False}
 
 
 @contextlib.contextmanager
-def render_as(fmt="png", column=None, style="screen"):
-    """Render everything inside this block as 'fmt', optionally at a fixed column width.
+def render_as(fmt="png", column=None, style="screen", size=None):
+    """Render everything inside this block as 'fmt', optionally at a fixed size.
 
     style="thesis" additionally applies the paper typography on screen, so the PNG in the browser
-    is a preview of the PDF rather than a differently-styled cousin.
+    is a preview of the PDF rather than a differently-styled cousin. An explicit 'size' (a
+    (width, height) pair in inches) overrides the column preset.
     """
     thesis = style == "thesis"
     paper = fmt == "pdf" or thesis
-    if column:
+    exact = bool(size)
+    if size:
+        pass
+    elif column:
         size = (THESIS_SIZES if thesis else COLUMN_WIDTHS).get(column)
     else:
         size = THESIS_SIZES["single"] if thesis else None
-    token = _OPTS.set({"fmt": fmt, "paper": paper, "size": size, "thesis": thesis})
+    token = _OPTS.set({"fmt": fmt, "paper": paper, "size": size, "thesis": thesis,
+                       "exact": bool(exact)})
     try:
         if paper:
-            with plt.rc_context(PAPER_RC):
+            with plt.rc_context(paper_rc()):
                 yield
         else:
             yield
@@ -208,7 +355,7 @@ def _figure(theme, width=9.0, height=4.6):
     t = THEMES[theme]
     opts = _opts()
     size = opts["size"]
-    if size and opts.get("thesis"):
+    if size and (opts.get("thesis") or opts.get("exact")):
         # A thesis figure is placed at its final size, so both dimensions are prescribed.
         width, height = size
     elif size:
@@ -221,12 +368,19 @@ def _figure(theme, width=9.0, height=4.6):
                            layout="constrained" if _opts()["paper"] else None)
     fig.patch.set_alpha(0.0)
     ax.set_facecolor("none")
-    for side in ("top", "right"):
-        ax.spines[side].set_visible(False)
-    for side in ("left", "bottom"):
-        ax.spines[side].set_color(t["grid"])
-        ax.spines[side].set_linewidth(0.8)
-    ax.tick_params(colors=t["muted"], labelsize=8.5, length=3, width=0.8)
+    if opts["paper"]:
+        # example_plot.png is framed on all four sides at axes.linewidth, in ink rather than in
+        # the app's grey: on paper the frame is part of the figure, not a screen affordance.
+        for side in ax.spines:
+            ax.spines[side].set_color(t["ink"])
+        ax.tick_params(colors=t["ink"], length=3.5)
+    else:
+        for side in ("top", "right"):
+            ax.spines[side].set_visible(False)
+        for side in ("left", "bottom"):
+            ax.spines[side].set_color(t["grid"])
+            ax.spines[side].set_linewidth(0.8)
+        ax.tick_params(colors=t["muted"], labelsize=8.5, length=3, width=0.8)
     ax.grid(True, color=t["grid"], linewidth=0.6, alpha=0.7)
     ax.set_axisbelow(True)
     return fig, ax, t
@@ -238,7 +392,8 @@ def _emit(fig):
     if opts["fmt"] == "pdf":
         # Opaque white, not transparent: a transparent PDF dropped into a document picks up
         # whatever is behind it, and the axis labels are near-black.
-        fig.savefig(buf, format="pdf", dpi=300, facecolor="white", edgecolor="none")
+        fig.savefig(buf, format="pdf", dpi=300, facecolor="white", edgecolor="none",
+                    bbox_inches=None)
     else:
         fig.savefig(buf, format="png", transparent=True, bbox_inches="tight", pad_inches=0.25)
     plt.close(fig)
@@ -271,13 +426,26 @@ def _common_grid(series, points=200):
     return grid, stacked
 
 
+def _order_index(order):
+    """Rank a series key by its position in an explicit order; unlisted keys keep the tail."""
+    ranks = {key: i for i, key in enumerate(order or [])}
+    return lambda key: ranks.get(key, len(ranks) + 1)
+
+
 def curve(run_ids, tag, theme="light", aggregate=False, smooth=1, title=None,
           label_overrides=None, band="minmax", xlabel=None, ylabel=None, ylim=None,
-          legend_title=None, legend_loc=None):
+          legend_title=None, legend_loc=None, order=None, color_overrides=None):
     """Training curves for a set of runs.
 
     aggregate=False draws one line per run; aggregate=True collapses each experiment group
     (same date/posture/model name) to a mean with a min-max band across its seeds.
+
+    'order' is a list of series keys ('date|posture|model_name'). It fixes the order of the
+    legend -- and with it the colour each series gets, because colour follows position. Sorting
+    is stable, so anything not named keeps its place behind the named ones.
+
+    'color_overrides' maps a series key to an explicit colour, for the series where position is
+    the wrong answer -- an age ramp, or a baseline that has to stay grey across every figure.
     """
     series = []
     for run_id in run_ids:
@@ -293,8 +461,15 @@ def curve(run_ids, tag, theme="light", aggregate=False, smooth=1, title=None,
     fig, ax, t = _figure(theme)
     # A thesis figure follows results/icdlplot.py's palette; the app's own charts follow the
     # data-viz palette. Same data, two audiences.
-    colors = [_darken(c) for c in ICDL_COLORS] if thesis else t["series"]
-    bands = ICDL_COLORS if thesis else colors
+    # A thesis figure follows the tab palette; the app's own charts follow the data-viz palette.
+    # The band is the line's own colour at low alpha -- the tab colours are line inks already and
+    # need no separate pale variant.
+    colors = TAB_COLORS if thesis else t["series"]
+    color_overrides = color_overrides or {}
+
+    def ink(index, key):
+        """The colour of series 'index': its picked colour, else its position in the palette."""
+        return color_overrides.get(key) or colors[index % len(colors)]
 
     if aggregate:
         groups = {}
@@ -303,6 +478,10 @@ def curve(run_ids, tag, theme="light", aggregate=False, smooth=1, title=None,
             key = (row["date"], row["posture"], row["model_name"]) if row else (None, None, run_id)
             groups.setdefault(key, []).append((steps, vals))
         items = list(groups.items())
+        if order:
+            rank = _order_index(order)
+            items.sort(key=lambda kv: rank(_series_key(kv[0])))
+            groups = dict(items)
         names = distinguish([k[2] for k in groups])
         # A model_name can repeat across dates ('ep100' on 26-08-21 and 26-08-22) and across
         # postures ('ep100_18' prone and supine on the same day). Labelling on the name alone
@@ -352,20 +531,29 @@ def curve(run_ids, tag, theme="light", aggregate=False, smooth=1, title=None,
                 detail = (f"n={len(members)}" if key[1] in base_label
                           else f"{key[1]}, n={len(members)}")
                 label = f"{base_label} ({detail})"
+            shade = ink(i, _series_key(key))
             ax.fill_between(grid, lower, upper,
-                            color=bands[i % len(bands)], alpha=0.30 if thesis else 0.15,
-                            linewidth=0)
-            ax.plot(grid, mean, color=colors[i % len(colors)],
-                    linewidth=2.6 if thesis else 2.0, label=label, solid_capstyle="round")
+                            color=shade, alpha=0.30 if thesis else 0.15, linewidth=0)
+            # linewidth=None takes rcParams['lines.linewidth'], i.e. icdlplot's 3.0.
+            ax.plot(grid, mean, color=shade,
+                    linewidth=None if thesis else 2.0, label=label, solid_capstyle="round")
             if len(items) <= 4 and not _opts()["paper"] and not thesis:
                 ax.annotate(labels[key], xy=(grid[-1], mean[-1]),
                             xytext=(6, 0), textcoords="offset points",
-                            color=colors[i], fontsize=8, va="center", fontweight="semibold")
+                            color=shade, fontsize=8, va="center", fontweight="semibold")
         if folded:
             n = sum(len(m) for _, m in folded)
             ax.plot([], [], color=t["faint"], linewidth=2.0,
                     label=f"+{len(folded)} more groups ({n} runs) not shown")
     else:
+        keys = {}
+        for run_id, _, _ in series:
+            row = db.one("SELECT date, posture, model_name FROM runs WHERE run_id=?", (run_id,))
+            keys[run_id] = _series_key(
+                (row["date"], row["posture"], row["model_name"]) if row else (None, None, run_id))
+        if order:
+            rank = _order_index(order)
+            series.sort(key=lambda item: rank(keys[item[0]]))
         shown = series[:len(colors)]
         meta = {run_id: db.one(
             "SELECT model_name, seed_idx, posture FROM runs WHERE run_id=?", (run_id,))
@@ -379,7 +567,7 @@ def curve(run_ids, tag, theme="light", aggregate=False, smooth=1, title=None,
                 label = (label_overrides.get(run_id)
                          or f"{names.get(row['model_name'], shorten(row['model_name']))}{seed}")
             ax.plot(np.asarray(steps), _smooth(np.asarray(vals), smooth),
-                    color=colors[i % len(colors)], linewidth=2.6 if thesis else 1.8,
+                    color=ink(i, keys.get(run_id, "")), linewidth=None if thesis else 1.8,
                     label=label, solid_capstyle="round")
         if len(series) > len(shown):
             ax.plot([], [], color=t["faint"], linewidth=1.8,
@@ -395,8 +583,8 @@ def curve(run_ids, tag, theme="light", aggregate=False, smooth=1, title=None,
     if ylim:
         ax.set_ylim(*ylim)
     if thesis:
-        # The reference figure's grid: dashed, faint, behind the data.
-        ax.grid(True, linestyle="--", alpha=0.5, color=t["grid"], linewidth=0.7)
+        # The reference figure's grid: dotted, faint, behind the data.
+        ax.grid(True, linestyle=":", alpha=0.8, color=t["faint"], linewidth=0.7)
         ax.tick_params(colors=ink)
     ax.margins(x=0.02)
     # The italic caption is on-screen guidance about how to read the metric. A figure in a
@@ -420,30 +608,43 @@ def curve(run_ids, tag, theme="light", aggregate=False, smooth=1, title=None,
         ax.text(0.998, 0.95, "roll threshold 0.95 ", transform=ax.get_yaxis_transform(),
                 color=t["muted"], fontsize=8, va="bottom", ha="right")
 
-    # Legend below the axes, never over the data.
+    # Legend below the axes by default, never over the data -- but an explicit placement wins in
+    # every style. legend_loc used to be read on the thesis path alone, so choosing "upper left"
+    # for a screen chart or a plain PDF export silently kept the legend under the axes and the
+    # control looked broken. Same for the legend title, which now applies wherever the legend goes.
     handles, legend_labels = ax.get_legend_handles_labels()
     if handles:
-        if thesis:
-            # Inside the axes with a frame, like the reference figure: at 3.4 in a legend below
-            # the axes eats a third of the height.
+        placed = bool(legend_loc) and legend_loc != "best"
+        if thesis or placed:
+            # Inside the axes, like example_plot.png: at 3.4 in a legend below the axes eats a
+            # third of the height. Frameless, as in the reference -- the placement is the user's
+            # choice, so it goes where the data is not.
             legend = ax.legend(handles, legend_labels, loc=legend_loc or "best",
-                               title=legend_title, framealpha=0.85, fancybox=False,
+                               title=legend_title, frameon=False,
                                borderpad=0.4, labelspacing=0.3, handlelength=1.6)
-            legend.get_frame().set_linewidth(0.6)
+            # Constrained layout counts an in-axes legend as content and shrinks the axes to fit
+            # it, so a long legend at single-column width squeezes the plot into a third of the
+            # page. In the reference figure the legend sits *over* the axes and the data area is
+            # full width -- which is the whole point of placing it inside.
+            legend.set_in_layout(False)
         elif paper:
             # "outside" is what makes constrained layout *reserve* room for the legend. With the
             # axes-anchored version it lands on top of the x-axis label at column width.
             # A single column stacks the entries; at double width they fit side by side.
             wide = (_opts()["size"] or (7.0,))[0] >= 6.0
             legend = fig.legend(handles, legend_labels, loc="outside lower center", frameon=False,
+                                title=legend_title,
                                 ncols=min(3, len(handles)) if wide else 1,
                                 handlelength=1.4, columnspacing=1.0)
         else:
             legend = ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.16), fontsize=8.2,
-                               frameon=False, ncols=min(4, len(handles)), handlelength=1.6,
+                               frameon=False, title=legend_title,
+                               ncols=min(4, len(handles)), handlelength=1.6,
                                columnspacing=1.6, borderaxespad=0)
         for text in legend.get_texts():
             text.set_color(ink if thesis else t["muted"])
+        if legend.get_title() is not None:
+            legend.get_title().set_color(ink if thesis else t["ink"])
     return _emit(fig)
 
 

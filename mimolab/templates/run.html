@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "_macros.html" import rho_meter, progress_meter with context %}
+{% from "_macros.html" import rho_meter, progress_meter, actuation_chip with context %}
 {% block title %}{{ run.model_name }} &middot; MIMo Lab{% endblock %}
 
 {% block body %}
@@ -13,6 +13,7 @@
     <div class="actions">
       <span class="chip {{ run.posture }}">{{ run.posture }}</span>
       <span class="chip {{ run.state }}">{{ run.state }}</span>
+      {{ actuation_chip(run.use_muscle) }}
       {% if run.model_name %}
       <a class="btn sm" href="/experiment?posture={{ run.posture|urlencode }}&amp;name={{ run.model_name|urlencode }}{% if run.date %}&amp;date={{ run.date }}{% endif %}">Experiment</a>
       {% endif %}

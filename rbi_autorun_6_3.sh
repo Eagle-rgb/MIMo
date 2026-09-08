@@ -26,21 +26,16 @@ for i in $(seq 0 5); do
 		"--train_for=1000000" \
 		"--save_every=1000000" \
 		"--roll_over_starting_position=prone" \
-		"--algorithm=SAC" \
-		"--her" \
-		"--goal_achievement_function=gravity" \
-		"--gravity_goal_eps=0.15" \
-		"--sparse_reward" \
+		"--algorithm=PPO" \
+		"--missing_limb=leftside" \
 		"--eval_every=25000" \
 		"--eval_episodes=20" \
-		"--train_freq=2" \
-		"--pen_factor=0.02" \
-		"--no_done_active" \
-		"--episode_steps=200" \
 		"--roll_over_model_path_auto" \
-		"--save_model=${MODEL_NAME}_run_$((i))" \
+		"--save_model=${MODEL_NAME}_run_${i}" \
+		"--pbrs" \
 		"--morph_age=9" \
 		"--physio_age=9" \
+		"--pbrs_w=100" \
 		"--lr=0.0003" &
 done
 

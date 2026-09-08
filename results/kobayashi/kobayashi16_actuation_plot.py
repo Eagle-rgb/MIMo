@@ -42,7 +42,7 @@ if __name__ == '__main__':
             act_key = act_keys[j]
             act_val = df_ep[act_key].values
             np.save(output_dir / f'actuation_y_{pattern_letters[i]}_{labels[j]}.npy', act_val)
-            ax.plot(x, act_val, label=labels[j], color=icdlplot.PLT_COLORS[j])
+            ax.plot(x, act_val, label=labels[j], color=icdlplot.COLORS[j])
             ax.set_title(f"Pattern {pattern_letters[i]}")
 
         if i != 0 and i != 3:

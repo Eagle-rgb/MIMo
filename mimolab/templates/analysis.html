@@ -48,8 +48,8 @@
       </select>
       <label class="inline" for="column">Width</label>
       <select id="column">
-        <option value="double">2 columns &middot; 7.0 in</option>
-        <option value="single">1 column &middot; 3.5 in</option>
+        <option value="double">2 columns &middot; 5.6 in</option>
+        <option value="single">1 column &middot; 2.8 in</option>
       </select>
       <a class="btn sm" id="exportmain" download href="#"
          title="Vector PDF at exactly the chosen column width, so \includegraphics needs no scaling">Export PDF</a>
@@ -78,6 +78,18 @@
           </select>
         </div>
         <div class="field">
+          <label for="legendtitle">Legend title</label>
+          <input id="legendtitle" type="text" placeholder="none">
+        </div>
+        <div class="field">
+          <label for="figw">Width [in]</label>
+          <input id="figw" type="number" step="0.1" min="1.5" max="20" placeholder="column">
+        </div>
+        <div class="field">
+          <label for="figh">Height [in]</label>
+          <input id="figh" type="number" step="0.1" min="1.5" max="20" placeholder="column">
+        </div>
+        <div class="field">
           <label for="legendloc">Legend</label>
           <select id="legendloc">
             <option value="best">auto</option>
@@ -90,12 +102,21 @@
       </div>
 
       {% if series %}
+      <p class="hint">Order is legend order, and colour follows position &mdash; the first row is
+        orange, the second grey, then green and blue. Click a swatch to pin a colour instead.</p>
       <table class="runs labeltable">
-        <thead><tr><th style="width:1.2rem"></th><th>Series</th><th>Legend label</th></tr></thead>
-        <tbody>
+        <thead><tr><th style="width:1.2rem"></th><th style="width:3.4rem">Order</th>
+          <th>Series</th><th>Legend label</th></tr></thead>
+        <tbody id="labelrows">
         {% for sr in series %}
-          <tr>
-            <td><i class="swatch" data-swatch="{{ loop.index0 }}"></i></td>
+          <tr data-series-row="{{ sr.key }}">
+            <td><button type="button" class="swatch" data-swatch="{{ loop.index0 }}"
+                        aria-label="Colour of {{ sr.model_name }}"
+                        title="Pick a colour for this series"></button></td>
+            <td class="nudge">
+              <button type="button" data-move="up" aria-label="Move up" title="Move up">&uarr;</button>
+              <button type="button" data-move="down" aria-label="Move down" title="Move down">&darr;</button>
+            </td>
             <td class="runmeta">{{ sr.model_name }} <span style="opacity:.6">{{ sr.posture }} &middot; {{ sr.date or '' }} &middot; n={{ sr.n }}</span></td>
             <td><input class="labelin" type="text" data-series="{{ sr.key }}"
                        placeholder="{{ sr.model_name }}"></td>
@@ -122,8 +143,8 @@
       </select>
       <label class="inline" for="barcolumn">Width</label>
       <select id="barcolumn">
-        <option value="single">1 column &middot; 3.5 in</option>
-        <option value="double">2 columns &middot; 7.0 in</option>
+        <option value="single">1 column &middot; 2.8 in</option>
+        <option value="double">2 columns &middot; 5.6 in</option>
       </select>
       <a class="btn sm" id="exportbars" download href="#">Export PDF</a>
     </div>

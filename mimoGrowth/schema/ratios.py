@@ -149,6 +149,13 @@ RATIOS = {
     "BODY_25:SmallToe_x": 0.010 / 0.035,   # foot length
     "BODY_25:Toes_y": 0.012 / 0.025,   # foot width
 
+    # These ratios describe the positions of the Kobayashi et al. (2016)
+    # marker sites relative to the geom sizes / body positions they sit on.
+    # See SCHEMA_SITES for how each one is anchored.
+    "KOBAYASHI:Wrist_y": 1.09,   # lower arm radius
+    "KOBAYASHI:Wrist_z": 0.8,    # hand body z-position
+    "KOBAYASHI:Ankle_z": 0.79,   # foot body z-position
+
 }
 
 RATIOS_V2 = {

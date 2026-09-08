@@ -6,6 +6,7 @@ happen here -- a posture read from the wrong place, a flag that will not round-t
 data.yml, a guard rail that stopped guarding.
 """
 
+import json
 import re
 import sys
 import traceback
@@ -190,6 +191,35 @@ def _goal_fn():
     return ", ".join(f"{k} {v}" for k, v in sorted(counts.items(), key=lambda kv: -kv[1]))
 
 
+@check("the actuation model is recorded, filterable and labelled on both states")
+def _actuation():
+    """--use_muscle changes the action space, the observation and the effort term.
+
+    A run reloaded under the wrong actuation model does not match its own weights, so it is worth
+    a chip of its own. Both states are labelled: use_muscle only entered data.yml on 02.09.2026,
+    so a missing chip would be ambiguous between 'spring damper' and 'not recorded'.
+    """
+    counts = {v: n for v, n in queries.facets({})["use_muscle"]}
+    assert None not in counts, "use_muscle left null -- the indexer did not coerce it"
+    _, muscle = queries.search({"use_muscle": "1"})
+    _, spring = queries.search({"use_muscle": "0"})
+    _, total = queries.search({})
+    assert muscle + spring == total, (muscle, spring, total)
+
+    from fastapi.testclient import TestClient
+    from . import app as appmod
+    client = TestClient(appmod.app)
+    # Match the chip's class, not its text: the sidebar radio for this very filter also says
+    # "muscle", so a bare text search passes on a listing holding no muscle run at all.
+    body = client.get("/", params={"use_muscle": "1", "group": "0"}).text
+    assert 'class="chip muscle"' in body, "no muscle chip on a muscle-only listing"
+    assert 'class="chip muted spring"' not in body, "spring chip on a muscle-only listing"
+    body = client.get("/", params={"use_muscle": "0", "group": "0"}).text
+    assert 'class="chip muted spring"' in body and 'class="chip muscle"' not in body
+
+    return f"{muscle} muscle, {spring} spring damper"
+
+
 @check("every page and chart endpoint actually responds")
 def _routes():
     """Exercise the HTTP surface, not just the functions behind it.
@@ -330,7 +360,7 @@ def _pdf_export():
     rows, _ = queries.search({}, limit=12)
     run_ids = [r["run_id"] for r in rows]
 
-    for column, inches in (("single", 3.5), ("double", 7.0)):
+    for column, (inches, _height) in plots.COLUMN_WIDTHS.items():
         with plots.render_as("pdf", column):
             data = plots.curve(run_ids, indexer.HEADLINE_TAG, theme="light", aggregate=True)
         assert data.startswith(b"%PDF"), "not a PDF"
@@ -351,7 +381,8 @@ def _pdf_export():
     # PNG rendering must be untouched by all of this.
     png = plots.curve(run_ids, indexer.HEADLINE_TAG)
     assert png.startswith(b"\x89PNG"), "PNG output broke"
-    return "3.5 in and 7.0 in pages, TrueType embedded, PNG unaffected"
+    return (", ".join(f"{c} {w} in" for c, (w, _) in plots.COLUMN_WIDTHS.items())
+            + "; TrueType embedded, PNG unaffected")
 
 
 @check("thesis figures are placed at their final size with the given labels")
@@ -387,6 +418,289 @@ def _thesis():
             f"{column}: {width:.0f}x{height:.0f} pt, expected {size[0] * 72:.0f}x{size[1] * 72:.0f}"
     return (f"single {plots.THESIS_SIZES['single']} in, double {plots.THESIS_SIZES['double']} in; "
             f"{len(overrides)} labels applied")
+
+
+@check("the legend goes where it is told, in every style")
+def _legend():
+    """The control used to be read on the thesis path alone.
+
+    Choosing "upper left" for a screen chart or a plain PDF export left the legend below the axes
+    and looked like a broken setting. The legend title had the same gap.
+    """
+    rows, _ = queries.search({}, limit=12)
+    run_ids = [r["run_id"] for r in rows]
+
+    captured = {}
+    real_emit = plots._emit
+
+    def spy(fig):
+        legend = fig.axes[0].get_legend() or (fig.legends[0] if fig.legends else None)
+        captured["loc"] = None if legend is None else legend._get_loc()
+        captured["title"] = None if legend is None else legend.get_title().get_text()
+        captured["in_axes"] = legend in fig.axes[0].get_children() if legend else False
+        return real_emit(fig)
+
+    seen = {}
+    try:
+        plots._emit = spy
+        for style, fmt in (("screen", "png"), ("screen", "pdf"), ("thesis", "pdf")):
+            with plots.render_as(fmt, "single" if fmt == "pdf" else None, style=style):
+                plots.curve(run_ids, indexer.HEADLINE_TAG, aggregate=True,
+                            legend_title="Learning rate", legend_loc="upper left")
+            seen[f"{style}/{fmt}"] = dict(captured)
+    finally:
+        plots._emit = real_emit
+
+    # Legend.codes: 2 is "upper left".
+    for name, got in seen.items():
+        assert got["in_axes"], f"{name}: legend not placed inside the axes"
+        assert got["loc"] == 2, f"{name}: loc {got['loc']}, expected 2 (upper left)"
+        assert got["title"] == "Learning rate", f"{name}: no legend title"
+
+    # Without an explicit placement the default is unchanged: below/outside, never over the data.
+    with plots.render_as("png", None, style="screen"):
+        try:
+            plots._emit = spy
+            plots.curve(run_ids, indexer.HEADLINE_TAG, aggregate=True)
+        finally:
+            plots._emit = real_emit
+    assert captured["loc"] != 2, "an unset placement should keep the legend below the axes"
+
+    return f"upper left honoured in {', '.join(sorted(seen))}"
+
+
+@check("thesis figures use the icdlplot style and the tab palette")
+def _tab_palette():
+    import matplotlib.colors as mcolors
+    assert plots.TAB_COLORS[:4] == ["tab:orange", "tab:gray", "tab:green", "tab:blue"], \
+        "the first four series are not orange / grey / green / blue"
+    for name, hexval in zip(plots.TAB_COLORS, plots.TAB_HEX):
+        assert mcolors.to_hex(name) == hexval, f"{name} is not {hexval}"
+    # static/app.js paints the label editor's swatches from its own copy of this list; if the two
+    # drift, swatch i names a different line than the chart draws.
+    js = (Path(__file__).resolve().parent / "static" / "app.js").read_text()
+    block = js.split("THESIS_COLORS =", 1)[1].split("];", 1)[0]
+    assert all(h in block for h in plots.TAB_HEX), "app.js swatches do not match TAB_HEX"
+
+    # The style is icdlplot's, executed from the file rather than restated, so the two cannot
+    # drift -- editing lines.linewidth there must reach the app with no edit here.
+    icdl = plots.ICDL_PATH.read_text()
+    rc = plots.paper_rc()
+    for key in ("lines.linewidth", "mathtext.fontset", "axes.titlesize", "legend.fontsize"):
+        assert key in icdl and key in rc, f"{key} missing from the paper style"
+    source = float(re.search(r'"lines\.linewidth":\s*([\d.]+)', icdl).group(1))
+    assert rc["lines.linewidth"] == source, \
+        f"icdlplot.py says {source}, the app renders at {rc['lines.linewidth']}"
+    assert "savefig.bbox" not in rc, \
+        "tight bbox would resize the page and break the column width"
+    assert rc["pdf.fonttype"] == 42, "Type 3 fonts would reach the thesis template"
+    return f"{len(plots.TAB_COLORS)} tab colours, lines.linewidth {rc['lines.linewidth']}"
+
+
+@check("a custom figure size overrides the column, within limits")
+def _custom_size():
+    rows, _ = queries.search({}, limit=8)
+    run_ids = [r["run_id"] for r in rows]
+    assert plots.clamp_size(None, None) is None, "no size given should stay on the column preset"
+    lo, hi = plots.SIZE_LIMITS
+    assert plots.clamp_size(999, 0.01) == (hi, lo), "size limits not enforced"
+    assert plots.clamp_size(4.0, None)[0] == 4.0, "a width alone should imply a height"
+
+    size = (4.6, 2.3)
+    with plots.render_as("pdf", "single", style="thesis", size=size):
+        data = plots.curve(run_ids, indexer.HEADLINE_TAG, aggregate=True)
+    box = [float(v) for v in re.search(rb"/MediaBox\s*\[([\d.\s-]+)\]", data).group(1).split()]
+    assert abs(box[2] - size[0] * 72) < 1.5 and abs(box[3] - size[1] * 72) < 1.5, \
+        f"custom size ignored: {box[2] / 72:.2f} x {box[3] / 72:.2f} in"
+    return f"{size[0]} x {size[1]} in overrides the single-column preset {plots.THESIS_SIZES['single']}"
+
+
+@check("the legend order follows the label editor")
+def _legend_order():
+    rows, _ = queries.search({}, limit=40)
+    run_ids = [r["run_id"] for r in rows]
+    series = queries.series_of(run_ids)
+    if len(series) < 3:
+        return "fewer than 3 series in the corpus -- nothing to reorder"
+    keys = [s["key"] for s in series]
+
+    captured = {}
+    real_emit = plots._emit
+
+    def spy(fig):
+        legend = fig.axes[0].get_legend()
+        captured["labels"] = [t.get_text() for t in legend.get_texts()] if legend else []
+        return real_emit(fig)
+
+    # Label every series with its own key, so the legend text says which series drew which line.
+    overrides = {k: k for k in keys}
+    wanted = list(reversed(keys))
+    try:
+        plots._emit = spy
+        with plots.render_as("png", None, style="thesis"):
+            plots.curve(run_ids, indexer.HEADLINE_TAG, aggregate=True,
+                        label_overrides=overrides, order=wanted)
+        reordered = list(captured["labels"])
+        with plots.render_as("png", None, style="thesis"):
+            plots.curve(run_ids, indexer.HEADLINE_TAG, aggregate=True,
+                        label_overrides=overrides)
+        default = list(captured["labels"])
+    finally:
+        plots._emit = real_emit
+
+    drawn = [l for l in reordered if l in keys]
+    assert drawn == [k for k in wanted if k in drawn], \
+        f"legend order ignored: {drawn[:3]} against {wanted[:3]}"
+    assert default != reordered, "reordering changed nothing"
+    return f"{len(drawn)} series reversed; colour follows position"
+
+
+@check("a series colour can be pinned, and only from the picker's own list")
+def _pinned_colors():
+    import matplotlib.colors as mcolors
+    assert plots.AGE_COLORS[9] == plots.TAB_HEX[0], \
+        "icdlplot maps age 9 to tab:orange -- a separate entry would give one age two inks"
+    assert plots.valid_color("#AA805A") == "#aa805a", "the picker's own colours must pass"
+    for junk in ("red", "#123456", "'; rm -rf", "", None):
+        assert plots.valid_color(junk) is None, f"{junk!r} should not reach matplotlib"
+
+    rows, _ = queries.search({}, limit=40)
+    run_ids = [r["run_id"] for r in rows]
+    series = queries.series_of(run_ids)
+    if len(series) < 2:
+        return "fewer than 2 series -- nothing to pin"
+    pinned = {series[0]["key"]: "#aa805a", series[1]["key"]: "#808080"}
+
+    captured = {}
+    real_emit = plots._emit
+
+    def spy(fig):
+        captured["lines"] = [mcolors.to_hex(line.get_color())
+                             for line in fig.axes[0].get_lines()
+                             if line.get_label() and not line.get_label().startswith("_")]
+        return real_emit(fig)
+
+    try:
+        plots._emit = spy
+        with plots.render_as("png", None, style="thesis"):
+            plots.curve(run_ids, indexer.HEADLINE_TAG, aggregate=True, color_overrides=pinned)
+        drawn = list(captured["lines"])
+        with plots.render_as("png", None, style="thesis"):
+            plots.curve(run_ids, indexer.HEADLINE_TAG, aggregate=True)
+        default = list(captured["lines"])
+    finally:
+        plots._emit = real_emit
+
+    assert drawn[:2] == ["#aa805a", "#808080"], f"pinned colours ignored: {drawn[:2]}"
+    # Everything not pinned still follows its position.
+    assert drawn[2:] == default[2:], "pinning one series moved the others"
+    return "age 1 and age 3 pinned; the rest still follow position"
+
+
+@check("the static bundle is versioned, so a restart cannot serve stale JS")
+def _asset_version():
+    from fastapi.testclient import TestClient
+    from . import app as appmod
+    client = TestClient(appmod.app)
+    body = client.get("/").text
+    version = appmod.asset_version()
+    assert int(version) > 0, "no mtime for the static bundle"
+    assert f"/static/app.js?v={version}" in body, "app.js is not cache-busted"
+    assert f"/static/app.css?v={version}" in body, "app.css is not cache-busted"
+    return f"v={version}"
+
+
+@check("the figure style is editable, validated and persistent")
+def _style_settings():
+    """rcParams from the Settings dialog, on top of whatever icdlplot.py currently says."""
+    from fastapi.testclient import TestClient
+    from . import app as appmod
+    client = TestClient(appmod.app)
+
+    saved = plots.rc_overrides_text()          # never clobber the real style
+    try:
+        bad = client.post("/api/style", data={"text": "lines.linewidth: abc\n"
+                                                      "nosuch.param: 3\n"
+                                                      "savefig.bbox: tight\n"})
+        assert bad.status_code == 422, f"invalid rcParams accepted ({bad.status_code})"
+        reasons = " | ".join(bad.json()["errors"])
+        for expected in ("not an rcParam", "Could not convert", "not settable here"):
+            assert expected in reasons, f"missing complaint {expected!r} in {reasons}"
+        # Nothing is written when anything is wrong: a half-saved style is worse than none.
+        assert plots.rc_overrides_text() == saved, "an invalid save still touched the file"
+
+        ok = client.post("/api/style", data={"text": "# note\nlines.linewidth: 2.4\n"})
+        assert ok.status_code == 200, ok.text
+        assert plots.paper_rc()["lines.linewidth"] == 2.4, "the override did not take"
+        assert "# note" in plots.rc_overrides_text(), "comments should survive a save"
+
+        widths = []
+        real_emit = plots._emit
+
+        def spy(fig):
+            lines = [l for l in fig.axes[0].get_lines() if not l.get_label().startswith("_")]
+            widths.append(lines[0].get_linewidth() if lines else None)
+            return real_emit(fig)
+
+        rows, _ = queries.search({}, limit=6)
+        run_ids = [r["run_id"] for r in rows]
+        try:
+            plots._emit = spy
+            with plots.render_as("pdf", "single", style="thesis"):
+                plots.curve(run_ids, indexer.HEADLINE_TAG, aggregate=True)
+            plots.curve(run_ids, indexer.HEADLINE_TAG, aggregate=True)
+        finally:
+            plots._emit = real_emit
+        assert widths[0] == 2.4, f"the exported figure ignored the override ({widths[0]})"
+        # The screen charts are a different instrument and must not move with the paper style.
+        assert widths[1] != 2.4, "the override leaked into the on-screen chart"
+    finally:
+        if saved:
+            SETTINGS.rc_path.write_text(saved)
+        elif SETTINGS.rc_path.exists():
+            SETTINGS.rc_path.unlink()
+
+    return "invalid input refused, valid input applied to the PDF only"
+
+
+@check("laterality is counted over the successful seeds only")
+def _laterality():
+    """n_left / n_right for the seeds above the success line, with a placeholder when unknown.
+
+    The direction only entered eval_rollover.py on 08.09.2026, so every evaluation stored before
+    that carries none -- the tile has to say "---" rather than a confident 0 / 0.
+    """
+    def payload(left, right):
+        return json.dumps({"left": left, "right": right})
+
+    rows = [
+        {"rolled": 1.00, "raw": payload(40, 0)},    # successful, always left
+        {"rolled": 0.95, "raw": payload(38, 0)},    # successful, always left
+        {"rolled": 0.80, "raw": payload(0, 32)},    # successful, always right
+        {"rolled": 0.90, "raw": payload(20, 16)},   # successful, both ways
+        {"rolled": 0.50, "raw": payload(0, 20)},    # NOT successful -- must not be counted
+        {"rolled": 0.99, "raw": json.dumps({})},    # successful, no direction recorded
+    ]
+    band = queries.laterality_band(rows, 0.75)
+    assert band["side_successful"] == 5, band
+    assert band["side_known"] == 4, "the run without a direction should not be counted as a side"
+    assert (band["side_left"], band["side_right"], band["side_ambiguous"]) == (2, 1, 1), band
+
+    none_recorded = queries.laterality_band(
+        [{"rolled": 0.9, "raw": None}, {"rolled": 0.1, "raw": None}], 0.75)
+    assert none_recorded["side_successful"] == 1 and none_recorded["side_known"] == 0, \
+        "an evaluation with no direction must read as unknown, not as zero"
+
+    # eval_rollover.py must agree, because the terminal summary and the page show the same number.
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    from mimoEnv.eval_rollover import _committed_side
+    assert _committed_side({"left": 40, "right": 0}) == "left"
+    assert _committed_side({"left": 0, "right": 40}) == "right"
+    assert _committed_side({"left": 3, "right": 1}) == "mixed"
+    assert _committed_side({"left": 0, "right": 0}) is None
+    assert _committed_side({}) is None
+
+    return "2 left / 1 right / 1 ambiguous of 5 successful, 1 without a direction"
 
 
 @check("stored --group payloads feed the bar chart")
@@ -477,9 +791,16 @@ def _offline():
                 assert "offline" in str(exc), exc
             else:
                 raise AssertionError(f"{label} was not blocked in offline mode")
+
+        from fastapi.testclient import TestClient
+        from . import app as appmod
+        before = plots.rc_overrides_text()
+        response = TestClient(appmod.app).post("/api/style", data={"text": "lines.linewidth: 9"})
+        assert response.status_code == 400, "the style was writable in offline mode"
+        assert plots.rc_overrides_text() == before, "offline mode still touched the style file"
     finally:
         SETTINGS.offline = False
-    return "single and group evaluation refuse to run"
+    return "evaluation and the figure style refuse to write"
 
 
 def main():

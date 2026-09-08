@@ -84,9 +84,9 @@ if __name__ == '__main__':
     width = 0.5
 
     colors = (
-        icdlplot.PLT_COLORS[0],
-        icdlplot.PLT_COLORS[2],
-        icdlplot.PLT_COLORS[1]
+        icdlplot.COLORS[0],
+        icdlplot.COLORS[2],
+        icdlplot.COLORS[1]
     )
 
     indx = 0

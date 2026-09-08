@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "_macros.html" import rho_meter with context %}
+{% from "_macros.html" import rho_meter, actuation_chip with context %}
 {% block title %}{{ exp.model_name }} &middot; MIMo Lab{% endblock %}
 
 {% block body %}
@@ -11,6 +11,7 @@
       <p class="sub">
         <span class="chip {{ exp.posture }}">{{ exp.posture }}</span>
         <span class="chip muted">{{ exp.algorithm or '?' }}</span>
+        {{ actuation_chip(exp.use_muscle) }}
         {% if exp.her %}<span class="chip ok">her</span>{% endif %}
         <span class="chip muted">{{ exp.reward_shape }}</span>
         {% if exp.goal_fn and exp.goal_fn != 'cos' %}<span class="chip goalfn">{{ exp.goal_fn }}</span>{% endif %}
@@ -89,6 +90,20 @@
       <div class="stat"><b>{{ '%.3f'|format(summary.rho_mean) }}</b><span>mean <span class="caseless">&rho;</span></span></div>
       <div class="stat"><b>{{ summary.steps_mean|round|int if summary.steps_mean else '--' }}</b><span>steps to roll</span></div>
       <div class="stat"><b>{{ summary.band_successful_90 }} / {{ summary.band_not_successful_10 }}</b><span>&gt;90% / &lt;10%</span></div>
+      {# Laterality of the successful seeds only: below the success line a run rolls a handful of
+         times, so "always left" would say nothing about it. Ambiguous should never happen -- it
+         gets a third number only when it does, rather than a column that is always 0. #}
+      {% if summary.side_successful %}
+      <div class="stat" title="{{ summary.side_known }} of {{ summary.side_successful }} successful seeds carry a roll direction. eval_rollover.py records it since 08.09.2026; older evaluations do not, so re-evaluate to fill this in.">
+        {% if not summary.side_known %}
+          <b>&mdash;&mdash;&mdash;</b><span>left / right</span>
+        {% elif summary.side_ambiguous %}
+          <b>{{ summary.side_left }} / {{ summary.side_right }} / {{ summary.side_ambiguous }}</b><span>left / right / ambiguous</span>
+        {% else %}
+          <b>{{ summary.side_left }} / {{ summary.side_right }}</b><span>left / right</span>
+        {% endif %}
+      </div>
+      {% endif %}
     </div>
   </div>
   {% endif %}

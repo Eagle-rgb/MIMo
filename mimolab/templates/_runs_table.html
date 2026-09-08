@@ -1,4 +1,4 @@
-{% from "_macros.html" import rho_meter, progress_meter, sort_link with context %}
+{% from "_macros.html" import rho_meter, progress_meter, sort_link, actuation_chip with context %}
 <div class="toolbar">
   <span class="count">{{ total }} run{{ '' if total == 1 else 's' }}{% if total > runs|length %} &mdash; showing {{ runs|length }}{% endif %}</span>
   <span class="spacer" style="flex:1"></span>
@@ -40,6 +40,7 @@
       <td>
         <span class="chip {{ r.posture }}">{{ r.posture }}</span>
         <span class="chip muted">{{ r.algorithm or '?' }}</span>
+        {{ actuation_chip(r.use_muscle) }}
         {% if r.her %}<span class="chip ok">her</span>{% endif %}
         <span class="chip muted">{{ r.reward_shape }}</span>
         {# 'cos' is the default and would be on almost every row; only the exceptions are worth ink. #}

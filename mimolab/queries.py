@@ -10,7 +10,7 @@ from . import db
 TEXT_FILTERS = ["posture", "algorithm", "reward_shape", "goal_fn", "collection", "date",
                 "lr_schedule", "state"]
 BOOL_FILTERS = ["her", "sparse_reward", "pbrs", "goal_curriculum", "no_done_active",
-                "isr", "side_lying"]
+                "isr", "side_lying", "use_muscle"]
 INT_FILTERS = ["morph_age", "physio_age", "episode_steps"]
 
 # Quick date filters. Dates are stored as 'yy-mm-dd', so lexicographic order is chronological
@@ -206,7 +206,7 @@ def groups(params, limit=200):
     where, binds = build_where(params)
     rows = db.query(f"""
         SELECT date, posture, model_name, algorithm, reward_shape, her, goal_fn,
-               morph_age, physio_age, episode_steps, collection,
+               morph_age, physio_age, episode_steps, collection, use_muscle,
                COUNT(*)        AS n_seeds,
                AVG(best_rho)   AS rho_mean,
                MAX(best_rho)   AS rho_best,
@@ -302,6 +302,7 @@ def experiment(date, posture, model_name):
         "reward_shape": runs[0].get("reward_shape"),
         "goal_fn": runs[0].get("goal_fn"),
         "her": runs[0].get("her"),
+        "use_muscle": runs[0].get("use_muscle"),
         "collection": runs[0].get("collection"),
         "n_seeds": len(runs),
         "checkpoints": sorted({c for r in runs for c in r["checkpoint_list"]}),
@@ -375,6 +376,7 @@ def group_eval_summary(run_ids, threshold=0.75):
         return None
     rolled = [r["rolled"] for r in rows]
     steps = [r["steps_mean"] for r in rows if r["steps_mean"] is not None]
+
     return {
         "rows": rows,
         "runs": len(rows),
@@ -386,6 +388,41 @@ def group_eval_summary(run_ids, threshold=0.75):
         "steps_mean": (sum(steps) / len(steps)) if steps else None,
         "band_successful_90": sum(1 for v in rolled if v > 0.9),
         "band_not_successful_10": sum(1 for v in rolled if v < 0.1),
+        **laterality_band(rows, threshold),
+    }
+
+
+def laterality_band(rows, threshold):
+    """How many *successful* seeds committed to one side, per run rather than per episode.
+
+    Only successful runs are counted: below the success line a run rolls a handful of times, so
+    "it always went left" says nothing about it, and pooling it with the rest turns a clean result
+    into a muddy one.
+
+    The direction is read out of the stored payload rather than a column of its own, because
+    eval_rollover.py only began recording it on 08.09.2026 -- most stored evaluations carry none,
+    and 'side_known' is what lets the page say so instead of printing a confident 0 / 0.
+    """
+    sides, n_successful = [], 0
+    for row in rows:
+        if (row["rolled"] or 0) <= threshold:
+            continue
+        n_successful += 1
+        raw = row.get("raw") if isinstance(row, dict) else row["raw"]
+        try:
+            payload = json.loads(raw or "{}")
+        except (TypeError, ValueError):
+            continue
+        left, right = payload.get("left"), payload.get("right")
+        if left is None or right is None or left + right == 0:
+            continue
+        sides.append("left" if right == 0 else "right" if left == 0 else "mixed")
+    return {
+        "side_successful": n_successful,
+        "side_known": len(sides),
+        "side_left": sides.count("left"),
+        "side_right": sides.count("right"),
+        "side_ambiguous": sides.count("mixed"),
     }
 
 

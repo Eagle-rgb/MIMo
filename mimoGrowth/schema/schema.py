@@ -589,6 +589,78 @@ SCHEMA_SITES = {
     "BODY_25:RHeel": {
         "pos": [neg(mul(ref("geoms", "geom:left_foot2", "size", 0)), RATIOS["BODY_25:Heel_x"]), 0,0]
     },
+
+    # === KOBAYASHI ===
+    # Marker sites for the limb-velocity comparison against Kobayashi et al.
+    # (2016), see results/kobayashi/. Each one is anchored to the geom or body
+    # that carries it, so they grow with MIMo instead of staying at the sizes
+    # of the stock (~18 month old) model.
+    #
+    # Only the left elements of the schema are stored, so every reference here
+    # uses the left counterpart of the body part the site sits on. That is
+    # exact: mirroring copies geom sizes verbatim and only negates the y
+    # component of body positions, which none of these references reads.
+
+    # On the torso, at the height/depth of the upper back capsule radius.
+    "KOBAYASHI_Torso": {
+        "pos": [
+            ref("geoms", "ub1", "size", 0),
+            0.,
+            ref("geoms", "ub1", "size", 0)
+        ]
+    },
+
+    # In the lower arm, at the wrist: the hand body sits at the end of the
+    # forearm, and the site is offset sideways by the forearm radius.
+    "KOBAYASHI_RWrist": {
+        "pos": [
+            0.,
+            mul(
+                ref("geoms", "left_larm", "size", 0),
+                RATIOS["KOBAYASHI:Wrist_y"]
+            ),
+            mul(
+                ref("bodies", "left_hand", "pos", 2),
+                RATIOS["KOBAYASHI:Wrist_z"]
+            )
+        ]
+    },
+    "KOBAYASHI_LWrist": {
+        "pos": [
+            0.,
+            neg(mul(
+                ref("geoms", "left_larm", "size", 0),
+                RATIOS["KOBAYASHI:Wrist_y"]
+            )),
+            mul(
+                ref("bodies", "left_hand", "pos", 2),
+                RATIOS["KOBAYASHI:Wrist_z"]
+            )
+        ]
+    },
+
+    # In the lower leg, at the ankle: forward by the shank radius and down
+    # towards the foot body, which sits at the sole.
+    "KOBAYASHI_RAnkle": {
+        "pos": [
+            ref("geoms", "geom:left_lower_leg2", "size", 0),
+            0.,
+            mul(
+                ref("bodies", "left_foot", "pos", 2),
+                RATIOS["KOBAYASHI:Ankle_z"]
+            )
+        ]
+    },
+    "KOBAYASHI_LAnkle": {
+        "pos": [
+            ref("geoms", "geom:left_lower_leg2", "size", 0),
+            0.,
+            mul(
+                ref("bodies", "left_foot", "pos", 2),
+                RATIOS["KOBAYASHI:Ankle_z"]
+            )
+        ]
+    },
 }
 
 

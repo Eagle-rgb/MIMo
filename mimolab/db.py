@@ -48,6 +48,7 @@ CREATE TABLE IF NOT EXISTS runs (
     obs_noise         REAL,
     intrinsic_goal    TEXT,
     proprio_config    TEXT,
+    use_muscle        INTEGER,            -- MuscleModel vs the SpringDamperModel default
     reward_shape      TEXT,               -- sparse | pbrs | distance
     yaml              TEXT,               -- full data.yml as JSON, for anything not columnised
     n_checkpoints     INTEGER,
@@ -122,6 +123,22 @@ CREATE INDEX IF NOT EXISTS jobs_state ON jobs(state);
 """
 
 
+# Columns added after the first release. CREATE TABLE IF NOT EXISTS leaves an existing database
+# on the old shape, so a new column has to be added explicitly or every query naming it raises
+# against a ~40 MB index that is otherwise still perfectly good.
+MIGRATIONS = [
+    ("runs", "use_muscle", "INTEGER"),
+]
+
+
+def migrate(conn):
+    for table, column, decl in MIGRATIONS:
+        have = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
+        if column not in have:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
+    conn.commit()
+
+
 def connect():
     """One connection per thread. FastAPI's threadpool runs sync handlers on many threads."""
     conn = getattr(_local, "conn", None)
@@ -132,6 +149,7 @@ def connect():
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA synchronous=NORMAL")
         conn.executescript(SCHEMA)
+        migrate(conn)
         _local.conn = conn
     return conn
 

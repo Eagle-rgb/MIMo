@@ -29,3 +29,15 @@
   {%- set nxt = 'asc' if (active and params.get('dir') != 'asc') else ('desc' if active else 'desc') -%}
   <a href="#" data-sort="{{ key }}" data-dir="{{ nxt }}" {% if active %}data-active="1"{% endif %}>{{ label|safe }}{% if active %} {{ '&uarr;'|safe if params.get('dir') == 'asc' else '&darr;'|safe }}{% endif %}</a>
 {%- endmacro %}
+
+{% macro actuation_chip(use_muscle) -%}
+  {#- The actuation model changes the action space, the observation and the effort term, so a
+      muscle run is not comparable to a spring-damper one. Both states are labelled rather than
+      only the exception: an absent chip would be indistinguishable from a run indexed before
+      use_muscle was recorded. -#}
+  {%- if use_muscle -%}
+    <span class="chip muscle" title="MuscleModel &mdash; 92 muscles, --use_muscle">muscle</span>
+  {%- else -%}
+    <span class="chip muted spring" title="SpringDamperModel &mdash; 46 bidirectional motors (the default)">spring</span>
+  {%- endif -%}
+{%- endmacro %}

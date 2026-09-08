@@ -30,7 +30,7 @@ YAML_COLUMNS = [
     "morph_age", "physio_age", "episode_steps", "goal_low", "goal_high",
     "goal_curriculum", "no_done_active", "isr", "side_lying", "lr",
     "lr_schedule", "num_train", "target_entropy", "buffer_size", "obs_noise",
-    "intrinsic_goal", "proprio_config",
+    "intrinsic_goal", "proprio_config", "use_muscle",
 ]
 
 # Stored under a different name in data.yml than in the index.
@@ -241,8 +241,11 @@ def index_run(run_path, models_root, conn, force=False, now=None):
     record = dict(ident)
     record.update({key: cfg.get(key) for key in YAML_COLUMNS})
     record.update({col: cfg.get(key) for col, key in YAML_ALIASES.items()})
+    # use_muscle only entered data.yml on 02.09.2026; before that it was on the exclusion list.
+    # Absent therefore means the spring-damper model, which is also what --load_model defaults to,
+    # so coercing None to 0 states the same thing the env would.
     for flag in ("her", "sparse_reward", "pbrs", "goal_curriculum", "no_done_active",
-                 "isr", "side_lying"):
+                 "isr", "side_lying", "use_muscle"):
         record[flag] = int(bool(record.get(flag)))
     record.update({
         "reward_shape": reward_shape(cfg),

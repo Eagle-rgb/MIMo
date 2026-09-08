@@ -34,18 +34,23 @@ MUJOCO_GL = "osmesa"
 class Settings:
 
     def __init__(self, mimo_root=None, models_root=None, offline=False,
-                 ssh_user=None, remote_root=None, conda_env="mimo",
+                 ssh_user=None, remote_root=None, conda_env=None,
                  tb_port=8771, python=None):
+        # Every setting also has an environment fallback, because --reload runs the app in a
+        # child process that never sees main()'s argv: uvicorn's reloader imports "mimolab.app"
+        # directly, so configure() is not called there and --offline or --models-root would be
+        # silently dropped. main() exports them; this reads them back.
         self.mimo_root = Path(mimo_root or os.environ.get("MIMO_ROOT") or Path.cwd()).resolve()
-        self.models_root = Path(models_root or self.mimo_root / "models").resolve()
+        self.models_root = Path(models_root or os.environ.get("MIMO_MODELS_ROOT")
+                                or self.mimo_root / "models").resolve()
         # 'offline' disables everything that spawns a process: launching, killing, evaluating.
         # Used when browsing a scp'd copy of models/ on a machine that is not the cluster.
-        self.offline = offline
+        self.offline = bool(offline) or os.environ.get("MIMO_OFFLINE") == "1"
         self.ssh_user = ssh_user or os.environ.get("MIMO_SSH_USER") or os.environ.get("USER")
         # Path to the MIMo checkout *on the RBI hosts*. Shared home, so one value covers all of them.
         self.remote_root = remote_root or os.environ.get("MIMO_REMOTE_ROOT") or "~/MIMo"
-        self.conda_env = conda_env
-        self.tb_port = tb_port
+        self.conda_env = conda_env or os.environ.get("MIMO_CONDA_ENV") or "mimo"
+        self.tb_port = int(os.environ.get("MIMO_TB_PORT") or tb_port)
         # sys.executable, not "python": the server runs inside the mimo conda env, but the
         # subprocess inherits PATH, where "python" can be the base interpreter with no numpy.
         # That failure surfaces only when an evaluation is launched, long after startup.
@@ -58,6 +63,9 @@ class Settings:
         self.eval_dir = self.state_dir / "evals"
         self.plot_dir = self.state_dir / "plots"
         self.db_path = self.state_dir / "index.db"
+        # The Settings dialog's rcParams overrides. A file, not a row in the index: the index is a
+        # cache over models/ and is meant to be deletable, a style is not.
+        self.rc_path = self.state_dir / "paper_rc.yml"
 
     def ensure_dirs(self):
         for d in (self.state_dir, self.log_dir, self.plot_dir, self.eval_dir):
@@ -79,7 +87,14 @@ SETTINGS = Settings()
 
 
 def configure(**kwargs):
-    global SETTINGS
-    SETTINGS = Settings(**kwargs)
+    """Reconfigure in place.
+
+    Rebinding the module global instead would leave every module that did
+    'from .config import SETTINGS' *before* the call holding the old object, so whether a module
+    saw --offline would depend on when it happened to be imported. That is exactly what it did:
+    selfcheck imports SETTINGS at module level and app.py inside a check, so flipping offline in
+    the test moved one and not the other.
+    """
+    SETTINGS.__dict__.update(Settings(**kwargs).__dict__)
     SETTINGS.ensure_dirs()
     return SETTINGS

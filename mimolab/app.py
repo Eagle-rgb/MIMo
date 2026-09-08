@@ -85,8 +85,26 @@ def runs_href(request: Request):
     return "/" + saved if saved.startswith("?") else "/"
 
 
+def asset_version():
+    """Cache key for the static bundle: the newest mtime of the files base.html pulls in.
+
+    Without it a browser keeps the app.js it fetched before the server was restarted, and a fix
+    that is on disk and passing its checks looks broken in the page. That has now happened twice
+    -- a dead export link, and the legend reordering -- so the question is settled here instead of
+    being diagnosed again.
+    """
+    newest = 0.0
+    for name in ("app.js", "app.css"):
+        try:
+            newest = max(newest, (HERE / "static" / name).stat().st_mtime)
+        except OSError:
+            pass
+    return str(int(newest))
+
+
 def _register_runs_href():
     templates.env.globals["runs_href"] = runs_href
+    templates.env.globals["asset_version"] = asset_version
 
 
 def push_page_url(request: Request, response):
@@ -318,7 +336,9 @@ def plot_curve(request: Request,
                ymin: float = Query(None),
                ymax: float = Query(None),
                legend_title: str = Query(None),
-               legend_loc: str = Query(None)):
+               legend_loc: str = Query(None),
+               figw: float = Query(None),
+               figh: float = Query(None)):
     run_ids = request.query_params.getlist("run")
     if not run_ids:
         params = params_of(request)
@@ -333,19 +353,34 @@ def plot_curve(request: Request,
         if sep and text.strip():
             overrides[key] = text.strip()
 
+    # The legend order is a list of series keys, in the order the label editor shows them.
+    order = [k for k in request.query_params.getlist("order") if k]
+
+    # Explicit series colours arrive the same way as the labels: 'color=<series key>=<hex>'.
+    # Validated against the picker's own list, never passed through to matplotlib as typed.
+    colors = {}
+    for item in request.query_params.getlist("color"):
+        key, sep, value = item.partition("=")
+        picked = plots.valid_color(value) if sep else None
+        if picked:
+            colors[key] = picked
+
     fmt = "pdf" if request.url.path.endswith(".pdf") else "png"
     thesis = style == "thesis"
+    sized = fmt == "pdf" or thesis
     # A PDF is going into a document, so it is always rendered light -- a dark-mode figure pasted
     # into a thesis is never what was wanted. A thesis preview is light for the same reason.
-    with plots.render_as(fmt, column if (fmt == "pdf" or thesis) else None,
-                         style="thesis" if thesis else "screen"):
+    with plots.render_as(fmt, column if sized else None,
+                         style="thesis" if thesis else "screen",
+                         size=plots.clamp_size(figw, figh) if sized else None):
         data = plots.curve(run_ids, tag,
                            theme="light" if (fmt == "pdf" or thesis) else _theme(theme),
                            aggregate=bool(aggregate), smooth=max(1, min(51, smooth)),
                            label_overrides=overrides, band=band,
                            xlabel=xlabel, ylabel=ylabel,
                            ylim=(ymin, ymax) if ymin is not None and ymax is not None else None,
-                           legend_title=legend_title, legend_loc=legend_loc)
+                           legend_title=legend_title, legend_loc=legend_loc, order=order,
+                           color_overrides=colors)
     return _chart(data, fmt, _export_name(tag.split("/")[-1], fmt, f"{len(run_ids)}runs"))
 
 
@@ -421,6 +456,36 @@ def plot_goal_response(request: Request, run: str, checkpoint: str,
 @app.post("/api/reindex")
 def api_reindex(force: int = Query(0)):
     return JSONResponse(indexer.reindex(force=bool(force)))
+
+
+def _style_payload(errors=None):
+    """Everything the Settings dialog shows: what the file contributes, and what wins."""
+    base = plots.icdl_rc()
+    effective = plots.paper_rc()
+    return {
+        "text": plots.rc_overrides_text(),
+        "source": str(plots.ICDL_PATH),
+        "base": {k: str(v) for k, v in sorted(base.items())},
+        "effective": {k: str(v) for k, v in sorted(effective.items())},
+        "blocked": sorted(plots.RC_BLOCKED),
+        "offline": SETTINGS.offline,
+        "errors": errors or [],
+    }
+
+
+@app.get("/api/style")
+def api_style():
+    return JSONResponse(_style_payload())
+
+
+@app.post("/api/style")
+def api_style_save(text: str = Form("")):
+    if SETTINGS.offline:
+        raise HTTPException(400, "offline mode: the style is read-only")
+    errors = plots.save_rc_overrides(text)
+    # Nothing is written when anything is wrong, so the dialog can show every complaint at once
+    # rather than saving half a style.
+    return JSONResponse(_style_payload(errors), status_code=200 if not errors else 422)
 
 
 @app.post("/api/evals")

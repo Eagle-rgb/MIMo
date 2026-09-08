@@ -7,10 +7,10 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,600;12..96,700;12..96,800&family=JetBrains+Mono:wght@400;600&display=swap">
-<link rel="stylesheet" href="/static/app.css">
+<link rel="stylesheet" href="/static/app.css?v={{ asset_version() }}">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><circle cx='8' cy='8' r='6' fill='%231F5C6E'/></svg>">
 <script src="/static/htmx.min.js" defer></script>
-<script src="/static/app.js" defer></script>
+<script src="/static/app.js?v={{ asset_version() }}" defer></script>
 </head>
 <body>
 
@@ -28,7 +28,39 @@
   {% if settings.offline %}<span class="chip warn">offline</span>{% endif %}
   <button class="btn sm" type="button" data-reindex title="Re-scan models/ for new or changed runs and reload this view">Refresh</button>
   <button class="btn sm" type="button" data-theme-toggle aria-label="Switch light or dark theme">Theme</button>
+  <button class="btn sm" type="button" data-settings title="Figure style -- matplotlib rcParams for every exported figure">Settings</button>
 </header>
+
+{# The paper style, editable. Base comes from results/icdlplot.py, read live; what is typed here
+   overrides it and is saved to .mimolab/paper_rc.yml. #}
+<dialog id="settings" class="sheet">
+  <form method="dialog" class="sheethead">
+    <h2>Figure style</h2>
+    <button class="btn sm" value="close" aria-label="Close">Close</button>
+  </form>
+  <div class="sheetbody">
+    <p class="hint">matplotlib <code>rcParams</code> for the paper and thesis styles &mdash; every
+      exported PDF and every thesis-styled preview. One <code>key: value</code> per line (YAML, so
+      JSON works too). Saved to <code>.mimolab/paper_rc.yml</code>; the on-screen charts are not
+      affected.</p>
+    <textarea id="styletext" spellcheck="false" rows="10"
+              placeholder="lines.linewidth: 2&#10;legend.fontsize: 9&#10;font.serif: [STIXGeneral, DejaVu Serif]"></textarea>
+    <div class="chartbar">
+      <span class="hint" id="stylenote"></span>
+      <span class="spacer" style="flex:1"></span>
+      <button class="btn sm" type="button" data-style-revert>Revert</button>
+      <button class="btn primary sm" type="button" data-style-save>Save</button>
+    </div>
+    <div class="styleerr" id="styleerr" hidden></div>
+    <details class="figopts">
+      <summary>What <code>icdlplot.py</code> currently sets</summary>
+      <p class="hint">Read from the file on every request, so editing it there reaches the app
+        without a restart. Anything typed above wins over this.</p>
+      <dl class="kv" id="stylebase"></dl>
+      <p class="hint" id="styleblocked"></p>
+    </details>
+  </div>
+</dialog>
 
 {% block body %}{% endblock %}
 

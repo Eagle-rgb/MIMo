@@ -48,6 +48,8 @@ from mimoEnv.envs.roll_over import MISSING_LIMBS, MISSING_LIMB_MODES
 from mimoEnv.envs.roll_over_callback import RollOverCallback, RollOverEvalCallback
 from mimoEnv.envs.morphological_curriculum import make_curriculum_callback
 from mimoEnv.envs.isr_callback import ISRCallback
+from mimoEnv.envs.entropy_callback import EntropyPenaltyCallback
+from mimoEnv.envs.policy_init import set_action_bias
 from stable_baselines3.common.callbacks import CallbackList
 
 from mimoEnv.utils import load_model_yaml
@@ -65,7 +67,8 @@ ROLL_OVER_EPISODE_STEPS = 500
 from mimoEnv.envs.gaussiannoiseobswrapper import GaussianNoiseObsWrapper
 
 def test(wrapped_env, save_dir, model=None, render_video=False, render_frames=False,
-         render_actuations=False, roll_over_starting_position='prone', log_obs=None):
+         render_actuations=False, roll_over_starting_position='prone', log_obs=None,
+         render_video_filename="episode_0"):
     """ Tests the model for one episode.
 
     Args:
@@ -145,7 +148,7 @@ def test(wrapped_env, save_dir, model=None, render_video=False, render_frames=Fa
     def write_obs_csv(counter):
         if not (log_obs and obs_rows):
             return
-        path = os.path.join(save_dir, f'episode_{counter}_obs.csv')
+        path = os.path.join(save_dir, f'{render_video_filename}_obs.csv')
         with open(path, 'w', newline='') as fh:
             writer = csv.DictWriter(fh, fieldnames=list(obs_rows[0].keys()))
             writer.writeheader()
@@ -232,7 +235,7 @@ def test(wrapped_env, save_dir, model=None, render_video=False, render_frames=Fa
 
             obs, _ = wrapped_env.reset()
             if render_video:
-                save_name=os.path.join(save_dir, 'episode_{}.mp4'.format(im_counter))
+                save_name=os.path.join(save_dir, render_video_filename + ".mp4")
                 print("Rendering video as '"+save_name+"'")
                 render_height = 720 if render_actuations else 480
                 render_width = 480
@@ -274,6 +277,17 @@ def train(model, train_for, save_every, save_dir, isr, argparse_args, save_inter
 
     if callback_morph:
         callbacks.append(callback_morph)
+
+    # 08.09.2026 A negative --ent_coef only. SB3's default of 0.0 means 'no entropy term at
+    # all', so there is no bonus to reduce; see EntropyPenaltyCallback for why the schedule and
+    # the std floor are part of the mechanism rather than conveniences.
+    if getattr(argparse_args, 'ent_coef', 0.0) != 0.0:
+        callbacks.append(EntropyPenaltyCallback(
+            total_timesteps=train_for_total,
+            ent_coef=argparse_args.ent_coef,
+            start_fraction=argparse_args.ent_coef_start,
+            std_floor=argparse_args.ent_coef_std_floor))
+
 
     if eval_callback is not None:
         callbacks.append(eval_callback)
@@ -416,6 +430,9 @@ def main():
                         help='Name of model to save')
     parser.add_argument('--render_video', action='store_true',
                         help='Renders a video for each episode during the test run.')
+    parser.add_argument('--render_video_filename', type=str, default="episode_0",
+                        help="The filename (without .mp4) used to save the rendered video if " \
+                        "'--render_video' is set.")
     parser.add_argument('--legacy_muscle_action_space', action='store_true',
                         help="Command the muscles on the original [0, 1] instead of the default "
                              "[-1, 1]. Only for reproducing runs from before 05.09.2026: on "
@@ -490,6 +507,42 @@ An example is '251206_prone_linear_1e6_test'
                         help="Disable action penalty in reward function.")
     parser.add_argument('--lr', required=False, default=3e-4, type=float,
                         help="Learning rate. Default 1e-3 for PPO algorithm. Only used for PPO algorithm.")
+    parser.add_argument('--log_std_init', default=None, type=float,
+                        help="Initial log standard deviation of the Gaussian policy (PPO/A2C "
+                             "only). SB3's default is 0.0, i.e. sigma = 1.0, which on the "
+                             "[-1, 1] action box clips 32%% of samples (measured 0.320 on a "
+                             "muscle rollout). The spring-damper converges to sigma 0.654 by "
+                             "itself, so -0.42 starts a run where the working one ends up; -1.0 "
+                             "gives sigma 0.368. Use it WITH --action_bias_init under "
+                             "--use_muscle: on its own a narrower sigma just concentrates the "
+                             "policy on the co-contracted mean.")
+    parser.add_argument('--action_bias_init', default=None, type=float,
+                        help="Bias written into every output unit of the action-mean layer of a "
+                             "freshly built policy, i.e. the action MIMo starts from. Default "
+                             "(None) leaves SB3's ~0. That is zero torque under the "
+                             "spring-damper model but half activation on all 92 muscles under "
+                             "--use_muscle, where a relaxed start needs a negative value "
+                             "(-1.0 is limp but on the box edge; -0.6 gives activation 0.2). "
+                             "Ignored when --load_model is given. PPO/A2C/SAC only.")
+    parser.add_argument('--ent_coef', default=0.0, type=float,
+                        help="Target entropy coefficient for PPO/A2C, ramped in by "
+                             "EntropyPenaltyCallback between --ent_coef_start and the end of "
+                             "training. Must be NEGATIVE: SB3's default of 0.0 already means "
+                             "'no entropy term', so the only way to push exploration noise down "
+                             "is a penalty. The scale is set by |d policy_loss / d log_std|, "
+                             "measured at 0.0144 on the muscle roll-over env (0.0015 on "
+                             "Pendulum, so toy-task values do not transfer): the useful band is "
+                             "about -0.005 to -0.03. 0.0 disables the schedule entirely.")
+    parser.add_argument('--ent_coef_start', default=0.5, type=float,
+                        help="Fraction of training before the entropy penalty starts ramping "
+                             "in. Not 0: the muscle runs first reach side-lying at 300-400k "
+                             "steps, and a policy that has committed before then has nothing to "
+                             "commit to.")
+    parser.add_argument('--ent_coef_std_floor', default=0.1, type=float,
+                        help="Switch the entropy penalty off for good once train/std falls "
+                             "below this. PPO does not clamp log_std (SAC clamps to [-20, 2]) "
+                             "and the penalty's gradient on log_std is a constant 1 per "
+                             "dimension, so a runaway is possible.")
     parser.add_argument('--buffer_size', default=300_000, type=int,
                         help="Replay buffer size for the off-policy algorithms (SAC/TD3/DDPG). "
                              "Must stay well below the SB3 default of 1e6: one roll_over observation "
@@ -690,6 +743,8 @@ An example is '251206_prone_linear_1e6_test'
     log_actuations = args.log_actuations
     nopen = args.nopen
     learning_rate = args.lr
+    log_std_init = args.log_std_init
+    action_bias_init = args.action_bias_init
     pbrs = args.pbrs
     pbrs_w = args.pbrs_w
     isr = args.isr
@@ -900,6 +955,19 @@ An example is '251206_prone_linear_1e6_test'
             env.observation_normalization_mean = mean_dict
             env.observation_normalization_std = std_dict
 
+    # 08.09.2026 'log_std_init' is a parameter of ActorCriticPolicy, which only PPO and A2C
+    # use. SAC's actor produces a state-dependent log_std from an nn.Linear (its own
+    # 'log_std_init' applies only under use_sde), and TD3/DDPG are deterministic, so passing it
+    # there would be silently ignored rather than refused.
+    if log_std_init is not None and algorithm not in ('PPO', 'A2C'):
+        raise ValueError(f"--log_std_init applies to PPO and A2C only, got --algorithm="
+                         f"{algorithm}. SAC derives log_std from the observation and TD3/DDPG "
+                         f"have no policy noise to initialise.")
+    if args.ent_coef != 0.0 and algorithm not in ('PPO', 'A2C'):
+        raise ValueError(f"--ent_coef applies to PPO and A2C only, got --algorithm={algorithm}. "
+                         f"SAC tunes its entropy coefficient itself and never reads "
+                         f"'model.ent_coef'.")
+
     # load pretrained model or create new one
     # Set learning rate for PPO algorithm.
     if algorithm=='PPO':
@@ -909,9 +977,15 @@ An example is '251206_prone_linear_1e6_test'
                             learning_rate=learning_rate,
                             verbose=1)
         else:
+            # 08.09.2026 'log_std_init' only through policy_kwargs on a fresh model: a loaded one
+            # carries its own trained log_std, and passing policy_kwargs to 'RL.load' would be
+            # ignored anyway (SB3 takes them from the saved data unless overridden via
+            # 'custom_objects').
+            policy_kwargs = {} if log_std_init is None else dict(log_std_init=log_std_init)
             model = RL("MultiInputPolicy", env,
                     tensorboard_log=save_dir,
                     learning_rate=learning_rate,
+                    policy_kwargs=policy_kwargs,
                     verbose=1)
     elif algorithm in OFF_POLICY_ALGORITHMS:
         # Off-policy algorithms keep a replay buffer, which PPO/A2C do not. Its size must be
@@ -961,9 +1035,27 @@ An example is '251206_prone_linear_1e6_test'
                     tensorboard_log=save_dir,
                     verbose=1)
 
+    # 08.09.2026 After construction, because SB3 orthogonally initialises 'action_net' inside
+    # the policy's own constructor and would overwrite anything set earlier. Skipped when
+    # loading: a loaded model's action head is trained, and resetting its bias would throw that
+    # away.
+    if action_bias_init is not None and not load_model and model is not None:
+        head = set_action_bias(model, action_bias_init)
+        print(f"Action mean initialised to {action_bias_init} on {head.out_features} dimensions.")
+
     # Save model metadata in model.
     yaml_data = {
         'lr': args.lr,
+        # Experiment-defining: they set where the policy's action distribution starts and how
+        # hard training pushes its width down, which is the difference between a policy that
+        # relies on its own exploration noise and one that has internalised the behaviour.
+        # 'log_std_init'/'action_bias_init' only touch initialisation, so a reloaded model
+        # ignores them -- they are stored to document the run, not to rebuild it.
+        'log_std_init': log_std_init,
+        'action_bias_init': action_bias_init,
+        'ent_coef': args.ent_coef,
+        'ent_coef_start': args.ent_coef_start,
+        'ent_coef_std_floor': args.ent_coef_std_floor,
         'nopen': nopen,
         'pbrs': pbrs,
         'pbrs_w': pbrs_w,
@@ -1112,7 +1204,8 @@ An example is '251206_prone_linear_1e6_test'
              render_frames=render_frames,
              render_actuations=render_actuations,
              roll_over_starting_position=roll_over_starting_position,
-             log_obs=args.log_obs)
+             log_obs=args.log_obs,
+             render_video_filename=args.render_video_filename)
 
     env.close()
 
