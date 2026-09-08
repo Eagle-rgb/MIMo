@@ -14,8 +14,7 @@ from gymnasium import spaces, utils
 from gymnasium.envs.mujoco import MujocoEnv
 from gymnasium.envs.mujoco.mujoco_rendering import MujocoRenderer
 
-from mimoGrowth.growth import adjust_mimo_to_age
-from mimoGrowth.scene import delete_growth_scene
+from mimoGrowth.spec import grow_spec
 from mimoTouch.touch import TrimeshTouch, Touch
 from mimoVision.vision import SimpleVision, Vision
 from mimoVestibular.vestibular import SimpleVestibular, Vestibular
@@ -253,8 +252,10 @@ class MIMoEnv(MujocoEnv, utils.EzPickle):
         camera_name (str): The camera, by name, which will be used for rendering.
         width (int): The width of the rendered image.
         height (int): The height of the rendered image.
-        age (float|None): The age of MIMo. Can be between 0 and 24 months. If ``None`` the original model will be used
-            with no changes.
+        age (float|None): The age of MIMo. Can be between 0 and 24 months, and need not be a whole number. If
+            ``None`` the original model will be used with no changes. The rescaling happens in an editable
+            :class:`mujoco.MjSpec` (see :mod:`mimoGrowth.spec`) rather than in a temporary XML file, so no age writes
+            anything to disk and any number of processes may share one read-only scene.
         custom_measurements (dict | None): A dictionary of custom measurements for MIMo.  Keys must match measurement
             names from the ``mimoGrowth/measurements/`` folder, and values are floats representing measurements in centimeters.
         proprio_params (Dict|None): The configuration dictionary for the proprioceptive system. If ``None`` the module
@@ -374,8 +375,18 @@ class MIMoEnv(MujocoEnv, utils.EzPickle):
         self.pca = pca
 
         self._initial_qpos = initial_qpos
+        self.custom_measurements = custom_measurements
 
-        self.model_path = adjust_mimo_to_age(age, model_path, custom_measurements) if age is not None else model_path
+        # 02.09.2026 The growth used to write '<scene>_temp.xml' next to the original and delete
+        # it after loading. On the cluster all 18 machines share one home, so they raced on that
+        # one filename and every machine but the first died -- and 'create_growth_scene' could
+        # not handle the roll-over scenes at all, which is why the age scenes ended up
+        # pre-generated. Growth now happens in an 'MjSpec' instead: nothing is written, the asset
+        # tree may be read-only, and the age is no longer restricted to whichever files exist.
+        # 'model_path' therefore stays the unmodified base scene, which is all gymnasium's
+        # 'MujocoEnv.__init__' wants it for; ':meth:`._initialize_simulation`' compiles the spec.
+        self.model_path = model_path
+        self.model_spec = self._build_model_spec()
 
         # Load XML and initialize everything
         super().__init__(self.model_path,
@@ -388,10 +399,37 @@ class MIMoEnv(MujocoEnv, utils.EzPickle):
                          camera_name=camera_name,
                          default_camera_config=default_camera_config)
 
-        if age is not None:
-            delete_growth_scene(self.model_path)
-
         self.initialize()
+
+    def _build_model_spec(self):
+        """ The editable :class:`mujoco.MjSpec` this environment compiles its model from.
+
+        Returns ``None`` when the scene is to be loaded exactly as it sits on disk, which is the
+        case whenever :attr:`.age` is ``None`` -- every upstream environment, and the roll-over
+        environment before the growth was made continuous.
+
+        Override this to modify the model before it is compiled: amputations, a different age per
+        body region, anything that has to exist before ``mj_compile`` rather than being patched
+        onto the finished model afterwards. It is called once from the constructor and again from
+        anything that swaps the embodiment, so it must derive everything from ``self`` and must
+        not assume the simulation exists yet.
+
+        Returns:
+            mujoco.MjSpec|None: The spec to compile, or ``None`` to load :attr:`.model_path`.
+        """
+        if self.age is None:
+            return None
+        return grow_spec(self.model_path, self.age, custom=self.custom_measurements)
+
+    def compile_model(self):
+        """ Compile the current :attr:`.model_spec`, or load :attr:`.model_path` if there is none.
+
+        Returns:
+            mujoco.MjModel: The compiled model.
+        """
+        if self.model_spec is None:
+            return mujoco.MjModel.from_xml_path(self.model_path)
+        return self.model_spec.compile()
 
     def initialize(self):
         """ Called upon construction and when hot-swapping embodiments. """
@@ -412,7 +450,7 @@ class MIMoEnv(MujocoEnv, utils.EzPickle):
         # _initialize_simulation expects us to return them as a tuple. I perform
         # this check by just checking for major version >= 1
         #if GYMNASIUM_MAJOR_VERSION > 0:
-        self.model = mujoco.MjModel.from_xml_path(self.model_path)
+        self.model = self.compile_model()
         self.data = mujoco.MjData(self.model)
 
         fps = int(np.round(1 / self.dt))

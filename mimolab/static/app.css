@@ -447,6 +447,13 @@ tr[data-posture="prone"] td.stripe i { background: var(--prone); }
   color: var(--ink-faint);
 }
 
+/* The stored payload's path, for reading it straight from a notebook on this machine. */
+.jsoncell { white-space: nowrap; }
+.jsoncell code {
+  margin-left: .5rem; font-size: .68rem; color: var(--ink-faint);
+  user-select: all;                       /* one click selects the whole path */
+}
+
 /* Row order is legend order, so the arrows sit in the table rather than in a separate control. */
 .labeltable td.nudge { white-space: nowrap; }
 .labeltable td.nudge button {

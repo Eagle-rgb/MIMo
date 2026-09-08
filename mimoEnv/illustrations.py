@@ -686,10 +686,16 @@ An example is '251206_prone_linear_1e6_test'
     parser.add_argument('--render_frames', default=False, action='store_true', required=False,
                         help="Renders many frames - including the final image of the episode in testing - "
                         " and saves them as 'frame_{1-5}.png'.")
-    parser.add_argument('--morph_age', default=9, required=False, type=int,
-                        help="MIMo's morphological (body) age in months. Default: 9.")
-    parser.add_argument('--physio_age', default=9, required=False, type=int,
-                        help="MIMo's phyisological (actuation) age in months. Default: 9.")
+    # 08.09.2026 'float', not 'int'. The age used to select one of 16 pre-generated scenes and
+    # was therefore restricted to 1, 3, 6 and 9; MIMo is now grown to the requested age in
+    # memory, so anything between 0 and 24 works. A stored run reloads unchanged -- yaml writes
+    # 9 and 'float(9) == 9'.
+    parser.add_argument('--morph_age', default=9.0, required=False, type=float,
+                        help="MIMo's morphological (body) age in months, 0 to 24. "
+                             "Fractional ages are allowed. Default: 9.")
+    parser.add_argument('--physio_age', default=9.0, required=False, type=float,
+                        help="MIMo's physiological (actuation) age in months, 0 to 24. "
+                             "Fractional ages are allowed. Default: 9.")
     parser.add_argument('--save_intermediate', action='store_true', help="Save intermediate model at reaching " \
                         "90% side lying success rate.")
     parser.add_argument('--mgc', type=str,
@@ -701,6 +707,15 @@ An example is '251206_prone_linear_1e6_test'
                         default=20_000,
                         help="Steps between embodiment change in the " \
                         "stochastic mgc (default: 20000)")
+    # 08.09.2026 The ladder used to be fixed at [1, 3, 6, 9] because those were the ages with a
+    # pre-generated scene. MIMo is now grown in memory, so it can be as fine as wanted.
+    parser.add_argument('--mgc_stages', type=int, default=None,
+                        help="Number of ages the morphological curriculum steps through, spread "
+                             "evenly from 1 to 9 months. Default (unset) is the historical "
+                             "ladder [1, 3, 6, 9] with 250k steps each, which is what every "
+                             "stored MGC run used. A value here divides the same 1M-step budget "
+                             "over that many phases instead, so e.g. 30 gives near-continuous "
+                             "growth at ~33k steps per stage.")
     parser.add_argument('--obs_noise', type=float,
                         default=0.0,
                         help="Introduces observation noise. Adds a normal distribution with stddev " \
@@ -1091,6 +1106,12 @@ An example is '251206_prone_linear_1e6_test'
         'side_lying': side_lying,
         'physio_age': physio_age,
         'morph_age': morph_age,
+        # 08.09.2026 The curriculum defines the run -- a model trained while its body grew from 1
+        # to 9 months is not the same experiment as one trained at a fixed age, and since the
+        # ladder is now free, "which ladder" is part of that. Stored runs carry neither key and
+        # fall back to 'none' / the historical [1, 3, 6, 9], which is what they used.
+        'mgc': args.mgc,
+        'mgc_stages': args.mgc_stages,
         'headfree': True,  # this is just a reminder for me that all models going forward can freely move their head.
         'obs_noise': args.obs_noise,
         'proprio_params': proprio_params,

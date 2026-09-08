@@ -24,6 +24,7 @@ the path to the scene XML is defined in :data:`ROLL_OVER_XML`.
 from mimoEnv.envs.mimo_env import MIMoEnv, SCENE_DIRECTORY, \
     DEFAULT_PROPRIOCEPTION_PARAMS, DEFAULT_VESTIBULAR_PARAMS
 from mimoActuation.actuation import SpringDamperModel
+from mimoGrowth.spec import grow_spec
 import mujoco
 import numpy as np
 import os
@@ -31,6 +32,13 @@ from mimoEnv.utils import get_minimal_z_coordinate
 from gymnasium import spaces
 
 AGES = [1, 3, 6, 9]
+""" The four ages every stored run used, and the default steps of the morphological curriculum.
+
+08.09.2026 No longer a restriction. It used to be the set of ages that had a pre-generated scene
+on disk; the environment now grows :data:`BASE_SCENE` to any age between :data:`AGE_MIN` and
+:data:`AGE_MAX`, whole number or not. Kept because every result on disk is one of these four and
+because a curriculum needs *some* default, not because the others are unavailable.
+"""
 
 # 04.09.2026 Missing limbs. Two modes, and which one you want depends on whether a policy
 # has to survive the change.
@@ -108,27 +116,61 @@ it every '--ghost_obs=rest' result, reproducible.
 """
 
 
-def scene_path(physio_age, morph_age, missing_limb=None, missing_limb_mode='cut'):
-    """ Path of the pre-generated scene for this age pair and embodiment.
+BASE_SCENE = os.path.join(SCENE_DIRECTORY, "roll_over", "prone", "scene_act_9_body_9.xml")
+""" The single scene every embodiment is grown from.
 
-    Only 'cut' has a scene of its own -- the limb has to be gone before the model is compiled.
-    'ghost' loads the intact scene and is patched afterwards, in ':meth:`._apply_ghost_limb`'.
+08.09.2026 This replaces 'scene_path()', which picked one of 96 pre-generated files --
+16 age pairs and 5 amputations of each. They are all reproduced bit for bit by growing this one
+scene in an 'MjSpec' (:mod:`mimoGrowth.spec`, verified by 'mimoGrowth/spec_check.py'), so no
+stored run is re-baselined by the change, and two limitations of the file approach go away:
 
-    The 'cut' scenes are written by 'mimoEnv/assets/roll_over/generate_amputated_scenes.py'.
-    They are not generated here on demand, deliberately: parallel runs on the cluster raced on
-    creating and deleting temporary scenes, which is the same reason the age scenes are
-    pre-generated.
+* **Ages are continuous.** 'AGES' was a property of which files happened to exist. A
+  morphological curriculum can now step through 30 stages instead of 4.
+* **Nothing is written at runtime.** That was the reason the scenes were pre-generated in the
+  first place -- the old growth wrote a fixed '<scene>_temp.xml' next to the original, so
+  parallel cluster runs sharing one home raced on that filename and all but the first died.
+
+Which of the 16 it is does not matter: the growth parameters are absolute sizes rather than
+scale factors, so growing this one to age 1 gives exactly 'scene_act_1_body_1.xml'. Age 9 is
+picked so that the (9, 9) case is an identity rather than a round trip.
+"""
+
+AGE_MIN, AGE_MAX = 0.0, 24.0
+""" The interval 'mimoGrowth' has growth functions for. """
+
+
+def check_age(age, label):
+    """ Validate one age, allowing any value the growth functions cover.
+
+    Arguments:
+        age (float): Age in months.
+        label (str): Which age this is, for the error message.
+
+    Raises:
+        ValueError: If the age is outside :data:`AGE_MIN` to :data:`AGE_MAX`.
     """
-    directory = os.path.join(SCENE_DIRECTORY, "roll_over", "prone")
-    stem = f"scene_act_{physio_age}_body_{morph_age}"
-    if missing_limb is not None and missing_limb_mode == 'cut':
-        path = os.path.join(directory, f"{stem}_{missing_limb}.xml")
-        if not os.path.exists(path):
-            raise FileNotFoundError(
-                f"Missing amputated scene {path!r}. Generate it with:\n"
-                "    python mimoEnv/assets/roll_over/generate_amputated_scenes.py")
-        return path
-    return os.path.join(directory, f"{stem}.xml")
+    if not AGE_MIN <= age <= AGE_MAX:
+        raise ValueError(f"{label} {age!r} is out of range. "
+                         f"Must be between {AGE_MIN} and {AGE_MAX} months.")
+
+
+def limb_bodies(missing_limb, missing_limb_mode='cut'):
+    """ The body subtrees to delete from the spec before the model is compiled.
+
+    Only 'cut' removes anything: the limb has to be gone before compilation so that its joints,
+    actuators and sensors go with it and the spaces shrink. 'ghost' loads the intact body and is
+    patched afterwards, in ':meth:`._apply_ghost_limb`'.
+
+    Arguments:
+        missing_limb (str|None): A key of :data:`MISSING_LIMBS`, or ``None``.
+        missing_limb_mode (str): ``'cut'`` or ``'ghost'``.
+
+    Returns:
+        tuple[str, ...]: Body names, empty when nothing is to be removed.
+    """
+    if missing_limb is None or missing_limb_mode != 'cut':
+        return ()
+    return MISSING_LIMBS[missing_limb]
 
 ROLL_OVER_XML = os.path.join(SCENE_DIRECTORY, "roll_over_prone_scene.xml")
 """ Path to the roll over scene.
@@ -489,10 +531,14 @@ class MIMoRollOverEnv(MIMoEnv):
         self._ghost_proprio_mask = None
         self._ghost_sparse_mask = None
 
-        if age_physio in AGES and age_morph in AGES:
-            model_path = scene_path(age_physio, age_morph, missing_limb, missing_limb_mode)
-        else:
-            raise ValueError("Allowed ages: 1, 3, 6, 9")
+        # 08.09.2026 Any age the growth functions cover, not only the four that had a
+        # pre-generated scene. 'AGES' survives as the discrete set the stored runs and the
+        # morphological curriculum default to, not as a restriction. See :data:`BASE_SCENE`.
+        check_age(age_morph, "age_morph")
+        check_age(age_physio, "age_physio")
+        self.age_morph = age_morph
+        self.age_physio = age_physio
+        model_path = BASE_SCENE
 
         self.reward_success=reward_success
         self.isr=isr
@@ -612,6 +658,23 @@ class MIMoRollOverEnv(MIMoEnv):
             quat = np.zeros(4)
             mujoco.mju_euler2Quat(quat, [0.0, 0.0, 0.0], 'xyz')
             self.model.cam_quat[cam_top_id] = quat
+
+    def _build_model_spec(self):
+        """ Grow :data:`BASE_SCENE` to this run's two ages, minus any amputated limb.
+
+        The two ages are independent, which is the point of the experiment: the morphological age
+        drives geom sizes, masses and body positions, the physiological age drives only
+        'actuator_gear' -- and, under the muscle model, the FMAX that tracks it.
+
+        The amputation happens here rather than as a patch on the compiled model because a 'cut'
+        limb has to be gone *before* compilation for its joints, actuators and sensors to
+        disappear with it. 'ghost' is the other mode and is a patch, in ':meth:`._apply_ghost_limb`'.
+
+        Returns:
+            mujoco.MjSpec: The spec ':meth:`.compile_model`' turns into this episode's model.
+        """
+        return grow_spec(self.model_path, self.age_morph, self.age_physio,
+                         remove=limb_bodies(self.missing_limb, self.missing_limb_mode))
 
     def initialize(self):
         """ Called at construction and again on every embodiment hot-swap.
@@ -1089,12 +1152,24 @@ class MIMoRollOverEnv(MIMoEnv):
 
 
     def set_embodiment(self, morph_age, physio_age):
-        """ Sets the embodiment to the MuJoCo .xml file that fits to the
-        morphological age 'morph_age' and physiological age 'pyhsio_age'. """
-        # Through the same helper as the constructor, so an embodiment swap keeps whatever
-        # limb is missing instead of silently swapping in an intact body.
-        xml_path = scene_path(physio_age, morph_age, self.missing_limb, self.missing_limb_mode)
-        self.model = mujoco.MjModel.from_xml_path(xml_path)
+        """ Re-grow MIMo to the morphological age 'morph_age' and physiological age 'physio_age'.
+
+        Through the same '_build_model_spec' as the constructor, so a swap keeps whatever limb is
+        missing instead of silently swapping in an intact body.
+
+        08.09.2026 This used to load one of 16 pre-generated scenes and was therefore restricted
+        to 'AGES'; it now compiles a spec, so a curriculum can take any number of steps between
+        two ages. It re-parses the base scene each time, which costs 0.01 s against the 0.86 s of
+        the compile that has to happen anyway. Swaps only ever fire on episode boundaries, so
+        that is not on the hot path.
+        """
+        check_age(morph_age, "morph_age")
+        check_age(physio_age, "physio_age")
+        self.age_morph = morph_age
+        self.age_physio = physio_age
+
+        self.model_spec = self._build_model_spec()
+        self.model = self.compile_model()
         self.data = mujoco.MjData(self.model)
         self.fix_top_camera_rotation_supine()
 

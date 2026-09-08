@@ -132,7 +132,10 @@ class EntropyPenaltyCallback(BaseCallback):
         else:
             progress = np.clip(self.num_timesteps / max(self.total_timesteps, 1), 0.0, 1.0)
             ramp = (progress - self.start_fraction) / max(1.0 - self.start_fraction, 1e-8)
-            coefficient = self.target_ent_coef * float(np.clip(ramp, 0.0, 1.0))
+            # '+ 0.0' normalises the signed zero: 'negative_target * 0.0' is -0.0, which the
+            # SB3 logger prints as '-0' and reads like a rounded-off tiny value rather than the
+            # penalty simply not being active yet.
+            coefficient = self.target_ent_coef * float(np.clip(ramp, 0.0, 1.0)) + 0.0
 
         self.model.ent_coef = coefficient
         # The coefficient actually in force this update, so the schedule is visible next to

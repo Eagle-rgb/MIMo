@@ -12,7 +12,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, Form, HTTPException, Query, Request
-from fastapi.responses import (HTMLResponse, JSONResponse, PlainTextResponse,
+from fastapi.responses import (FileResponse, HTMLResponse, JSONResponse, PlainTextResponse,
                                RedirectResponse, Response)
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -270,6 +270,23 @@ def api_eval_group(posture: str = Form(...), name: str = Form(...), date: str = 
 @app.get("/api/evals/{job_id}/log", response_class=PlainTextResponse)
 def api_eval_log(job_id: str, lines: int = 200):
     return evals.tail_log(job_id, lines=lines) or "(no output yet)"
+
+
+@app.get("/api/evals/{job_id}/json")
+def api_eval_json(job_id: str):
+    """The stored --group payload, downloaded under a name that says which experiment it is.
+
+    The file itself lives permanently in .mimolab/evals/ under its job id, which is unambiguous
+    but unreadable; a notebook wants 'leftarm_supine_26-09-06.json'. Same bytes either way -- this
+    only renames on the way out.
+    """
+    job = evals.job(job_id)
+    path = (job or {}).get("run_path")
+    if not path or not str(path).endswith(".json") or not os.path.exists(path):
+        raise HTTPException(404, "no stored payload for this evaluation")
+    name = plots.slug((job.get("label") or job_id).split(" (")[0])
+    return FileResponse(path, media_type="application/json",
+                        filename=f"{name}_{time.strftime('%y-%m-%d')}.json")
 
 
 @app.get("/api/evals/jobs")

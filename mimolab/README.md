@@ -95,6 +95,15 @@ stranded the user on a bare table. The fragment sends an `HX-Push-Url` header na
 instead, and any plain browser navigation to a `/fragments/*` route is redirected to the page that
 renders it properly. That is what makes Refresh, bookmarking and the back button work.
 
+**The `--group` payloads are kept as files, and the page says where.** Every group evaluation
+writes `eval_rollover.py --json` into `.mimolab/evals/<job id>.json` and it stays there -- that
+directory is an output, not scratch, because `results/plot_eval_success.py` and any analysis done
+by hand read it. The bar panel prints each payload's absolute path (click once to select the whole
+line) for reading it straight from a notebook on this machine, and offers a **JSON** link that
+serves the same bytes renamed to `<experiment>_<date>.json`, since `group-260908-151843-60a45b.json`
+says nothing about what is in it. Single-run evaluations are *not* kept as files -- they go to a
+temporary path and survive only as a row in `evals`.
+
 **Laterality is counted per successful seed, not per episode.** The experiment page adds a
 `n_left / n_right` tile beside the >90 %/<10 % banding: how many of the seeds *above the success
 line* rolled to one side every single time. Runs below the line are left out -- they roll a handful

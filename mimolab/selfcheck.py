@@ -720,6 +720,37 @@ def _bars():
     return f"{len(files)} payload(s) stored, newest {files[0]['label']}"
 
 
+@check("a stored --group payload can be fetched as a file")
+def _payload_download():
+    """The JSON eval_rollover.py wrote is kept permanently and is reachable by name.
+
+    It is the input for anything done by hand in a notebook, so it must be both findable on disk
+    (the path is printed beside each evaluation) and downloadable under a name that says which
+    experiment it is -- 'group-260908-151843-60a45b.json' says nothing.
+    """
+    from fastapi.testclient import TestClient
+    from . import app as appmod
+
+    stored = evals.group_jsons(limit=10)
+    if not stored:
+        return "no stored --group payloads yet"
+    entry = stored[0]
+    assert Path(entry["run_path"]).exists(), "the listed payload is not on disk"
+
+    client = TestClient(appmod.app)
+    response = client.get(f"/api/evals/{entry['job_id']}/json")
+    assert response.status_code == 200, response.status_code
+    disposition = response.headers.get("content-disposition", "")
+    assert "attachment" in disposition and ".json" in disposition, disposition
+    assert "group-" not in disposition, f"the download kept the opaque job id: {disposition}"
+    payload = json.loads(Path(entry["run_path"]).read_text())
+    assert payload.get("rows"), "the payload has no rows"
+
+    missing = client.get("/api/evals/does-not-exist/json")
+    assert missing.status_code == 404, missing.status_code
+    return f"{len(stored)} payloads, newest served as {disposition.split('filename=')[-1]}"
+
+
 @check("the bar panel offers only evaluations of the selected runs")
 def _bar_scope():
     everything = evals.group_jsons()

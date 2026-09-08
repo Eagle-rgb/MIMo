@@ -1,6 +1,16 @@
 """
 The entry point for adjusting the age of MIMo.
 
+.. note::
+    08.09.2026 :mod:`mimoGrowth.spec` is what the environments use now. It applies the same
+    parameters -- :func:`get_growth_params` below is shared -- to a :class:`mujoco.MjSpec`
+    instead of to a temporary XML file, so it writes nothing, works on scenes whose includes are
+    not named ``*model*``/``*meta*``, and can amputate a limb before the model is compiled.
+    :func:`adjust_mimo_to_age` is kept for the upstream workflow described here and as the
+    reference ``mimoGrowth/spec_check.py`` measures the spec route against; prefer
+    ``mimoGrowth.spec.grow_model`` for anything new, and never call this from code that may run
+    on more than one machine against a shared checkout.
+
 Includes:
 - `log`: Helper function to log information about the growth.
 - `get_version`: Helper function to return the version of MIMo.

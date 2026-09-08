@@ -170,7 +170,8 @@
         </div>
       </div>
       <table class="runs labeltable">
-        <thead><tr><th style="width:1.2rem"></th><th>Evaluation</th><th>Bar label</th></tr></thead>
+        <thead><tr><th style="width:1.2rem"></th><th>Evaluation</th><th>Bar label</th>
+          <th>Payload</th></tr></thead>
         <tbody>
         {% for f in eval_files %}
           <tr>
@@ -178,6 +179,13 @@
             <td class="runmeta">{{ f.label }}
               <span style="opacity:.6">{{ human_age(f.finished_at) }}{% if f.n_selected is defined and f.n_runs and f.n_selected < f.n_runs %} &middot; {{ f.n_selected }} of {{ f.n_runs }} runs in this selection{% endif %}</span></td>
             <td><input class="barlabel" type="text" data-job="{{ f.job_id }}" placeholder="{{ f.label.split(' (')[0] }}"></td>
+            {# The payload is the file eval_rollover.py --json wrote, kept permanently. The path is
+               here because a notebook on this machine wants to read it in place; the link is for
+               getting it somewhere else, under a name that says which experiment it is. #}
+            <td class="jsoncell">
+              <a class="btn sm" href="/api/evals/{{ f.job_id }}/json" download>JSON</a>
+              <code title="{{ f.run_path }}">{{ f.run_path }}</code>
+            </td>
           </tr>
         {% endfor %}
         </tbody>
