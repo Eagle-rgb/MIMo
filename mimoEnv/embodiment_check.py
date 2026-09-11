@@ -62,6 +62,14 @@ measures the gap; here they are simply held out so it cannot mask a real drift.
 FMAX_TOLERANCE = 1e-5
 """ Relative, and it is the stored files' own ``%.6g`` precision rather than slack. """
 
+TEXTURE_BUDGET = 10_000
+""" Bytes of ``tex_data`` a stripped model may still hold.
+
+The strip replaces each texture with a 1x1 one rather than deleting it, so the ``<material>``
+elements that name them still resolve. Thirteen textures come to 219 bytes against 1.02 GB
+unstripped, so this bound is three orders of magnitude clear of both.
+"""
+
 FAILURES = []
 
 
@@ -77,6 +85,20 @@ def make_env(**kwargs):
                   age_physio=9, age_morph=9, achieved_goal_in_observation=True)
     params.update(kwargs)
     return gym.make('MIMoRollOver-v0', **params).unwrapped
+
+
+def snapshot(model):
+    """ Copy the compared arrays out of a model so the model itself can be freed.
+
+    Sections that hold two envs at once would otherwise peak at ~7.4 GB.
+
+    Arguments:
+        model (mujoco.MjModel): The model to read.
+
+    Returns:
+        dict[str, numpy.ndarray]: One copied array per entry of :data:`FIELDS`.
+    """
+    return {field: np.array(getattr(model, field), copy=True) for field in FIELDS}
 
 
 def compare_to_scene(model, scene, label):
@@ -266,6 +288,177 @@ def test_age_curriculum_ladder():
           f"{inverse._get_age_for_step(0):g} vs {staged._get_age_for_step(10 ** 9):g}")
 
 
+def test_age_curriculum_variance():
+    """ '--mgc_interval_cv' / '--mgc_jump_cv' vary the ladder without breaking what it promises.
+
+    At both CVs zero the schedule must be the periodic one bit for bit, whatever the budget. With
+    either on it must still start at step 0 and the first age, end at the last age, stay strictly
+    monotone, come back identical from its seed, and keep the two knobs independent of each
+    other. And 'mgc.yml' must hold exactly what the callback did. No environment is built.
+    """
+    print("\ntest_age_curriculum_variance")
+    import os
+    import tempfile
+
+    import yaml
+
+    from mimoEnv.envs.morphological_curriculum import (AGES, RECORD_FILE, age_ladder,
+                                                       growth_schedule, make_curriculum_callback)
+
+    exact = True
+    for stages in (None, 5, 20, 30):
+        for total in (300_000, 1_000_000, 2_000_000):
+            n = len(age_ladder(stages))
+            phase = max(1, total // n)
+            starts, ages = growth_schedule(stages, total)
+            exact &= starts == [i * phase for i in range(n)] and ages == age_ladder(stages)
+    check("both CVs at 0 reproduce the periodic ladder exactly", exact, "4 ladders x 3 budgets")
+
+    starts, ages = growth_schedule(20, 1_000_000, interval_cv=0.55, jump_cv=0.32, seed=3)
+    check("a varied ladder starts at step 0 and the first age and ends at the last age",
+          starts[0] == 0 and ages[0] == float(AGES[0]) and ages[-1] == float(AGES[-1]),
+          f"{ages[0]:g} -> {ages[-1]:g}")
+    check("... stays strictly monotone in steps and in age",
+          all(a < b for a, b in zip(starts, starts[1:])) and all(a < b for a, b in zip(ages, ages[1:])))
+    durations = np.diff(starts + [1_000_000])
+    check("... and is actually varied", np.ptp(durations) > 0 and np.ptp(np.diff(ages)) > 1e-6,
+          f"rungs {durations.min():,}..{durations.max():,} steps, "
+          f"jumps {np.diff(ages).min():.3f}..{np.diff(ages).max():.3f} months")
+    check("the same seed draws the same ladder",
+          growth_schedule(20, 1_000_000, 0.55, 0.32, 3) == (starts, ages))
+    check("another seed draws another ladder",
+          growth_schedule(20, 1_000_000, 0.55, 0.32, 4) != (starts, ages))
+    check("the jumps do not depend on the interval CV",
+          growth_schedule(20, 1_000_000, 0.0, 0.32, 3)[1] == ages)
+    check("the intervals do not depend on the jump CV",
+          growth_schedule(20, 1_000_000, 0.55, 0.0, 3)[0] == starts)
+
+    many_starts, many_ages = growth_schedule(2000, 2_000_000, interval_cv=0.55, jump_cv=0.32, seed=0)
+    d = np.diff(many_starts + [2_000_000])
+    j = np.diff(many_ages)
+    cv_d, cv_j = d.std() / d.mean(), j.std() / j.mean()
+    check("the realised CVs are the requested ones", abs(cv_d - 0.55) < 0.03 and abs(cv_j - 0.32) < 0.03,
+          f"interval {cv_d:.3f} (0.55), jump {cv_j:.3f} (0.32), 2000 rungs")
+
+    try:
+        growth_schedule(20, 1_000_000, interval_cv=-0.1)
+        check("a negative CV raises", False, "it did not")
+    except ValueError:
+        check("a negative CV raises", True)
+    for mode in ("stochastic", "none"):
+        try:
+            make_curriculum_callback(argparse.Namespace(mgc=mode, mgc_stages=None,
+                                                        mgc_stochastic_interval=20_000,
+                                                        mgc_jump_cv=0.3))
+            check(f"a CV with --mgc={mode} raises instead of doing nothing", False, "it did not")
+        except ValueError:
+            check(f"a CV with --mgc={mode} raises instead of doing nothing", True)
+
+    flags = dict(mgc_stages=20, train_for=1_000_000, mgc_stochastic_interval=20_000,
+                 mgc_interval_cv=0.55, mgc_jump_cv=0.32, mgc_seed=3)
+    with tempfile.TemporaryDirectory() as tmp:
+        cb = make_curriculum_callback(argparse.Namespace(mgc="growth", **flags), save_dir=tmp)
+        check("the callback walks the ladder growth_schedule draws",
+              cb.rung_starts == starts and cb.ages == ages)
+        inverse = make_curriculum_callback(argparse.Namespace(mgc="inverse", **flags))
+        check("the inverse curriculum walks the same varied ladder backwards",
+              [inverse._get_age_for_step(s) for s in starts] == ages[::-1])
+
+        # What '_on_step' does, at an episode boundary every 500 steps.
+        for boundary in range(0, 1_000_000, 500):
+            cb.num_timesteps = boundary
+            age = cb._get_age_for_step(boundary)
+            if age != cb.current_age:
+                cb.current_age = age
+                cb._note_swap(age)
+        with open(os.path.join(tmp, RECORD_FILE)) as infile:
+            record = yaml.safe_load(infile)
+        check("mgc.yml holds the planned ladder",
+              [r["step"] for r in record["planned"]] == starts
+              and [r["age"] for r in record["planned"]] == ages)
+        lags = [r["lag"] for r in record["realised"]]
+        check("mgc.yml holds every realised swap, each at most one episode late",
+              len(record["realised"]) == 20 and all(0 <= lag < 500 for lag in lags),
+              f"{len(record['realised'])} swaps, max lag {max(lags)} steps")
+        check("mgc.yml carries the flags that drew it, and no temp file is left behind",
+              (record["mgc_interval_cv"], record["mgc_jump_cv"], record["mgc_seed"]) == (0.55, 0.32, 3)
+              and record["skipped_rungs"] == [] and os.listdir(tmp) == [RECORD_FILE])
+
+    with tempfile.TemporaryDirectory() as tmp:
+        cb = make_curriculum_callback(argparse.Namespace(mgc="growth", **flags), save_dir=tmp)
+        for s in (starts[0], starts[2]):
+            cb.num_timesteps = s
+            cb._note_swap(cb._get_age_for_step(s))
+        with open(os.path.join(tmp, RECORD_FILE)) as infile:
+            record = yaml.safe_load(infile)
+        check("a rung passed without a swap is listed as skipped", record["skipped_rungs"] == [1],
+              str(record["skipped_rungs"]))
+
+
+def test_strip_textures():
+    """ Dropping the textures must change the memory and nothing else.
+
+    This is the whole claim behind ``--keep_textures`` being off by default: 1.02 GB of the
+    1.024 GB model is ``tex_data`` -- seven emotion faces at 2500x15000 the roll-over experiment
+    never displays -- and removing it leaves the compiled physics bit-identical. If that ever
+    stops being true, every training run since 08.09.2026 is on a different body than it claims.
+
+    Compared on an *amputated, off-diagonal, fractional* embodiment rather than the default, so
+    the strip is exercised together with everything else that edits the spec.
+    """
+    print("\ntest_strip_textures")
+    kwargs = dict(age_morph=4.5, age_physio=2.5, missing_limb='left_arm',
+                  missing_limb_mode='cut')
+
+    full = make_env(strip_textures=False, **kwargs)
+    full_arrays = snapshot(full.model)
+    full_arrays["_user"] = np.array(full.model.actuator_user, copy=True)
+    full_sizes = (full.model.nq, full.model.nu, full.model.ngeom, full.model.nsensor,
+                  full.model.nbody, full.model.njnt, full.model.nsite)
+    full_tex = full.model.ntexdata
+    full.close()
+    del full
+    gc.collect()
+
+    lean = make_env(strip_textures=True, **kwargs)
+    lean_arrays = snapshot(lean.model)
+    lean_arrays["_user"] = np.array(lean.model.actuator_user, copy=True)
+    lean_sizes = (lean.model.nq, lean.model.nu, lean.model.ngeom, lean.model.nsensor,
+                  lean.model.nbody, lean.model.njnt, lean.model.nsite)
+
+    worst, where = 0.0, "-"
+    for field in FIELDS + ("_user",):
+        a, b = full_arrays[field], lean_arrays[field]
+        if a.shape != b.shape:
+            worst, where = float("inf"), f"{field} shape"
+            break
+        difference = float(np.max(np.abs(a - b))) if a.size else 0.0
+        if difference > worst:
+            worst, where = difference, field
+
+    check("physics is bit-identical with and without textures", worst == 0.0,
+          f"worst {worst:.3e} in {where} over {len(FIELDS) + 1} fields")
+    check("the model sizes are unchanged", full_sizes == lean_sizes,
+          f"nq/nu/ngeom/nsensor/nbody/njnt/nsite {lean_sizes}")
+    # Not zero: the textures still exist, they are 1x1. Thirteen of them -- eleven cube maps at
+    # 6*1*1*3 bytes, one 2D at 3, one more cube -- come to exactly 219 bytes, against 1.02 GB.
+    # Asserted as a bound rather than an equality so that adding a texture to the scene does not
+    # fail this, while anything full-resolution surviving the strip does.
+    check("the texture data is actually gone", lean.model.ntexdata < TEXTURE_BUDGET,
+          f"{full_tex / 1e6:.1f} MB -> {lean.model.ntexdata} bytes")
+
+    # The strip has to survive an embodiment swap, or a curriculum would quietly pay the 937 ms
+    # again from the second stage onwards.
+    lean.set_embodiment(7.0, 9.0)
+    check("it survives an embodiment swap", lean.model.ntexdata < TEXTURE_BUDGET,
+          f"{lean.model.ntexdata} bytes after set_embodiment")
+
+    lean.reset(seed=0)
+    lean.step(lean.action_space.sample())
+    check("a textureless env resets and steps", True)
+    lean.close()
+
+
 def test_writes_no_files():
     """ The cluster regression, at the level the cluster actually runs.
 
@@ -310,7 +503,8 @@ def test_writes_no_files():
 SECTIONS = [
     'test_construction_matches_stored_scenes', 'test_set_embodiment_matches_stored_scenes',
     'test_fractional_ages', 'test_missing_limb_cut', 'test_missing_limb_ghost',
-    'test_age_curriculum_ladder', 'test_writes_no_files',
+    'test_age_curriculum_ladder', 'test_age_curriculum_variance', 'test_strip_textures',
+    'test_writes_no_files',
 ]
 
 

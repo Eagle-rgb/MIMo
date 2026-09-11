@@ -559,9 +559,12 @@
 
   var groupPoll = null;
 
-  function watchGroup(jobId, msg) {
-    var box = document.getElementById('grouplog');
-    var pre = document.querySelector('[data-group-log]');
+  /* 'kind' is 'group' or 'dcee': same queue, same log, same progress counter -- an embodiment
+     grid just counts through 16x as many runs, so one watcher covers both. */
+  function watchGroup(jobId, msg, kind) {
+    kind = kind || 'group';
+    var box = document.getElementById(kind + 'log');
+    var pre = document.querySelector('[data-' + kind + '-log]');
     if (box) box.hidden = false;
     clearInterval(groupPoll);
     groupPoll = setInterval(function () {
@@ -581,21 +584,58 @@
   }
 
   document.addEventListener('submit', function (e) {
-    var form = e.target.closest('[data-group-form]');
+    var form = e.target.closest('[data-group-form], [data-dcee-form]');
     if (!form) return;
     e.preventDefault();
-    var msg = form.querySelector('[data-group-msg]');
+    var kind = form.hasAttribute('data-dcee-form') ? 'dcee' : 'group';
+    var msg = form.querySelector('[data-' + kind + '-msg]');
     var button = form.querySelector('button[type=submit]');
     button.disabled = true;
     msg.textContent = 'Queueing\u2026';
-    post('/api/evals/group', new FormData(form)).then(function (data) {
+    post('/api/evals/' + kind, new FormData(form)).then(function (data) {
       button.disabled = false;
       msg.textContent = 'Queued. This runs one environment at a time.';
-      watchGroup(data.job.job_id, msg);
+      watchGroup(data.job.job_id, msg, kind);
     }).catch(function (err) {
       button.disabled = false;
       msg.textContent = err.message;
     });
+  });
+
+  /* The stored grid is redrawn on the server from the payload on disk, so restyling it is a new
+     image URL and never another evaluation. */
+  function drawDcee() {
+    var img = document.getElementById('dceechart');
+    if (!img) return;
+    var query = img.getAttribute('data-dcee-base');
+    query += '&metric=' + ((document.getElementById('dceemetric') || {}).value || 'successful');
+    [['dceepaneltitle', 'panel_title'], ['dceetitle', 'title'], ['dceew', 'width'],
+     ['dceeh', 'height'], ['dceethreshold', 'threshold']].forEach(function (pair) {
+      var el = document.getElementById(pair[0]);
+      var value = el && (el.value || '').trim();
+      if (value) query += '&' + pair[1] + '=' + encodeURIComponent(value);
+    });
+    /* 0 means "no colour bar", which is a real choice and not an empty field -- so the value is
+       read before the blank test, not after it. */
+    var bar = document.getElementById('dceecbar');
+    var barValue = bar && (bar.value || '').trim();
+    if (barValue !== '' && barValue !== null && barValue !== undefined) {
+      query += parseFloat(barValue) > 0 ? '&cbar_fraction=' + encodeURIComponent(barValue)
+                                        : '&cbar=0';
+    }
+    img.src = query;
+    setExportLink(document.getElementById('exportdcee'),
+                  query.replace('/dcee.png?', '/dcee.pdf?'));
+  }
+
+  document.addEventListener('change', function (e) {
+    if (e.target && e.target.id === 'dceemetric') drawDcee();
+  });
+  var dceeTimer = null;
+  document.addEventListener('input', function (e) {
+    if (!e.target.matches || !e.target.matches('#dceeopts input')) return;
+    clearTimeout(dceeTimer);
+    dceeTimer = setTimeout(drawDcee, 350);
   });
 
   /* ---------- actions -------------------------------------------------------------------- */

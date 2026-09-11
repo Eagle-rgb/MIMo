@@ -237,7 +237,8 @@ def page_experiment(request: Request, date: str = Query(None), posture: str = Qu
         "exp": experiment, "run_ids": run_ids, "stats": queries.stats(), "nav": "runs",
         "summary": queries.group_eval_summary(run_ids),
         "tags": queries.tags_for(run_ids),
-        "jobs": [j for j in evals.recent(12) if j["kind"] == "group"],
+        "jobs": [j for j in evals.recent(12) if j["kind"] in ("group", "dcee")],
+        "dcee": evals.dcee_json(date, posture, name),
     })
 
 
@@ -262,6 +263,19 @@ def api_eval_group(posture: str = Form(...), name: str = Form(...), date: str = 
     try:
         job = evals.submit_group(date or None, posture, name, episodes=episodes,
                                  checkpoint=checkpoint, success_threshold=success_threshold)
+    except (KeyError, ValueError, RuntimeError) as exc:
+        raise HTTPException(400, str(exc))
+    return JSONResponse({"job": job, "queue": evals.status()})
+
+
+@app.post("/api/evals/dcee")
+def api_eval_dcee(posture: str = Form(...), name: str = Form(...), date: str = Form(""),
+                  episodes: int = Form(40), checkpoint: str = Form("last"),
+                  success_threshold: float = Form(0.75), ages: str = Form("1,3,6,9")):
+    try:
+        job = evals.submit_dcee(date or None, posture, name, episodes=episodes,
+                                checkpoint=checkpoint, success_threshold=success_threshold,
+                                ages=ages)
     except (KeyError, ValueError, RuntimeError) as exc:
         raise HTTPException(400, str(exc))
     return JSONResponse({"job": job, "queue": evals.status()})
@@ -428,7 +442,9 @@ def plot_eval_bars(request: Request,
                    sort: str = Query("given")):
     """Bars from stored --group payloads, drawn by results/plot_eval_success.py itself."""
     sources = []
-    known = {j["job_id"]: j for j in evals.group_jsons()}
+    # Superseded payloads included: a chart URL that already names an older job must still draw
+    # it, rather than silently losing that bar.
+    known = {j["job_id"]: j for j in evals.group_jsons(include_superseded=True)}
     for item in request.query_params.getlist("src"):
         label, sep, job_id = item.partition("=")
         if not sep:
@@ -450,6 +466,43 @@ def plot_eval_bars(request: Request,
         except (ValueError, RuntimeError) as exc:
             raise HTTPException(400, str(exc))
     return _chart(data, fmt, _export_name("eval_success", fmt, f"{len(sources)}groups"))
+
+
+@app.get("/api/plot/dcee.png")
+@app.get("/api/plot/dcee.pdf")
+def plot_dcee(request: Request, job: str = Query(...),
+              metric: str = Query("successful"),
+              threshold: float = Query(0.75),
+              width: float = Query(None),
+              height: float = Query(None),
+              title: str = Query(None),
+              panel_title: str = Query(None),
+              cbar: int = Query(1),
+              cbar_fraction: float = Query(None),
+              cbar_label: str = Query(None)):
+    """The cross-embodiment grid, drawn by results/plot_dcee_grid.py itself.
+
+    Every parameter here is a re-render of the stored payload: the evaluation is on disk, so
+    restyling a figure costs one subprocess, never another pass over the models.
+    """
+    row = evals.job(job)
+    path = (row or {}).get("run_path")
+    if not row or row.get("kind") != "dcee" or not path or not os.path.exists(path):
+        raise HTTPException(404, "no embodiment grid stored for this job")
+
+    fmt = "pdf" if request.url.path.endswith(".pdf") else "png"
+    with tempfile.TemporaryDirectory() as tmp:
+        out = os.path.join(tmp, f"dcee.{fmt}")
+        try:
+            data = plots.dcee_grid([path], out, metric=metric, threshold=threshold,
+                                   width=width, height=height, title=title,
+                                   panel_titles=[panel_title] if panel_title is not None else None,
+                                   colorbar=bool(cbar), cbar_fraction=cbar_fraction,
+                                   cbar_label=cbar_label,
+                                   python=SETTINGS.python, cwd=SETTINGS.mimo_root)
+        except (ValueError, RuntimeError) as exc:
+            raise HTTPException(400, str(exc))
+    return _chart(data, fmt, _export_name("dcee", fmt, plots.slug(row.get("label") or job)))
 
 
 @app.get("/api/plot/goal_response.png")

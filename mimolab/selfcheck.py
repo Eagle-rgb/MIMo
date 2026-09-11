@@ -7,8 +7,10 @@ data.yml, a guard rail that stopped guarding.
 """
 
 import json
+import os
 import re
 import sys
+import tempfile
 import traceback
 from pathlib import Path
 
@@ -491,8 +493,11 @@ def _tab_palette():
     source = float(re.search(r'"lines\.linewidth":\s*([\d.]+)', icdl).group(1))
     assert rc["lines.linewidth"] == source, \
         f"icdlplot.py says {source}, the app renders at {rc['lines.linewidth']}"
-    assert "savefig.bbox" not in rc, \
-        "tight bbox would resize the page and break the column width"
+    # Pinned to None, not merely absent: savefig(bbox_inches=None) means "use the rcParam", so an
+    # unset key would let icdlplot.py's own savefig.bbox='tight' crop the page away from the
+    # requested width.
+    assert "savefig.bbox" in icdl and rc["savefig.bbox"] is None, \
+        f"savefig.bbox is {rc.get('savefig.bbox')!r}; tight cropping would resize the page"
     assert rc["pdf.fonttype"] == 42, "Type 3 fonts would reach the thesis template"
     return f"{len(plots.TAB_COLORS)} tab colours, lines.linewidth {rc['lines.linewidth']}"
 
@@ -720,6 +725,102 @@ def _bars():
     return f"{len(files)} payload(s) stored, newest {files[0]['label']}"
 
 
+@check("a new evaluation strictly replaces the old one, and nothing else")
+def _strict_overwrite():
+    """Run against a throwaway database, never the real one: this check deletes.
+
+    Builds one experiment with four other evaluations around the new one -- an older copy (must
+    go), a 'best'-checkpoint evaluation of the same seeds (a different measurement, must stay), a
+    DCEE grid of the same seeds (a different kind, must stay) and a failed attempt (not a result,
+    must be left alone) -- and checks that exactly the older copy disappears, rows included.
+    """
+    real_root, real_models = SETTINGS.mimo_root, SETTINGS.models_root
+    with tempfile.TemporaryDirectory() as tmp:
+        try:
+            configure(mimo_root=tmp, models_root=real_models)
+            db.reset_connection()
+            runs = {"r0": "/nowhere/exp_run_0", "r1": "/nowhere/exp_run_1"}
+            for run_id, path in runs.items():
+                db.execute("INSERT INTO runs (run_id, path) VALUES (?, ?)", (run_id, path))
+
+            def job(job_id, kind, checkpoint, window, state="finished"):
+                path = SETTINGS.eval_dir / f"{job_id}.json"
+                payload = {"group": "/nowhere/exp", "checkpoint": checkpoint,
+                           "rows": [{"model": f"{p}/model_1.zip", "rolled": 1.0}
+                                    for p in runs.values()]}
+                path.write_text(json.dumps(payload))
+                (SETTINGS.log_dir / f"{job_id}.log").write_text("log")
+                db.execute("""INSERT INTO jobs (job_id, kind, label, run_path, started_at,
+                                               finished_at, state) VALUES (?,?,?,?,?,?,?)""",
+                           (job_id, kind, job_id, str(path), window[0], window[1], state))
+                for run_id in runs:
+                    db.execute("""INSERT INTO evals (run_id, checkpoint, rolled, raw, created_at)
+                                  VALUES (?, 'model_1.zip', 1.0, '{}', ?)""",
+                               (run_id, (window[0] + window[1]) / 2))
+                return payload
+
+            job("old", "group", "last", (100, 200))
+            job("best", "group", "best", (210, 260))
+            job("grid", "dcee", "last", (270, 300))
+            job("failed", "group", "last", (305, 309), state="failed")
+            new_payload = job("new", "group", "last", (310, 400), state="running")
+
+            removed = evals._supersede("new", "group", new_payload)
+            assert removed == ["old"], f"replaced {removed}, expected exactly the older copy"
+
+            jobs_left = {r["job_id"] for r in db.query("SELECT job_id FROM jobs")}
+            assert jobs_left == {"best", "grid", "failed", "new"}, jobs_left
+            assert not (SETTINGS.eval_dir / "old.json").exists(), "the old payload is still on disk"
+            assert not (SETTINGS.log_dir / "old.log").exists(), "the old log is still on disk"
+            for kept in ("best", "grid", "failed", "new"):
+                assert (SETTINGS.eval_dir / f"{kept}.json").exists(), f"{kept}.json was deleted"
+            windows = sorted(r["created_at"] for r in db.query("SELECT created_at FROM evals"))
+            assert 150 not in windows, "the old evaluation's rows survived"
+            assert windows.count(235) == 2 and windows.count(285) == 2 and windows.count(355) == 2, \
+                f"rows of an evaluation that should stay were deleted: {windows}"
+
+            # A second pass finds nothing left to replace -- the overwrite is idempotent.
+            assert evals._supersede("new", "group", new_payload) == []
+        finally:
+            db.reset_connection()
+            configure(mimo_root=real_root, models_root=real_models)
+            db.reset_connection()
+    return "older copy removed with its rows; best, grid and the failed attempt untouched"
+
+
+@check("a re-evaluated experiment is offered once, from its newest payload")
+def _superseded():
+    """Re-running never overwrites, so the listing has to pick.
+
+    Seven experiments carried two payloads on 11.09.2026; three of them were identical and both
+    had laterality, so a notebook pooling the directory counted those seeds twice, and one differed
+    0 -> 4 successful from the same model_1.zip. The bar panel must not offer the stale copy.
+    """
+    listed = evals.group_jsons()
+    everything = evals.group_jsons(include_superseded=True)
+    keys = []
+    for entry in listed:
+        with open(entry["run_path"]) as fh:
+            payload = json.load(fh)
+        keys.append((payload.get("group"), payload.get("checkpoint")))
+    assert len(keys) == len(set(keys)), "one (group, checkpoint) is listed more than once"
+    assert not any(e.get("superseded") for e in listed), "a superseded payload was listed"
+
+    older = [e for e in everything if e.get("superseded")]
+    if not older:
+        return f"{len(listed)} payloads, none re-evaluated"
+    # finished_at DESC is the order supersession relies on: the listed copy must be the newest.
+    newest = {}
+    for entry in everything:
+        with open(entry["run_path"]) as fh:
+            payload = json.load(fh)
+        key = (payload.get("group"), payload.get("checkpoint"))
+        newest.setdefault(key, entry)
+    assert {e["job_id"] for e in listed} == {e["job_id"] for e in newest.values()}, \
+        "the listed payload is not the newest for its group"
+    return f"{len(listed)} offered, {len(older)} older copies kept on disk but not offered"
+
+
 @check("a stored --group payload can be fetched as a file")
 def _payload_download():
     """The JSON eval_rollover.py wrote is kept permanently and is reachable by name.
@@ -749,6 +850,99 @@ def _payload_download():
     missing = client.get("/api/evals/does-not-exist/json")
     assert missing.status_code == 404, missing.status_code
     return f"{len(stored)} payloads, newest served as {disposition.split('filename=')[-1]}"
+
+
+@check("the embodiment grid transfers a policy without rebuilding the environment")
+def _dcee_protocol():
+    """The DCEE measurement: one policy, every (actuation age, body age) pair.
+
+    Checked without MuJoCo -- what matters here is that the ages reach the env kwargs and that a
+    pure age change is recognised as a swap. Rebuilding instead would cost 16 environments of
+    3.6 GB for one grid, and a signature that missed a *non*-age difference would silently score
+    a run against the wrong floor or the wrong limb.
+    """
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    from mimoEnv import eval_rollover as er
+
+    assert er.parse_ages("1,3,6,9") == [1.0, 3.0, 6.0, 9.0]
+    for junk in ("", "1,99", "abc"):
+        try:
+            er.parse_ages(junk)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"parse_ages({junk!r}) should have been refused")
+
+    config = {"physio_age": 9, "morph_age": 9, "algorithm": "PPO"}
+    base = er.env_kwargs(config, "supine", 0.95)
+    moved = er.env_kwargs(dict(config, physio_age=1, morph_age=3), "supine", 0.95)
+    assert (moved["age_physio"], moved["age_morph"]) == (1, 3), "the ages did not reach the env"
+    changed = {k for k in set(base) | set(moved) if base.get(k) != moved.get(k)}
+    assert changed == {"age_physio", "age_morph"}, \
+        f"changing the ages moved something else too: {changed}"
+
+    cache = er._EnvCache()
+    cache._env, cache._kwargs = object(), base           # no MuJoCo needed for the decision
+    assert cache._differs_only_by_age(moved) is False, \
+        "an object without set_embodiment must be rebuilt, not swapped"
+
+    class _Swappable:
+        def set_embodiment(self, morph, physio):
+            pass
+
+    cache._env = _Swappable()
+    assert cache._differs_only_by_age(moved), "a pure age change should be a swap"
+    assert not cache._differs_only_by_age(base), "an identical config is not a swap"
+    other_floor = er.env_kwargs(dict(config, physio_age=1, floor_softness=0.1), "supine", 0.95)
+    assert not cache._differs_only_by_age(other_floor), \
+        "a floor change must force a rebuild, not ride along with an age swap"
+    return "ages reach the env, and only an age change is swapped in place"
+
+
+@check("the cross-embodiment grid is drawn at the size asked for, in the configured style")
+def _dcee_plot():
+    grid = evals.dcee_payloads(limit=1)
+    if not grid:
+        return "no embodiment grid evaluated yet"
+    path = grid[0]["run_path"]
+
+    with tempfile.TemporaryDirectory() as tmp:
+        out = os.path.join(tmp, "dcee.pdf")
+        data = plots.dcee_grid([path], out, width=2.8, height=2.8,
+                               python=sys.executable, cwd=SETTINGS.mimo_root)
+    assert data.startswith(b"%PDF"), "not a PDF"
+    box = [float(v) for v in re.search(rb"/MediaBox\s*\[([\d.\s-]+)\]", data).group(1).split()]
+    # icdlplot.py sets savefig.bbox='tight', which would return some other width. The figure goes
+    # into the document at a fixed \includegraphics width, so it has to come out at that width.
+    assert abs(box[2] - 2.8 * 72) < 1.5 and abs(box[3] - 2.8 * 72) < 1.5, \
+        f"page is {box[2] / 72:.2f} x {box[3] / 72:.2f} in, expected 2.8 x 2.8"
+    assert b"/Type3" not in data, "Type 3 fonts leaked into the export -- the rcParams did not travel"
+
+    from fastapi.testclient import TestClient
+    from . import app as appmod
+    client = TestClient(appmod.app)
+    job_id = grid[0]["job_id"]
+    ok = client.get("/api/plot/dcee.png", params={"job": job_id})
+    assert ok.status_code == 200 and ok.content.startswith(b"\x89PNG"), ok.status_code
+
+    # Restyling is a re-render of the payload, never another evaluation: the figure has to change
+    # and the stored JSON has to not.
+    before = os.path.getmtime(path)
+    restyled = client.get("/api/plot/dcee.png", params={
+        "job": job_id, "metric": "roll_rate", "cbar_fraction": 0.12,
+        "width": 4.0, "height": 3.0, "panel_title": "leftarm"})
+    assert restyled.status_code == 200, restyled.status_code
+    assert restyled.content != ok.content, "the style controls changed nothing"
+    assert os.path.getmtime(path) == before, "re-rendering touched the stored payload"
+    bare = client.get("/api/plot/dcee.png", params={"job": job_id, "cbar": 0})
+    assert bare.status_code == 200 and len(bare.content) < len(ok.content), \
+        "cbar=0 should drop the colour bar"
+    plain = evals.group_jsons(limit=1)
+    if plain:
+        # A plain --group job has no grid; the route must say so rather than draw an empty one.
+        missed = client.get("/api/plot/dcee.png", params={"job": plain[0]["job_id"]})
+        assert missed.status_code == 404, missed.status_code
+    return f"{len(grid)} grid(s) stored; restyled from the payload without re-evaluating"
 
 
 @check("the bar panel offers only evaluations of the selected runs")

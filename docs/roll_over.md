@@ -162,6 +162,44 @@ silently:
   applying one. Geometry and gear stay bit-identical because the growth schema supplies absolute
   sizes rather than scale factors.
 
+#### Textures are 99.99 % of the model, and training drops them
+
+Added 08.09.2026, out of the question "what would per-episode age randomisation cost?".
+
+A swap costs **937 ms**, and 853 ms of that is `spec.compile()`. Almost none of it is physics:
+
+```
+sum of MjModel arrays: 1024.0 MB
+  tex_data              1023.86 MB     <-- everything else together: 0.14 MB
+```
+
+Seven emotion faces at 2500×15000 decompressed (112 MB each; the roll-over experiment never
+displays one), plus the sleeve and trouser cube maps at 111 MB. On disk they are 3.8 MB of PNG.
+
+`mimoGrowth.spec.strip_textures` replaces each with a 1×1 flat texture, keeping the names so the
+`<material>` elements still resolve — 1.02 GB becomes 219 bytes. `illustrations.py` applies it
+**by default** and turns it off automatically for `--test`, `--render_video`, `--render_frames`,
+`--render_actuations` and `--vision`; `--keep_textures` forces it off. It prints which it chose.
+
+| | textures | stripped |
+|---|---|---|
+| `spec.compile()` | 1637 ms | **19 ms** |
+| re-compile on a cached spec | 853 ms | **1.4 ms** |
+| `set_embodiment()` | 937 ms | **26 ms** |
+| RSS of one env | 3712 MB | **1774 MB** |
+
+**The compiled physics is bit-identical** — 0.000e+00 over 14 arrays including the contact
+parameters, on an amputated fractional off-diagonal embodiment
+(`embodiment_check.py:test_strip_textures`), and the strip survives a `set_embodiment`.
+
+So per-episode age randomisation, which was **4.0×** wall clock at a 500-step horizon and
+**14.8×** at 100, becomes **1.08×** and **1.38×**. Caching compiled models instead does not work:
+one `MjModel` is 976 MB, so a 30-stage ladder is 29 GB.
+
+`keep_textures` is deliberately **not** in `data.yml` (§7): the strip is physics-neutral, so it
+does not define the model, and storing it would wrongly strip textures from an evaluation that
+renders.
+
 #### The two ages stay independent
 
 That was previously visible in the scene file — each scene included
@@ -1213,7 +1251,13 @@ pattern when renaming, and keep the `# Previously: --old_name` comments the fork
 (`--pen_factor` was `--pen_fac`).
 
 Deliberately **not** stored, because they describe the invocation rather than the model:
-`save_model`, `save_every`, `test`, `render_video`, `roll_over_starting_position`.
+`save_model`, `save_every`, `test`, `render_video`, `roll_over_starting_position`,
+`keep_textures`.
+
+`keep_textures` is on that list on purpose, not by omission: the texture strip is provably
+physics-neutral (§2.1), so it does not define the model — and storing it would be actively wrong,
+because a run trained with textures stripped still has to be *evaluated* with them present when
+the evaluation renders. It is re-resolved from each invocation's own render flags.
 
 `use_muscle` **was** on that list and moved into the yaml on 02.09.2026
 (`illustrations.py:1145`): it doubles the action space and replaces the actuation block of the
@@ -1370,6 +1414,7 @@ purpose. "yaml" marks the flags that round-trip through `data.yml` (§7).
 | `--mgc` | choice `growth\|inverse\|stochastic\|none`, default `none` | ✓ | morphological growth curriculum (§2.7) |
 | `--mgc_stages` | int, `None` | ✓ | ages in the ladder; unset = `[1,3,6,9]` at 250k each. A value divides the same 1M budget (§2.7) |
 | `--mgc_stochastic_interval` | int, `20000` | — | only for `--mgc=stochastic` |
+| `--keep_textures` | flag | — | keep MIMo's 1.02 GB of textures during training. Off by default and forced on whenever something renders (§2.1) |
 
 ### Observation
 

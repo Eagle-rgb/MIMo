@@ -49,8 +49,6 @@ from mimoEnv.envs.roll_over import (LIMBS, LIMB_GROUPS, MISSING_LIMB_MODES,
 from mimoEnv.envs.roll_over_callback import RollOverCallback, RollOverEvalCallback
 from mimoEnv.envs.morphological_curriculum import make_curriculum_callback
 from mimoEnv.envs.isr_callback import ISRCallback
-from mimoEnv.envs.entropy_callback import EntropyPenaltyCallback
-from mimoEnv.envs.policy_init import set_action_bias
 from stable_baselines3.common.callbacks import CallbackList
 
 from mimoEnv.utils import load_model_yaml
@@ -269,7 +267,9 @@ def train(model, train_for, save_every, save_dir, isr, argparse_args, save_inter
     counter = 0
     train_for_total = train_for
     callback_logger = RollOverCallback(save_intermediate=save_intermediate, save_dir=save_dir)
-    callback_morph = make_curriculum_callback(argparse_args)
+    # 11.09.2026 'save_dir' so the curriculum can keep its own record ('mgc.yml') of the ladder it
+    # drew and of every swap that fired -- see morphological_curriculum.RECORD_FILE.
+    callback_morph = make_curriculum_callback(argparse_args, save_dir=save_dir)
 
     callbacks = [callback_logger]
 
@@ -278,17 +278,6 @@ def train(model, train_for, save_every, save_dir, isr, argparse_args, save_inter
 
     if callback_morph:
         callbacks.append(callback_morph)
-
-    # 08.09.2026 A negative --ent_coef only. SB3's default of 0.0 means 'no entropy term at
-    # all', so there is no bonus to reduce; see EntropyPenaltyCallback for why the schedule and
-    # the std floor are part of the mechanism rather than conveniences.
-    if getattr(argparse_args, 'ent_coef', 0.0) != 0.0:
-        callbacks.append(EntropyPenaltyCallback(
-            total_timesteps=train_for_total,
-            ent_coef=argparse_args.ent_coef,
-            start_fraction=argparse_args.ent_coef_start,
-            std_floor=argparse_args.ent_coef_std_floor))
-
 
     if eval_callback is not None:
         callbacks.append(eval_callback)
@@ -520,42 +509,6 @@ An example is '251206_prone_linear_1e6_test'
                         help="Disable action penalty in reward function.")
     parser.add_argument('--lr', required=False, default=3e-4, type=float,
                         help="Learning rate. Default 1e-3 for PPO algorithm. Only used for PPO algorithm.")
-    parser.add_argument('--log_std_init', default=None, type=float,
-                        help="Initial log standard deviation of the Gaussian policy (PPO/A2C "
-                             "only). SB3's default is 0.0, i.e. sigma = 1.0, which on the "
-                             "[-1, 1] action box clips 32%% of samples (measured 0.320 on a "
-                             "muscle rollout). The spring-damper converges to sigma 0.654 by "
-                             "itself, so -0.42 starts a run where the working one ends up; -1.0 "
-                             "gives sigma 0.368. Use it WITH --action_bias_init under "
-                             "--use_muscle: on its own a narrower sigma just concentrates the "
-                             "policy on the co-contracted mean.")
-    parser.add_argument('--action_bias_init', default=None, type=float,
-                        help="Bias written into every output unit of the action-mean layer of a "
-                             "freshly built policy, i.e. the action MIMo starts from. Default "
-                             "(None) leaves SB3's ~0. That is zero torque under the "
-                             "spring-damper model but half activation on all 92 muscles under "
-                             "--use_muscle, where a relaxed start needs a negative value "
-                             "(-1.0 is limp but on the box edge; -0.6 gives activation 0.2). "
-                             "Ignored when --load_model is given. PPO/A2C/SAC only.")
-    parser.add_argument('--ent_coef', default=0.0, type=float,
-                        help="Target entropy coefficient for PPO/A2C, ramped in by "
-                             "EntropyPenaltyCallback between --ent_coef_start and the end of "
-                             "training. Must be NEGATIVE: SB3's default of 0.0 already means "
-                             "'no entropy term', so the only way to push exploration noise down "
-                             "is a penalty. The scale is set by |d policy_loss / d log_std|, "
-                             "measured at 0.0144 on the muscle roll-over env (0.0015 on "
-                             "Pendulum, so toy-task values do not transfer): the useful band is "
-                             "about -0.005 to -0.03. 0.0 disables the schedule entirely.")
-    parser.add_argument('--ent_coef_start', default=0.5, type=float,
-                        help="Fraction of training before the entropy penalty starts ramping "
-                             "in. Not 0: the muscle runs first reach side-lying at 300-400k "
-                             "steps, and a policy that has committed before then has nothing to "
-                             "commit to.")
-    parser.add_argument('--ent_coef_std_floor', default=0.1, type=float,
-                        help="Switch the entropy penalty off for good once train/std falls "
-                             "below this. PPO does not clamp log_std (SAC clamps to [-20, 2]) "
-                             "and the penalty's gradient on log_std is a constant 1 per "
-                             "dimension, so a runaway is possible.")
     parser.add_argument('--buffer_size', default=300_000, type=int,
                         help="Replay buffer size for the off-policy algorithms (SAC/TD3/DDPG). "
                              "Must stay well below the SB3 default of 1e6: one roll_over observation "
@@ -701,6 +654,16 @@ An example is '251206_prone_linear_1e6_test'
                              "into the hip frame. Defaults to following --render_video, so a video "
                              "always ships with the numbers behind it. Pass --no-log_obs to "
                              "suppress. Describes the invocation, so not stored in data.yml.")
+    # 08.09.2026 MIMo's textures are 1023.86 MB of a 1024.0 MB model -- seven emotion faces at
+    # 2500x15000 that the roll-over experiment never displays, plus the sleeve and trouser cube
+    # maps. Dropping them makes one env cost 1.8 GB instead of 3.7 and an embodiment swap 26 ms
+    # instead of 937, with bit-identical physics. Off automatically whenever something renders.
+    parser.add_argument('--keep_textures', default=False, action='store_true', required=False,
+                        help="Keep MIMo's full-resolution textures during training. They are "
+                             "dropped by default (1.02 GB per env, 99.99 %% of the compiled "
+                             "model, bit-identical physics) and kept automatically whenever "
+                             "anything renders -- --test, --render_video, --render_frames or "
+                             "--vision. Pass this only to render from inside a training run.")
     parser.add_argument('--render_frames', default=False, action='store_true', required=False,
                         help="Renders many frames - including the final image of the episode in testing - "
                         " and saves them as 'frame_{1-5}.png'.")
@@ -730,10 +693,31 @@ An example is '251206_prone_linear_1e6_test'
     parser.add_argument('--mgc_stages', type=int, default=None,
                         help="Number of ages the morphological curriculum steps through, spread "
                              "evenly from 1 to 9 months. Default (unset) is the historical "
-                             "ladder [1, 3, 6, 9] with 250k steps each, which is what every "
-                             "stored MGC run used. A value here divides the same 1M-step budget "
-                             "over that many phases instead, so e.g. 30 gives near-continuous "
-                             "growth at ~33k steps per stage.")
+                             "ladder [1, 3, 6, 9], which is what every stored MGC run used. "
+                             "Either way the ladder is spread over --train_for, so e.g. 30 at "
+                             "1M steps gives near-continuous growth at ~33k steps per stage.")
+    # 11.09.2026 Infant growth is neither periodic nor even: Lampl, Veldhuis & Johnson (1992) find
+    # length accrues in <= 24 h saltations of variable size, separated by stasis of variable
+    # length. Both are allowed here as a CV around the ladder above; at 0 (the default) the ladder
+    # is the periodic one bit for bit. The curve each run draws goes into 'mgc.yml' in the run
+    # directory, not into 'data.yml'.
+    parser.add_argument('--mgc_interval_cv', type=float, default=0.0,
+                        help="Aperiodicity of --mgc=growth|inverse: coefficient of variation of "
+                             "the time spent on each rung (mean-1 gamma, renormalised so the "
+                             "ladder still spans --train_for). 0 (default) is periodic. "
+                             "Reference: Lampl et al. (1992) stasis between saltations, "
+                             "11.9 +- 6.5 days, i.e. 0.55.")
+    parser.add_argument('--mgc_jump_cv', type=float, default=0.0,
+                        help="Variance of --mgc=growth|inverse: coefficient of variation of each "
+                             "rung's age increment around the ladder's own (mean-1 gamma, "
+                             "renormalised so MIMo still ends at the last age). 0 (default) is "
+                             "the even ladder. Reference: Lampl et al. (1992) saltation amplitude, "
+                             "0.95 +- 0.30 cm, i.e. 0.32.")
+    parser.add_argument('--mgc_seed', type=int, default=0,
+                        help="Seed for --mgc_interval_cv/--mgc_jump_cv. The two draw from "
+                             "independent streams, so changing one CV leaves the other's "
+                             "realisation unchanged. Give each run of a sweep its own (e.g. the "
+                             "run index) unless every seed is meant to share one growth pattern.")
     parser.add_argument('--obs_noise', type=float,
                         default=0.0,
                         help="Introduces observation noise. Adds a normal distribution with stddev " \
@@ -776,8 +760,6 @@ An example is '251206_prone_linear_1e6_test'
     log_actuations = args.log_actuations
     nopen = args.nopen
     learning_rate = args.lr
-    log_std_init = args.log_std_init
-    action_bias_init = args.action_bias_init
     pbrs = args.pbrs
     pbrs_w = args.pbrs_w
     isr = args.isr
@@ -794,6 +776,14 @@ An example is '251206_prone_linear_1e6_test'
     ghost_obs = args.ghost_obs
     side_lying = args.side_lying
     render_frames = args.render_frames
+    # Textures are needed only by something that looks at the model. Resolved from the flags
+    # rather than left to the user, because forgetting it does not raise -- it renders MIMo in
+    # flat colours, and under --vision it would feed the policy those flat colours silently.
+    renders_something = (should_test or render or render_frames or args.render_actuations
+                         or args.vision or args.keep_textures)
+    strip_textures = not renders_something
+    print(f"Textures: {'kept' if renders_something else 'stripped'} "
+          f"({'something renders' if renders_something else 'nothing renders; saves ~1.9 GB/env'})")
     morph_age = args.morph_age
     physio_age = args.physio_age
     save_intermediate = args.save_intermediate
@@ -964,6 +954,7 @@ An example is '251206_prone_linear_1e6_test'
             floor_solimp_width=args.floor_solimp_width,
             cos_goal_pool=args.cos_goal_pool,
             muscle_action_space=muscle_action_space,
+            strip_textures=strip_textures,
             vision_params=DEFAULT_VISION_PARAMS if args.vision else None)
         # if log_actuations:
         #     wrapped_env = MIMoRollOverWrapper(env, log_file=os.path.join(save_dir,"actuation_log.csv"))
@@ -988,19 +979,6 @@ An example is '251206_prone_linear_1e6_test'
             env.observation_normalization_mean = mean_dict
             env.observation_normalization_std = std_dict
 
-    # 08.09.2026 'log_std_init' is a parameter of ActorCriticPolicy, which only PPO and A2C
-    # use. SAC's actor produces a state-dependent log_std from an nn.Linear (its own
-    # 'log_std_init' applies only under use_sde), and TD3/DDPG are deterministic, so passing it
-    # there would be silently ignored rather than refused.
-    if log_std_init is not None and algorithm not in ('PPO', 'A2C'):
-        raise ValueError(f"--log_std_init applies to PPO and A2C only, got --algorithm="
-                         f"{algorithm}. SAC derives log_std from the observation and TD3/DDPG "
-                         f"have no policy noise to initialise.")
-    if args.ent_coef != 0.0 and algorithm not in ('PPO', 'A2C'):
-        raise ValueError(f"--ent_coef applies to PPO and A2C only, got --algorithm={algorithm}. "
-                         f"SAC tunes its entropy coefficient itself and never reads "
-                         f"'model.ent_coef'.")
-
     # load pretrained model or create new one
     # Set learning rate for PPO algorithm.
     if algorithm=='PPO':
@@ -1010,15 +988,9 @@ An example is '251206_prone_linear_1e6_test'
                             learning_rate=learning_rate,
                             verbose=1)
         else:
-            # 08.09.2026 'log_std_init' only through policy_kwargs on a fresh model: a loaded one
-            # carries its own trained log_std, and passing policy_kwargs to 'RL.load' would be
-            # ignored anyway (SB3 takes them from the saved data unless overridden via
-            # 'custom_objects').
-            policy_kwargs = {} if log_std_init is None else dict(log_std_init=log_std_init)
             model = RL("MultiInputPolicy", env,
                     tensorboard_log=save_dir,
                     learning_rate=learning_rate,
-                    policy_kwargs=policy_kwargs,
                     verbose=1)
     elif algorithm in OFF_POLICY_ALGORITHMS:
         # Off-policy algorithms keep a replay buffer, which PPO/A2C do not. Its size must be
@@ -1068,27 +1040,9 @@ An example is '251206_prone_linear_1e6_test'
                     tensorboard_log=save_dir,
                     verbose=1)
 
-    # 08.09.2026 After construction, because SB3 orthogonally initialises 'action_net' inside
-    # the policy's own constructor and would overwrite anything set earlier. Skipped when
-    # loading: a loaded model's action head is trained, and resetting its bias would throw that
-    # away.
-    if action_bias_init is not None and not load_model and model is not None:
-        head = set_action_bias(model, action_bias_init)
-        print(f"Action mean initialised to {action_bias_init} on {head.out_features} dimensions.")
-
     # Save model metadata in model.
     yaml_data = {
         'lr': args.lr,
-        # Experiment-defining: they set where the policy's action distribution starts and how
-        # hard training pushes its width down, which is the difference between a policy that
-        # relies on its own exploration noise and one that has internalised the behaviour.
-        # 'log_std_init'/'action_bias_init' only touch initialisation, so a reloaded model
-        # ignores them -- they are stored to document the run, not to rebuild it.
-        'log_std_init': log_std_init,
-        'action_bias_init': action_bias_init,
-        'ent_coef': args.ent_coef,
-        'ent_coef_start': args.ent_coef_start,
-        'ent_coef_std_floor': args.ent_coef_std_floor,
         'nopen': nopen,
         'pbrs': pbrs,
         'pbrs_w': pbrs_w,
@@ -1130,6 +1084,12 @@ An example is '251206_prone_linear_1e6_test'
         # fall back to 'none' / the historical [1, 3, 6, 9], which is what they used.
         'mgc': args.mgc,
         'mgc_stages': args.mgc_stages,
+        # 11.09.2026 The flags that draw a varied ladder, so '--load_model' redraws the same one and
+        # mimolab can tell a varied run from a periodic one. The drawn curve itself is in
+        # 'mgc.yml'. Stored runs carry none of the three and fall back to 0, i.e. periodic.
+        'mgc_interval_cv': args.mgc_interval_cv,
+        'mgc_jump_cv': args.mgc_jump_cv,
+        'mgc_seed': args.mgc_seed,
         'headfree': True,  # this is just a reminder for me that all models going forward can freely move their head.
         'obs_noise': args.obs_noise,
         'proprio_params': proprio_params,

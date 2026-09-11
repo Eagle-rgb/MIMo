@@ -79,6 +79,116 @@
     </div>
   </div>
 
+  {% if exp.group_spec %}
+  <div class="panel">
+    <h2>Cross-embodiment (DCEE)</h2>
+    <p class="sub">The same seeds scored on every embodiment: <code>--embodiment_grid</code> runs
+      the group once per (actuation age, body age) pair. The ages do not change the observation or
+      action space, so the policy is transferred, not retrained. One environment for the whole
+      grid &mdash; MIMo is re-grown in place between cells.</p>
+
+    <form class="form" data-dcee-form>
+      <input type="hidden" name="posture" value="{{ exp.posture }}">
+      <input type="hidden" name="name" value="{{ exp.model_name }}">
+      <input type="hidden" name="date" value="{{ exp.date or '' }}">
+      <div class="fieldrow">
+        <div class="field">
+          <label for="dep">Episodes per run</label>
+          <input id="dep" type="number" name="episodes" value="40" min="1" max="500">
+        </div>
+        <div class="field">
+          <label for="dck">Checkpoint</label>
+          <select id="dck" name="checkpoint">
+            <option value="last">last (end of training)</option>
+            <option value="best">best (EvalCallback's pick)</option>
+            {% for c in exp.checkpoints %}<option value="{{ c }}">{{ c }}</option>{% endfor %}
+          </select>
+        </div>
+        <div class="field">
+          <label for="dages">Ages</label>
+          <input id="dages" type="text" name="ages" value="{{ AGES|join(',') }}">
+        </div>
+        <div class="field">
+          <label for="dth">Success threshold</label>
+          <input id="dth" type="number" name="success_threshold" value="0.75" step="0.05" min="0" max="1">
+        </div>
+      </div>
+      <div>
+        <button class="btn primary sm" type="submit">Evaluate {{ exp.n_seeds }} seed{{ '' if exp.n_seeds == 1 else 's' }} on {{ AGES|length * AGES|length }} embodiments</button>
+        <span class="mono" style="font-size:.7rem;color:var(--ink-faint)" data-dcee-msg></span>
+      </div>
+      {# The cost is the thing to know before pressing it, not after. #}
+      <p class="hint">{{ AGES|length * AGES|length }} cells &times; {{ exp.n_seeds }} seeds &times; 40 episodes
+        = {{ AGES|length * AGES|length * exp.n_seeds * 40 }} episodes at the default settings. At
+        roughly a second each that is well over an hour; the queue runs one environment at a time,
+        so lower the episode count first if you only want to see the shape.</p>
+    </form>
+
+    <div id="dceelog" hidden>
+      <div class="chartbar" style="margin-top:.8rem"><span class="label">Output</span></div>
+      <pre class="log" data-dcee-log>&hellip;</pre>
+    </div>
+
+    {% if dcee %}
+    <div class="chartbar" style="margin-top:.9rem">
+      <span class="label">Grid</span>
+      <span class="runmeta">{{ human_age(dcee.finished_at) }}</span>
+      <span class="spacer" style="flex:1"></span>
+      <label class="inline" for="dceemetric">Metric</label>
+      <select id="dceemetric">
+        <option value="successful">Successful models [%]</option>
+        <option value="roll_rate">Mean roll rate [%]</option>
+      </select>
+      <a class="btn sm" id="exportdcee" download
+         href="/api/plot/dcee.pdf?job={{ dcee.job_id|urlencode }}">Export PDF</a>
+      <a class="btn sm" href="/api/evals/{{ dcee.job_id|urlencode }}/json" download>JSON</a>
+    </div>
+    <details class="figopts" id="dceeopts">
+      <summary>Figure style</summary>
+      <p class="hint">Every control here redraws the stored payload &mdash; the evaluation itself
+        is on disk and is never re-run. Leave a field empty for its default.</p>
+      <div class="fieldrow">
+        <div class="field">
+          <label for="dceepaneltitle">Panel title</label>
+          <input id="dceepaneltitle" type="text" placeholder="none">
+        </div>
+        <div class="field">
+          <label for="dceetitle">Figure title</label>
+          <input id="dceetitle" type="text" placeholder="none">
+        </div>
+        <div class="field">
+          <label for="dceew">Width [in]</label>
+          <input id="dceew" type="number" step="0.1" min="1.5" max="20" placeholder="2.8">
+        </div>
+        <div class="field">
+          <label for="dceeh">Height [in]</label>
+          <input id="dceeh" type="number" step="0.1" min="1.5" max="20" placeholder="2.8">
+        </div>
+        <div class="field">
+          <label for="dceecbar">Colour bar</label>
+          <input id="dceecbar" type="number" step="0.01" min="0" max="0.5" placeholder="0.05">
+        </div>
+        <div class="field">
+          <label for="dceethreshold">Success threshold</label>
+          <input id="dceethreshold" type="number" step="0.05" min="0" max="1" placeholder="0.75">
+        </div>
+      </div>
+      <p class="hint">Colour bar is its width as a fraction of the axes; <code>0</code> removes it.
+        The notebook's 0.02 is sized for four panels across a text block and is a hairline on one.</p>
+    </details>
+
+    <div class="chart figure">
+      <img id="dceechart" alt="Cross-embodiment grid"
+           data-dcee-base="/api/plot/dcee.png?job={{ dcee.job_id|urlencode }}"
+           src="/api/plot/dcee.png?job={{ dcee.job_id|urlencode }}">
+    </div>
+    <p class="hint">The outlined cell is the embodiment the seeds were trained on. Drawn by
+      <code>results/plot_dcee_grid.py</code> in the style of
+      <code>results/cee/dcee_success.ipynb</code>, with the rcParams from Settings.</p>
+    {% endif %}
+  </div>
+  {% endif %}
+
   {% if summary %}
   <div class="panel">
     <h2>Result</h2>

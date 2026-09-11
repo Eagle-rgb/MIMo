@@ -73,7 +73,10 @@ ICDL_PATH = Path(__file__).resolve().parent.parent / "results" / "icdlplot.py"
 
 # fonttype 42 embeds TrueType rather than matplotlib's default Type 3, which several thesis and
 # journal templates reject outright. Not negotiable from either source, so it is applied last.
-RC_ENFORCED = {"pdf.fonttype": 42, "ps.fonttype": 42}
+# savefig.bbox is pinned to None rather than merely refused: 'savefig(bbox_inches=None)' means
+# "use the rcParam", not "no cropping", so leaving it unset would let icdlplot.py's own
+# savefig.bbox='tight' crop an exported figure away from the width it was asked for.
+RC_ENFORCED = {"pdf.fonttype": 42, "ps.fonttype": 42, "savefig.bbox": None}
 
 # Dropped from both sources. savefig.bbox="tight" is set in icdlplot.py and would trim the page
 # down to whatever the content happens to need, so a figure asked for at 2.8 in comes out at some
@@ -747,6 +750,55 @@ def horizon_warning(run_ids):
 # ---------------------------------------------------------------------------------------------
 # Evaluation bar chart
 # ---------------------------------------------------------------------------------------------
+
+def dcee_grid(sources, out_path, metric="successful", threshold=0.75, width=None, height=None,
+              title=None, panel_titles=None, colorbar=True, cbar_fraction=None, cbar_label=None,
+              python=None, cwd=None):
+    """Draw the cross-embodiment grid by calling results/plot_dcee_grid.py.
+
+    Same reasoning as eval_bars: the script is what produces the thesis figure from the
+    --embodiment_grid payload, so drawing it a second time here would give the document two
+    versions of one figure. 'sources' is a list of payload paths, one panel each.
+
+    The paper rcParams travel with the call, so the Settings dialog reaches a figure that is drawn
+    in another process -- otherwise the app would show one style and the exported PDF another.
+    """
+    import subprocess
+    import json as _json
+
+    if not sources:
+        raise ValueError("no embodiment grid selected")
+
+    size = THESIS_SIZES.get("single" if len(sources) == 1 else "double") or THESIS_SIZES["single"]
+    argv = [python or "python", "results/plot_dcee_grid.py",
+            f"--out={out_path}", f"--metric={metric}", f"--threshold={threshold}",
+            f"--width={width or size[0]:.3f}",
+            f"--height={height or (size[0] if len(sources) == 1 else size[1]):.3f}",
+            f"--rcparams={_json.dumps({k: v for k, v in paper_rc().items()})}"]
+    if title:
+        argv.append(f"--title={title}")
+    if panel_titles is not None:
+        # An empty value is meaningful -- it is how the caller asks for no panel title at all --
+        # so this tests for None, not for truthiness.
+        argv.append(f"--panel_titles={','.join(panel_titles)}")
+    if not colorbar:
+        argv.append("--no_colorbar")
+    if cbar_fraction is not None:
+        argv.append(f"--cbar_fraction={cbar_fraction}")
+    if cbar_label:
+        argv.append(f"--cbar_label={cbar_label}")
+    for path in sources:
+        argv.append("--json")
+        argv.append(str(path))
+
+    proc = subprocess.run(argv, cwd=cwd, capture_output=True, text=True, timeout=180)
+    try:
+        with open(out_path, "rb") as fh:
+            return fh.read()
+    except OSError:
+        raise RuntimeError((proc.stderr or proc.stdout
+                            or "plot_dcee_grid.py produced nothing")[-2000:])
+
 
 def eval_bars(sources, out_path, metric="successful", threshold=0.75, xlabel="", ylabel=None,
               annotate=False, column="single", height=3.0, title=None, sort="given",

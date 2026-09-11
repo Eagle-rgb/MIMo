@@ -402,6 +402,10 @@ tr[data-posture="prone"] td.stripe i { background: var(--prone); }
 }
 .chart { background: var(--surface); border: 1px solid var(--rule); border-radius: 4px; padding: .5rem; }
 .chart img { display: block; width: 100%; height: auto; }
+/* A square single-column figure is 2.8 in wide; stretched to a full panel it reads as a poster
+   and hides how small it will be on the page. Shown near its real size instead. */
+.chart.figure { display: flex; justify-content: center; }
+.chart.figure img { width: auto; max-width: 100%; max-height: 22rem; }
 .chartgrid { display: grid; gap: .9rem; grid-template-columns: repeat(auto-fit, minmax(26rem, 1fr)); }
 
 /* Figure options: collapsed by default, because most viewing needs none of them. */

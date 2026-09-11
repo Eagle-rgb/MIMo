@@ -14,7 +14,7 @@ from gymnasium import spaces, utils
 from gymnasium.envs.mujoco import MujocoEnv
 from gymnasium.envs.mujoco.mujoco_rendering import MujocoRenderer
 
-from mimoGrowth.spec import grow_spec
+from mimoGrowth.spec import grow_spec, strip_textures
 from mimoTouch.touch import TrimeshTouch, Touch
 from mimoVision.vision import SimpleVision, Vision
 from mimoVestibular.vestibular import SimpleVestibular, Vestibular
@@ -258,6 +258,12 @@ class MIMoEnv(MujocoEnv, utils.EzPickle):
             anything to disk and any number of processes may share one read-only scene.
         custom_measurements (dict | None): A dictionary of custom measurements for MIMo.  Keys must match measurement
             names from the ``mimoGrowth/measurements/`` folder, and values are floats representing measurements in centimeters.
+        strip_textures (bool): Replace MIMo's textures with 1x1 flat ones before compiling. The compiled physics is
+            bit-identical and the model loses 1.02 GB of texture data, which is 99.99 % of it -- one env costs 1.8 GB
+            instead of 3.7, and an embodiment swap 26 ms instead of 937. **Only for runs that render nothing**: MIMo
+            comes out in flat colours, and a vision observation would be those flat colours with no error to notice.
+            Default ``False``, so nothing changes for code that does not ask. See
+            :func:`mimoGrowth.spec.strip_textures`.
         proprio_params (Dict|None): The configuration dictionary for the proprioceptive system. If ``None`` the module
             is disabled. Default ``None``.
         touch_params (Dict|None): The configuration dictionary for the touch system. If ``None`` the module is disabled.
@@ -324,6 +330,7 @@ class MIMoEnv(MujocoEnv, utils.EzPickle):
                  default_camera_config=None,
                  age=18,
                  custom_measurements=None,
+                 strip_textures=False,
                  proprio_params=None,
                  touch_params=None,
                  vision_params=None,
@@ -376,6 +383,7 @@ class MIMoEnv(MujocoEnv, utils.EzPickle):
 
         self._initial_qpos = initial_qpos
         self.custom_measurements = custom_measurements
+        self.strip_textures = strip_textures
 
         # 02.09.2026 The growth used to write '<scene>_temp.xml' next to the original and delete
         # it after loading. On the cluster all 18 machines share one home, so they raced on that
@@ -417,9 +425,28 @@ class MIMoEnv(MujocoEnv, utils.EzPickle):
         Returns:
             mujoco.MjSpec|None: The spec to compile, or ``None`` to load :attr:`.model_path`.
         """
-        if self.age is None:
+        if self.age is None and not self.strip_textures:
             return None
-        return grow_spec(self.model_path, self.age, custom=self.custom_measurements)
+        spec = (grow_spec(self.model_path, self.age, custom=self.custom_measurements)
+                if self.age is not None else mujoco.MjSpec.from_file(self.model_path))
+        return self._finish_model_spec(spec)
+
+    def _finish_model_spec(self, spec):
+        """ Apply the settings that are independent of what the subclass put in the spec.
+
+        Call this at the end of every ':meth:`._build_model_spec`' override. Currently that is
+        only the texture strip, which is a property of the *run* (is anything going to look at
+        this model?) rather than of the body the subclass built.
+
+        Arguments:
+            spec (mujoco.MjSpec): The spec the override produced.
+
+        Returns:
+            mujoco.MjSpec: The same spec.
+        """
+        if self.strip_textures:
+            strip_textures(spec)
+        return spec
 
     def compile_model(self):
         """ Compile the current :attr:`.model_spec`, or load :attr:`.model_path` if there is none.

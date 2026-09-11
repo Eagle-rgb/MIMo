@@ -104,6 +104,22 @@ serves the same bytes renamed to `<experiment>_<date>.json`, since `group-260908
 says nothing about what is in it. Single-run evaluations are *not* kept as files -- they go to a
 temporary path and survive only as a row in `evals`.
 
+**A new evaluation strictly replaces the old one.** Until 11.09.2026 every job wrote its own
+`<job id>.json` and kept the history -- which meant seven experiments with two payloads each. Three
+pairs carried identical numbers with laterality in both, so a notebook globbing the directory
+counted those seeds twice; age9 had one copy from before laterality was recorded; and
+`sac_her_ep200_tf2` read 0 and then 4 successful seeds from the same `model_1.zip`, because the
+protocol changed in between. Now, once a group or DCEE evaluation has **finished and been stored**,
+every older finished job of the same kind, `--group` and checkpoint is deleted outright: payload,
+log, job row, and its rows in `evals`. Three things are deliberately not part of that: a failed
+re-evaluation never costs the old result (the replacement runs only after the store); `best` and
+`last` are different measurements and replace only themselves; and a DCEE grid and a plain group
+evaluation of the same seeds are different kinds. The old rows are found by the job's own time
+window, which is exact because the queue is serial -- checked against the seven real duplicates,
+whose windows each held exactly one row per seed. Single-run evaluations from a run page are not
+covered: they write no payload file. `group_jsons` still folds duplicates per `(group,
+checkpoint)`, now only as a guard for anything a failed cleanup leaves behind.
+
 **Laterality is counted per successful seed, not per episode.** The experiment page adds a
 `n_left / n_right` tile beside the >90 %/<10 % banding: how many of the seeds *above the success
 line* rolled to one side every single time. Runs below the line are left out -- they roll a handful
@@ -114,6 +130,25 @@ only began recording the direction on **08.09.2026**, so every evaluation stored
 `---` rather than a confident `0 / 0` -- re-evaluate to fill it in. The same three counts are in
 the `--group` summary (`successful by side`) and in its JSON, so the terminal and the page cannot
 disagree.
+
+**The cross-embodiment grid is the same job with `--embodiment_grid`.** The experiment page can
+score every seed on all 16 (actuation age, body age) pairs -- the DCEE measurement -- reusing the
+group queue, log and progress counter, so a grid reports "run 53 of 96" rather than restarting the
+count in every cell. Two things are deliberate. Only the **source** cell is folded into `evals`: a
+grid is sixteen evaluations of the same seeds, and storing them all would make the experiment page
+average a run against bodies it never trained on, so the DB keeps exactly what a plain `--group`
+run would have produced. And the figure is drawn by `results/plot_dcee_grid.py` in a subprocess,
+for the same reason the bar chart is -- one implementation of the thesis figure, not two -- with
+the paper rcParams passed along as `--rcparams` so the Settings dialog reaches a figure rendered in
+another process.
+
+**Restyling a grid is a re-render, never a re-evaluation.** The payload is the output; every
+control under "Figure style" -- panel title, figure title, width, height, colour-bar width, success
+threshold, metric -- is a parameter on the image URL and costs one subprocess. Two defaults changed
+from the notebook on the way, both because it is sized for four panels across a text block: the
+colour bar is `fraction=0.05` on a single panel, where the notebook's 0.02 is a hairline, and a
+single panel gets **no** title, because the one thing it could say is the source embodiment and
+that already appears in the caption. `--panel_titles=auto` asks for it back.
 
 **Experiments are evaluated as a group, and the `--group` path is verified before it is used.**
 The experiment page runs `eval_rollover.py --group` over every seed -- the *last* checkpoint of
@@ -216,7 +251,9 @@ so no Type 3 fonts reach a thesis template), always light, at a real column widt
 or 5.6 in double. That needs `layout="constrained"` and *no* `bbox_inches="tight"`: tight cropping
 resizes the page to whatever the content needs, which turned a 3.5 in request into 7.65 in. That is
 also the one rcParam of `icdlplot.py` deliberately not adopted -- `savefig.bbox` is `"tight"` there
--- and `_emit` passes `bbox_inches=None` explicitly so an edit to that file cannot reintroduce it. In paper
+-- and the effective style pins `savefig.bbox` to `None` so an edit to that file cannot
+reintroduce it. Note that `savefig(bbox_inches=None)` means *use the rcParam*, not "no cropping",
+so refusing the key alone would not have been enough. In paper
 mode the on-screen caption and the right-hand direct labels are dropped, and the legend moves to
 `loc="outside lower center"` so constrained layout reserves room instead of letting it land on the
 x-axis label.

@@ -784,11 +784,15 @@ class MIMoRollOverEnv(MIMoEnv):
         limb has to be gone *before* compilation for its joints, actuators and sensors to
         disappear with it. 'ghost' is the other mode and is a patch, in ':meth:`._apply_ghost_limb`'.
 
+        Ends with ':meth:`._finish_model_spec`', which applies the run-level settings the body
+        does not decide -- currently the texture strip.
+
         Returns:
             mujoco.MjSpec: The spec ':meth:`.compile_model`' turns into this episode's model.
         """
-        return grow_spec(self.model_path, self.age_morph, self.age_physio,
+        spec = grow_spec(self.model_path, self.age_morph, self.age_physio,
                          remove=limb_bodies(self.missing_limb, self.missing_limb_mode))
+        return self._finish_model_spec(spec)
 
     def initialize(self):
         """ Called at construction and again on every embodiment hot-swap.

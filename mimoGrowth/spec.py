@@ -230,6 +230,54 @@ def scale_fmax_with_gear(actuator, gear):
     actuator.userdata = userdata
 
 
+def strip_textures(spec):
+    """ Replace every texture with a 1x1 flat one. Physics is untouched; rendering is not.
+
+    08.09.2026 This is the single largest cost in building a MIMo model, and it buys nothing for
+    a training run. Measured on the roll-over scene: ``tex_data`` is **1023.86 MB of a 1024.0 MB
+    model** -- everything else in ``MjModel`` together is 0.14 MB. It is seven emotion faces at
+    2500x15000 pixels decompressed (112 MB each, 787 MB together), plus the sleeve and trouser
+    cube maps at 111 MB each. On disk those are 3.8 MB of PNG. The roll-over experiment never
+    displays an emotion.
+
+    What that costs, measured end to end:
+
+    ================================  ============  ==========
+    ..                                with         stripped
+    ================================  ============  ==========
+    ``spec.compile()``                 1637 ms       19 ms
+    re-compile on a cached spec         853 ms      1.4 ms
+    ``set_embodiment()`` in the env     937 ms       26 ms
+    RSS of one env                     3712 MB      1774 MB
+    ================================  ============  ==========
+
+    So an age drawn before **every episode** goes from 4.0x wall clock at a 500-step horizon
+    (14.8x at 100) to 1.08x (1.38x), and one env stops costing 3.6 GB. The compiled physics is
+    bit-identical -- verified to 0.000e+00 over geom size/pos, body pos/mass/inertia/ipos, joint
+    pos/range, site pos, actuator gear/user, dof damping, joint stiffness and the three contact
+    parameter arrays (``embodiment_check.py:test_strip_textures``).
+
+    The names are kept, so the ``<material>`` elements that reference them still resolve and the
+    model compiles unchanged in every other respect. **Anything that renders must not use this**
+    -- MIMo comes out in flat colours, and `--vision` would feed the policy those flat colours
+    without any error to notice. ``illustrations.py`` therefore turns it off for ``--test``,
+    ``--render_video``, ``--render_frames`` and ``--vision``.
+
+    Arguments:
+        spec (mujoco.MjSpec): The spec to modify, in place.
+
+    Returns:
+        mujoco.MjSpec: The same spec, for chaining.
+    """
+    for texture in spec.textures:
+        texture.file = ''
+        texture.cubefiles = [''] * 6
+        texture.builtin = mujoco.mjtBuiltin.mjBUILTIN_FLAT
+        texture.width, texture.height = 1, 1
+        texture.gridsize = [1, 1]
+    return spec
+
+
 def grow_spec(path_scene, morph_age, physio_age=None, remove=(),
               custom=None, scale_muscle_fmax=True):
     """ Parse a scene and return a spec with MIMo grown to the given ages.

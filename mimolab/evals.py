@@ -32,7 +32,9 @@ def _run_group_eval(task):
 
     Popen rather than run(): a group of 16 seeds takes several minutes and eval_rollover prints
     '[i/n] <run>' as it goes, which is the only progress signal there is. Parsing it as it
-    arrives is what lets the page say 'run 7 of 16' instead of just spinning.
+    arrives is what lets the page say 'run 7 of 16' instead of just spinning. An embodiment grid
+    counts through all its cells in the same '[i/n]', so the same parser covers both -- a DCEE run
+    is 16x the work and a bar that restarted at 1 in every cell would be useless.
     """
     job_id = task["job_id"]
     log_path = SETTINGS.log_dir / f"{job_id}.log"
@@ -46,6 +48,8 @@ def _run_group_eval(task):
             f"--episodes={int(task.get('episodes', 40))}",
             f"--checkpoint={task.get('checkpoint', 'last')}",
             f"--json={json_path}"]
+    if task.get("embodiment_grid"):
+        argv.append(f"--embodiment_grid={task['embodiment_grid']}")
     if task.get("starting_position"):
         argv.append(f"--starting_position={task['starting_position']}")
     if task.get("success_threshold") is not None:
@@ -111,6 +115,17 @@ def _store_group(payload):
     return stored, missing
 
 
+def _store_dcee(payload):
+    """Fold the source cell of a grid into 'evals', and nothing else.
+
+    A DCEE payload holds sixteen evaluations of the same seeds, one per embodiment. Storing them
+    all would make the experiment page average a run against bodies it was never trained on. The
+    top-level 'rows' of the payload are the run's own embodiment -- exactly what a plain --group
+    run would have produced -- so folding those keeps the two agreeing.
+    """
+    return _store_group(payload)
+
+
 def _run_eval(task):
     """Invoke eval_rollover.py once and return the parsed payload."""
     model = task["model"]
@@ -173,6 +188,63 @@ def _store(task, payload):
                     row.get("steps_mean"), json.dumps(row), now))
 
 
+def _delete_job(job, payload):
+    """Remove one finished evaluation completely: its stored rows, its payload, its log, its job.
+
+    The rows are found by the job's own time window. That is exact because the queue is serial --
+    no other evaluation can write between a job being queued and finishing -- and it is narrowed to
+    the job's own runs on top. Verified on 11.09.2026 against seven real jobs: every window held
+    exactly as many rows as the experiment has seeds.
+    """
+    run_ids = []
+    for row in payload.get("rows", []):
+        if not row.get("model"):
+            continue
+        found = db.one("SELECT run_id FROM runs WHERE path=?", (str(Path(row["model"]).parent),))
+        if found:
+            run_ids.append(found["run_id"])
+    if run_ids and job.get("started_at") and job.get("finished_at"):
+        db.execute(f"""DELETE FROM evals WHERE created_at BETWEEN ? AND ?
+                       AND run_id IN ({','.join('?' * len(run_ids))})""",
+                   [job["started_at"], job["finished_at"]] + run_ids)
+    for path in (job.get("run_path"), SETTINGS.log_dir / f"{job['job_id']}.log"):
+        try:
+            if path and str(path).endswith((".json", ".log")):
+                os.unlink(path)
+        except OSError:
+            pass
+    db.execute("DELETE FROM jobs WHERE job_id=?", (job["job_id"],))
+
+
+def _supersede(job_id, kind, payload):
+    """Strictly replace every older evaluation of the same kind, group and checkpoint.
+
+    11.09.2026 Re-running used to keep both, and the directory filled with copies a notebook
+    globbing it would count twice. Asked for as a strict overwrite, so the older job goes entirely
+    -- file, log, job and its rows in 'evals'.
+
+    Called only once the new job has been stored, so a re-evaluation that fails never costs the
+    result it was meant to replace. The checkpoint is part of the key because 'best' and 'last'
+    are two different measurements, and the kind is, because a DCEE grid does not replace a plain
+    group evaluation of the same seeds or the other way round.
+    """
+    key = (payload.get("group"), payload.get("checkpoint"))
+    removed = []
+    for old in db.query("""SELECT * FROM jobs WHERE kind=? AND state='finished' AND job_id != ?
+                           AND run_path LIKE '%.json'""", (kind, job_id)):
+        old = dict(old)
+        try:
+            with open(old["run_path"]) as fh:
+                old_payload = json.load(fh)
+        except (OSError, ValueError):
+            continue
+        if (old_payload.get("group"), old_payload.get("checkpoint")) != key:
+            continue
+        _delete_job(old, old_payload)
+        removed.append(old["job_id"])
+    return removed
+
+
 def _loop():
     while True:
         task = _queue.get()
@@ -184,14 +256,24 @@ def _loop():
             _current["started"] = time.time()
         db.execute("UPDATE jobs SET state='running' WHERE job_id=?", (job_id,))
         try:
-            if task.get("kind") == "group":
+            if task.get("kind") in ("group", "dcee"):
                 payload = _run_group_eval(task)
-                stored, missing = _store_group(payload)
+                stored, missing = (_store_dcee(payload) if task["kind"] == "dcee"
+                                   else _store_group(payload))
                 db.execute("UPDATE jobs SET run_path=? WHERE job_id=?",
                            (payload.get("_json_path") or task["group_spec"], job_id))
-                note = f"{stored} run(s) stored"
+                cells = payload.get("cells")
+                note = (f"{len(cells)} embodiments, {stored} run(s) stored" if cells
+                        else f"{stored} run(s) stored")
                 if missing:
                     note += f"; {len(missing)} not in the index"
+                # The replacement is complete and stored; only now may the old result go.
+                try:
+                    removed = _supersede(job_id, task["kind"], payload)
+                    if removed:
+                        note += f"; replaced {len(removed)} older evaluation(s)"
+                except Exception as exc:              # never fail a good job over the cleanup
+                    note += f"; could not remove the older evaluation: {exc}"
                 db.execute("UPDATE jobs SET note=? WHERE job_id=?", (note, job_id))
             else:
                 payload = _run_eval(task)
@@ -278,6 +360,65 @@ def submit_group(date, posture, model_name, episodes=40, checkpoint="last",
     return dict(db.one("SELECT * FROM jobs WHERE job_id=?", (job_id,)))
 
 
+def submit_dcee(date, posture, model_name, episodes=40, checkpoint="last",
+                success_threshold=0.75, ages="1,3,6,9"):
+    """Queue a cross-embodiment grid: every seed of one experiment, at every (act, body) age.
+
+    Same job as submit_group with --embodiment_grid added, so it shares the queue, the log and
+    the progress parsing. It is 'len(ages)**2' times the work of a plain group run -- one env for
+    the whole grid, but every cell is a full pass over every seed.
+    """
+    if SETTINGS.offline:
+        raise RuntimeError("offline mode: evaluation is disabled")
+
+    from . import queries
+    experiment = queries.experiment(date, posture, model_name)
+    if experiment is None:
+        raise KeyError(f"{date} / {posture} / {model_name}")
+    spec = experiment["group_spec"]
+    if not spec:
+        raise ValueError("could not derive a --group path for this experiment")
+    grid = ",".join(str(float(a)).rstrip("0").rstrip(".") for a in
+                    [float(part) for part in str(ages).replace(" ", "").split(",") if part])
+    if not grid:
+        raise ValueError("no ages given for the embodiment grid")
+
+    job_id = f"dcee-{time.strftime('%y%m%d-%H%M%S')}-{os.urandom(3).hex()}"
+    n_cells = len(grid.split(",")) ** 2
+    label = f"{model_name} ({posture}, {experiment['n_seeds']} seeds, {n_cells} embodiments)"
+    db.execute("""INSERT INTO jobs (job_id, kind, cmd, label, run_path, started_at, state)
+                  VALUES (?,?,?,?,?,?,?)""",
+               (job_id, "dcee", f"eval_rollover.py --group {spec} --embodiment_grid={grid}",
+                label, spec, time.time(), "queued"))
+
+    task = {"job_id": job_id, "kind": "dcee", "group_spec": spec, "episodes": episodes,
+            "checkpoint": checkpoint, "success_threshold": success_threshold,
+            "embodiment_grid": grid,
+            "starting_position": posture if posture in ("prone", "supine") else None,
+            "run_ids": [r["run_id"] for r in experiment["runs"]]}
+    start_worker()
+    _queue.put(task)
+    return dict(db.one("SELECT * FROM jobs WHERE job_id=?", (job_id,)))
+
+
+def dcee_json(date, posture, model_name):
+    """The most recent embodiment-grid payload for this experiment, if one was ever produced."""
+    from . import queries
+    experiment = queries.experiment(date, posture, model_name)
+    if experiment is None:
+        return None
+    spec = experiment["group_spec"]
+    if not spec:
+        return None
+    row = db.one("""SELECT job_id, run_path, finished_at FROM jobs
+                    WHERE kind='dcee' AND state='finished' AND run_path LIKE '%.json'
+                      AND cmd LIKE ?
+                    ORDER BY finished_at DESC LIMIT 1""", (f"%{spec} %",))
+    if row and Path(row["run_path"]).exists():
+        return dict(row)
+    return None
+
+
 def group_json(date, posture, model_name):
     """The most recent --group payload for this experiment, if one was ever produced."""
     from . import queries
@@ -295,8 +436,31 @@ def group_json(date, posture, model_name):
     return None
 
 
-def group_jsons(limit=200, run_ids=None):
-    """Stored --group payloads, newest first.
+def dcee_payloads(limit=50):
+    """Stored embodiment-grid payloads, newest first."""
+    rows = db.query("""SELECT job_id, label, run_path, finished_at FROM jobs
+                       WHERE kind='dcee' AND state='finished' AND run_path LIKE '%.json'
+                       ORDER BY finished_at DESC LIMIT ?""", (limit,))
+    return [dict(r) for r in rows if r["run_path"] and Path(r["run_path"]).exists()]
+
+
+def group_jsons(limit=200, run_ids=None, include_superseded=False):
+    """Stored --group payloads, newest first, one per (group, checkpoint).
+
+    Since 11.09.2026 a new evaluation strictly replaces the old one (see _supersede), so there is
+    normally nothing to fold away here; this stays as the guard for copies written before then or
+    left behind by a cleanup that failed. Before that, every job wrote its own '<job_id>.json' and
+    the directory kept the history. That history is not what a figure wants, though -- by 11.09.2026
+    seven experiments had been evaluated twice, age9 once before laterality was recorded and once
+    after, and sac_her_ep200_tf2 at 0 and then 4 successful seeds from the same model_1.zip
+    because the protocol changed in between. Offering both means ticking the stale one by accident,
+    or counting every seed twice. So the newest payload for a (group, checkpoint) supersedes the
+    older ones here. Newest wins even at a different episode count, which is the same rule
+    queries.group_eval_summary applies per run, so the bar panel and the experiment page agree.
+    A different checkpoint is a different evaluation and is never folded away.
+
+    'include_superseded' returns the older ones too, flagged 'superseded' -- for resolving a job id
+    that is already in a URL, not for listing.
 
     'run_ids' restricts the list to payloads that actually evaluated runs in that selection --
     the bar panel sits on the Analysis page, where offering every evaluation ever made means the
@@ -308,8 +472,25 @@ def group_jsons(limit=200, run_ids=None):
                        WHERE kind='group' AND state='finished' AND run_path LIKE '%.json'
                        ORDER BY finished_at DESC LIMIT ?""", (limit,))
     found = [dict(r) for r in rows if r["run_path"] and Path(r["run_path"]).exists()]
+
+    # Read each payload once: both the supersession and the selection filter need it.
+    kept, seen = [], set()
+    for entry in found:
+        try:
+            with open(entry["run_path"]) as fh:
+                payload = json.load(fh)
+        except (OSError, ValueError):
+            continue
+        key = (payload.get("group"), payload.get("checkpoint"))
+        if key in seen:
+            if not include_superseded:
+                continue
+            entry["superseded"] = True
+        seen.add(key)
+        kept.append((entry, payload))
+
     if run_ids is None:
-        return found
+        return [entry for entry, _payload in kept]
 
     wanted = set()
     for run_id in run_ids:
@@ -320,12 +501,7 @@ def group_jsons(limit=200, run_ids=None):
         return []
 
     matching = []
-    for entry in found:
-        try:
-            with open(entry["run_path"]) as fh:
-                payload = json.load(fh)
-        except (OSError, ValueError):
-            continue
+    for entry, payload in kept:
         dirs = {os.path.abspath(str(Path(row["model"]).parent))
                 for row in payload.get("rows", []) if row.get("model")}
         if dirs & wanted:

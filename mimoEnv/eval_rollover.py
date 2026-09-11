@@ -50,8 +50,8 @@ import gymnasium as gym
 import yaml
 
 import mimoEnv  # noqa: F401  (registers MIMoRollOver-v0)
-from mimoEnv.envs.roll_over import (LIMBS, LIMB_GROUPS, MISSING_LIMB_MODES,
-                                    parse_missing_limb)
+from mimoEnv.envs.roll_over import (AGES, LIMBS, LIMB_GROUPS, MISSING_LIMB_MODES,
+                                    check_age, parse_missing_limb)
 
 SIDE_LYING_THRESHOLD = 0.5
 ROLL_THRESHOLD = 0.95
@@ -418,8 +418,13 @@ def pick_checkpoint(run_dir, which='last'):
     return max(numbered)[1]
 
 
-def resolve_run(model_path, args):
-    """Everything the protocol needs for one model, read from its own data.yml."""
+def resolve_run(model_path, args, ages=None):
+    """Everything the protocol needs for one model, read from its own data.yml.
+
+    'ages' is an explicit (physio, morph) pair that overrides both the data.yml and the CLI. The
+    embodiment grid passes it per cell rather than mutating args, so one parsed argv can drive
+    sixteen different embodiments.
+    """
     config = load_run_config(model_path)
     # 19.08.2026 'roll_over_starting_position' is deliberately not stored in data.yml (it
     # describes the invocation, not the model), so config.get() here always missed and every
@@ -454,12 +459,27 @@ def resolve_run(model_path, args):
     # intact-floor policy on a compliant floor is the zero-shot transfer the flags exist for, and
     # the protocol otherwise reads everything from the data.yml. '--rigid_floor' is the inverse,
     # for scoring a compliant-floor run on the rigid default.
+    # 09.09.2026 '--morph_age'/'--physio_age' override the data.yml for exactly the same reason:
+    # evaluating a policy trained at one embodiment on another *is* the cross-embodiment
+    # measurement, and the protocol otherwise reads both ages from the run's own config. The ages
+    # do not change the observation or action space, so the policy loads unchanged -- which is
+    # what makes this zero-shot transfer rather than a different experiment.
+    physio_override = ages[0] if ages else args.physio_age
+    morph_override = ages[1] if ages else args.morph_age
+    age_override = physio_override is not None or morph_override is not None
     floor_override = (args.rigid_floor
                       or args.floor_softness is not None
                       or args.floor_friction is not None
                       or args.floor_solimp_width is not None)
-    if args.missing_limb is not None or args.ghost_obs is not None or floor_override:
+    if (args.missing_limb is not None or args.ghost_obs is not None
+            or floor_override or age_override):
         config = dict(config)
+    if physio_override is not None:
+        check_age(physio_override, "physio_age")
+        config['physio_age'] = physio_override
+    if morph_override is not None:
+        check_age(morph_override, "morph_age")
+        config['morph_age'] = morph_override
     if args.rigid_floor:
         config['floor_softness'] = None
         config['floor_friction'] = None
@@ -491,28 +511,52 @@ class _EnvCache:
 
     def __init__(self):
         self._signature = None
+        self._kwargs = None
         self._env = None
 
     def get(self, config, start, goal):
-        signature = json.dumps(env_kwargs(config, start, goal), sort_keys=True, default=str)
-        if signature != self._signature:
-            self.close()
-            self._env = build_env(config, start, goal)
-            self._signature = signature
+        kwargs = env_kwargs(config, start, goal)
+        signature = json.dumps(kwargs, sort_keys=True, default=str)
+        if signature == self._signature:
+            return self._env
+        # An embodiment grid changes nothing but the two ages, and the env can re-grow itself in
+        # place -- 26 ms against ~4 s and 3.6 GB of churn for a rebuild, which over 16 cells is
+        # the difference between a minute of overhead and none. This is the same call the
+        # morphological curriculum makes between episodes, so the path is already exercised.
+        if self._env is not None and self._differs_only_by_age(kwargs):
+            self._env.set_embodiment(kwargs['age_morph'], kwargs['age_physio'])
+            self._signature, self._kwargs = signature, kwargs
+            return self._env
+        self.close()
+        self._env = build_env(config, start, goal)
+        self._signature, self._kwargs = signature, kwargs
         return self._env
+
+    def _differs_only_by_age(self, kwargs):
+        if self._kwargs is None or not hasattr(self._env, "set_embodiment"):
+            return False
+        changed = {key for key in set(self._kwargs) | set(kwargs)
+                   if self._kwargs.get(key) != kwargs.get(key)}
+        return bool(changed) and changed <= {"age_morph", "age_physio"}
 
     def close(self):
         if self._env is not None:
             self._env.close()
-        self._env, self._signature = None, None
+        self._env, self._signature, self._kwargs = None, None, None
 
 
-def evaluate_group(run_dirs, args, episodes):
+def evaluate_group(run_dirs, args, episodes, cache=None, ages=None, progress=None):
     """Evaluate the chosen checkpoint of every run and classify each one.
 
     Every run sees the same episode seeds, so the comparison between runs is paired.
+
+    'cache' lets a caller keep one env across several calls -- the embodiment grid passes its own
+    so that sixteen cells share a single env. 'progress' is (offset, total) for the printed
+    counter, so a grid counts through all its runs instead of restarting at 1 in every cell.
     """
-    cache = _EnvCache()
+    own_cache = cache is None
+    cache = cache or _EnvCache()
+    offset, total = progress or (0, len(run_dirs))
     rows, skipped = [], []
     try:
         for index, run_dir in enumerate(run_dirs, start=1):
@@ -521,10 +565,12 @@ def evaluate_group(run_dirs, args, episodes):
             if model_path is None:
                 skipped.append((name, f"no checkpoint matching '{args.checkpoint}'"))
                 continue
-            config, start, goal, episode_steps = resolve_run(model_path, args)
+            config, start, goal, episode_steps = resolve_run(model_path, args, ages=ages)
             algorithm = config.get('algorithm', 'SAC')
-            print(f"[{index}/{len(run_dirs)}] {name}  ({os.path.basename(model_path)}, "
-                  f"{algorithm}, {start}, {episode_steps} steps)", flush=True)
+            embodiment = (f"  act {config.get('physio_age', 9)} / body {config.get('morph_age', 9)}"
+                          if ages else "")
+            print(f"[{offset + index}/{total}] {name}  ({os.path.basename(model_path)}, "
+                  f"{algorithm}, {start}, {episode_steps} steps{embodiment})", flush=True)
             env = cache.get(config, start, goal)
             model = load_policy(model_path, algorithm, env)
             results = evaluate(model, env, episodes, policy_goal=args.policy_goal,
@@ -534,10 +580,81 @@ def evaluate_group(run_dirs, args, episodes):
                        algorithm=algorithm, starting_position=start, goal=goal,
                        episode_steps=episode_steps, episodes=episodes,
                        successful=bool(row['rolled'] > args.success_threshold))
+            row.update(age_physio=config.get('physio_age', 9),
+                       age_morph=config.get('morph_age', 9))
             rows.append(row)
     finally:
-        cache.close()
+        if own_cache:
+            cache.close()
     return rows, skipped
+
+
+def parse_ages(spec):
+    """'1,3,6,9' -> [1.0, 3.0, 6.0, 9.0]. Validated here so a typo fails before the first env."""
+    ages = [float(part) for part in str(spec).replace(' ', '').split(',') if part]
+    if not ages:
+        raise ValueError("--embodiment_grid needs at least one age")
+    for age in ages:
+        check_age(age, "embodiment_grid age")
+    return ages
+
+
+def evaluate_embodiment_grid(run_dirs, args, episodes, ages):
+    """Evaluate the whole group at every (actuation age, body age) pair -- the DCEE measurement.
+
+    One env for the entire grid: the ages are the only thing that changes between cells, so
+    '_EnvCache' re-grows MIMo in place rather than building sixteen environments of 3.6 GB each.
+
+    The grid is the cross-embodiment question of results/cee/: a policy trained at one embodiment,
+    scored on all of them. The run's own cell is part of the grid and is what the group summary
+    would report on its own, which is the anchor the rest of the panel is read against.
+    """
+    cells = []
+    cache = _EnvCache()
+    total = len(run_dirs) * len(ages) * len(ages)
+    done = 0
+    try:
+        for age_physio in ages:
+            for age_morph in ages:
+                rows, skipped = evaluate_group(run_dirs, args, episodes, cache=cache,
+                                               ages=(age_physio, age_morph),
+                                               progress=(done, total))
+                done += len(rows) + len(skipped)
+                cells.append({
+                    'age_physio': age_physio, 'age_morph': age_morph,
+                    'summary': _summarise(rows, args.success_threshold) if rows else None,
+                    'rows': rows,
+                    'skipped': [{'run': n, 'reason': r} for n, r in skipped],
+                })
+    finally:
+        cache.close()
+    return cells
+
+
+def _print_grid(cells, ages, args, source):
+    """The grid as a table, in the same shape the figure has: body age across, actuation down."""
+    by_pair = {(c['age_physio'], c['age_morph']): c for c in cells}
+    print()
+    print(f"embodiment grid     : {len(ages)}x{len(ages)} = {len(cells)} cells, "
+          f"{args.success_threshold * 100:.0f} % success line")
+    print(f"trained at          : act {source[0]} / body {source[1]}")
+    print()
+    header = "  ".join(f"body {age:g}".rjust(9) for age in ages)
+    print(f"{'act \\ body':<12}{header}")
+    for age_physio in ages:
+        cells_row = []
+        for age_morph in ages:
+            cell = by_pair.get((age_physio, age_morph))
+            summary = cell and cell['summary']
+            if summary is None:
+                cells_row.append("-".rjust(9))
+                continue
+            mark = "*" if (age_physio, age_morph) == tuple(source) else " "
+            cells_row.append(f"{summary['successful']}/{summary['runs']}"
+                             f" {summary['success_fraction'] * 100:>3.0f}%{mark}".rjust(9))
+        print(f"{'act ' + format(age_physio, 'g'):<12}" + "  ".join(cells_row))
+    print()
+    print("  cell = successful seeds / seeds evaluated; * is the embodiment the runs trained on")
 
 
 def _committed_side(row):
@@ -796,6 +913,22 @@ def main():
                              "comma-separated list ('0.05,0.5,2.0') or 'low:high:step' "
                              "('0.25:0.95:0.05'). Prints one row per value. Locates the point "
                              "where goal conditioning stops working.")
+    parser.add_argument('--physio_age', default=None, type=float,
+                        help="Override the actuation age stored in the run's data.yml. The "
+                             "cross-embodiment transfer: a policy trained at one embodiment, "
+                             "scored on another. The ages do not change the observation or "
+                             "action space, so the policy loads unchanged.")
+    parser.add_argument('--morph_age', default=None, type=float,
+                        help="Override the body age stored in the run's data.yml. See "
+                             "--physio_age.")
+    parser.add_argument('--embodiment_grid', nargs='?', const=','.join(str(a) for a in AGES),
+                        default=None, metavar='AGES',
+                        help="--group only: evaluate the whole group at every (actuation age, "
+                             "body age) pair and write the grid to --json. Defaults to the four "
+                             "ages %s, i.e. 16 cells. One env for the whole grid -- MIMo is "
+                             "re-grown in place between cells. Costs 16x a plain --group run, so "
+                             "size the episode count accordingly."
+                             % ('/'.join(str(a) for a in AGES),))
     parser.add_argument('--missing_limb', default=None, type=str,
                         metavar='LIMB[+LIMB...]|none',
                         help="Override the missing limbs stored in the run's data.yml. One limb "
@@ -853,6 +986,39 @@ def main():
         run_dirs = discover_runs(args.group)
         if not run_dirs:
             parser.error(f"No run directories matched --group={args.group!r}.")
+
+        if args.embodiment_grid is not None:
+            if args.physio_age is not None or args.morph_age is not None:
+                parser.error("--embodiment_grid sets both ages per cell; drop --physio_age/"
+                             "--morph_age.")
+            try:
+                ages = parse_ages(args.embodiment_grid)
+            except ValueError as exc:
+                parser.error(str(exc))
+            source_config = load_run_config(pick_checkpoint(run_dirs[0], args.checkpoint) or '')
+            source = (source_config.get('physio_age', 9), source_config.get('morph_age', 9))
+            cells = evaluate_embodiment_grid(run_dirs, args, episodes, ages)
+            populated = [c for c in cells if c['summary']]
+            if not populated:
+                parser.error("No run had an evaluable checkpoint.")
+            # The run's own embodiment is reported the way a plain --group run would report it,
+            # so the grid and the experiment page cannot disagree about the same number.
+            own = next((c for c in populated
+                        if (c['age_physio'], c['age_morph']) == source), populated[0])
+            _print_grid(cells, ages, args, source)
+            _print_group(own['rows'], [], own['summary'], args, episodes)
+            write_csv(args.csv, own['rows'])
+            write_json(args.json, {
+                'group': args.group, 'checkpoint': args.checkpoint, 'episodes': episodes,
+                'embodiment_grid': {'ages': ages,
+                                    'source': {'physio': source[0], 'morph': source[1]},
+                                    'success_threshold': args.success_threshold},
+                'cells': cells,
+                'summary': own['summary'], 'rows': own['rows'],
+                'skipped': [{'run': s['run'], 'reason': s['reason']} for s in own.get('skipped', [])],
+            })
+            return
+
         rows, skipped = evaluate_group(run_dirs, args, episodes)
         if not rows:
             parser.error("No run had an evaluable checkpoint.")
