@@ -444,8 +444,20 @@ class MIMoRollOverEnv(MIMoEnv):
                  # Weighting of the potential difference in PBRS.
                  # PBRS gives a very small reward signal without a high weight factor
                  # causing the model to not succeed at all.
-                 pbrs_w=100, 
-                 # Number of steps where MIMo does no action to stabilize mujoco.  
+                 pbrs_w=100,
+                 # 12.09.2026 The discount inside the shaping term:
+                 #   reward = pbrs_w * (pbrs_gamma * Phi(s') - Phi(s)).
+                 # Ng et al. (1999) require the *agent's own* discount here for the shaping to be
+                 # policy-invariant. This env has always used 1.0, and at gamma=0.99 the
+                 # difference is not cosmetic: the discounted sum of 'Phi(s') - Phi(s)' equals
+                 # the proper one plus '(1 - gamma) * Phi' per step, i.e. a per-step penalty
+                 # proportional to the distance to the goal -- about -1/step at reset with
+                 # pbrs_w=100. That is an implicit time penalty, and it is one of the reasons
+                 # MIMo rolls in ~30 steps where infants take 3.6 s (Siegel et al. 2024).
+                 # Default 1.0 reproduces every stored run bit-identically ('1.0 * x' is exactly
+                 # 'x'); pass pbrs_gamma == the algorithm's gamma for the corrected form.
+                 pbrs_gamma=1.0,
+                 # Number of steps where MIMo does no action to stabilize mujoco.
                  steps_after_reset=30,
                  achieved_goal_in_observation=False,
                  # Penalization factor for action penalization.
@@ -659,6 +671,7 @@ class MIMoRollOverEnv(MIMoEnv):
         self.nopen=nopen
         self.pbrs=pbrs
         self.pbrs_w=pbrs_w
+        self.pbrs_gamma=pbrs_gamma
         self.steps_after_reset=steps_after_reset
         self.pen_factor=pen_factor
         self.pen_metabolic=pen_metabolic
@@ -1943,7 +1956,10 @@ class MIMoRollOverEnv(MIMoEnv):
         shaping function.
           See "Policy Invariance under reward transformations: Theory and
         application to reward shaping" [Ng et. al 1999] for a definition of
-        PBRS and the potential-based shaping function.
+        PBRS and the potential-based shaping function. The shaping term is
+        ``pbrs_w * (pbrs_gamma * Phi(s') - Phi(s))``; ``pbrs_gamma`` defaults to
+        1.0, which is what every stored run used and is *not* the policy-invariant
+        form -- see the constructor.
           Additionally, we subtract the square of the control signal from the
         reward to discourage excessive muscle usage.
 
@@ -1998,7 +2014,11 @@ class MIMoRollOverEnv(MIMoEnv):
             if self.pbrs:
                 fallback = self._prev_achieved_goal if self._prev_achieved_goal is not None else ag
                 prev_ag = self._info_block(info, 'prev_achieved_goal', fallback, n, self.goal_dim)
-                reward = self.pbrs_w * (curr_potential - self._potential(prev_ag, dg))
+                # 12.09.2026 'pbrs_gamma' is 1.0 by default, which is bit-identical to the
+                # original 'curr - prev' and is what every stored run trained with. See the
+                # constructor for why the policy-invariant form needs the agent's own gamma.
+                reward = self.pbrs_w * (self.pbrs_gamma * curr_potential
+                                        - self._potential(prev_ag, dg))
             else:
                 reward = curr_potential
             # If the goal is reached, give a very high positive reward.

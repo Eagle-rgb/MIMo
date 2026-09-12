@@ -567,6 +567,27 @@ An example is '251206_prone_linear_1e6_test'
                         help="Use PBRS in roll_over reward shaping.")
     parser.add_argument('--pbrs_w', default=100, type=float,
                         help="Potential difference weighting in PBRS.")
+    # 12.09.2026 Both added while asking why MIMo rolls in ~0.3 s where Siegel et al. (2024)
+    # measured 3.6 +- 2.8 s in infants. See 'The discount and the roll duration' in CLAUDE.md.
+    parser.add_argument('--gamma', default=0.99, type=float,
+                        help="Discount factor of the RL algorithm. The default 0.99 is SB3's "
+                             "own, i.e. what every stored run trained with -- it was never "
+                             "passed before. At 100 Hz it is an effective horizon of ~1 s "
+                             "(half-life 0.69 s), which is itself an incentive to roll fast: a "
+                             "reward 3.6 s away, the mean roll duration of Siegel's infants, is "
+                             "worth 0.99^360 = 0.027 of an immediate one. Use 0.999 (~10 s) to "
+                             "test whether MIMo's 0.3 s roll is an artefact of the discount, and "
+                             "raise --episode_steps with it -- the 500-step default is a 5 s "
+                             "ceiling and --episode_steps=100 a 1 s one.")
+    parser.add_argument('--pbrs_gamma', default=None, type=float,
+                        help="Discount inside the PBRS term, which is "
+                             "'pbrs_w * (pbrs_gamma * Phi(s') - Phi(s))'. Unset keeps the "
+                             "historical 1.0, so every stored run reloads bit-identically. Ng et "
+                             "al. (1999) require the agent's own discount here; at 1.0 the "
+                             "shaping is not policy-invariant and leaves a residual "
+                             "'-pbrs_w * (1 - gamma) * distance' per step (~-1/step at reset), "
+                             "i.e. an implicit time penalty. Pass the same value as --gamma for "
+                             "the corrected form.")
     parser.add_argument('--isr', action='store_true',
                         help="Use Initial State Randomization. NOT a default -- it is off in "
                              "every headline roll-over configuration and inflates rho_max, "
@@ -760,8 +781,13 @@ An example is '251206_prone_linear_1e6_test'
     log_actuations = args.log_actuations
     nopen = args.nopen
     learning_rate = args.lr
+    gamma = args.gamma
     pbrs = args.pbrs
     pbrs_w = args.pbrs_w
+    # 12.09.2026 Unset means the historical, uncorrected shaping term. The resolved float is what
+    # goes into data.yml, so a reloaded run keeps its own shaping whatever --gamma it is continued
+    # with, and the ~500 runs saved before today carry no key and fall back to 1.0 here.
+    pbrs_gamma = 1.0 if args.pbrs_gamma is None else args.pbrs_gamma
     isr = args.isr
     observation_normalization = args.obs_norm
     touch = args.touch
@@ -849,6 +875,15 @@ An example is '251206_prone_linear_1e6_test'
             "the critic diverges. Use --pbrs with terminating episodes (drop --no_done_active), "
             "or use --sparse_reward, which has no potential to be discontinuous.")
 
+    # 12.09.2026 Not an error: 1.0 is the historical value and every stored PBRS run used it. But
+    # it is the one thing about this reward that is quietly wrong, so it says so once per run.
+    if pbrs and not sparse_reward and pbrs_gamma != gamma:
+        print(f"Note: --pbrs_gamma={pbrs_gamma} differs from --gamma={gamma}, so the shaping is "
+              f"not policy-invariant (Ng et al. 1999). It leaves about "
+              f"{-pbrs_w * (1 - gamma):+.2f} per step at reset distance, i.e. an implicit "
+              f"penalty on taking longer. Pass --pbrs_gamma={gamma} for the corrected form; "
+              f"1.0 is what every run before 12.09.2026 trained with.")
+
     proprio_params = DEFAULT_PROPRIOCEPTION_PARAMS
 
     if args.proprio_config is not None:
@@ -930,6 +965,7 @@ An example is '251206_prone_linear_1e6_test'
             achieved_goal_in_observation=achieved_goal_in_observation,
             proprio_params=proprio_params,
             pbrs_w=pbrs_w,
+            pbrs_gamma=pbrs_gamma,
             pen_factor=pen_factor,
             pen_metabolic=pen_metabolic,
             goal_function=goal_function,
@@ -982,15 +1018,20 @@ An example is '251206_prone_linear_1e6_test'
     # load pretrained model or create new one
     # Set learning rate for PPO algorithm.
     if algorithm=='PPO':
+        # 12.09.2026 'gamma' is passed explicitly from here on. Its default equals SB3's own, so
+        # nothing changes for a run that does not ask for another one; on the load path it lands
+        # through the same 'model.__dict__.update(kwargs)' that --lr has always used.
         if load_model:
             model = RL.load(load_model, env,
                             tensorboard_log=save_dir,
                             learning_rate=learning_rate,
+                            gamma=gamma,
                             verbose=1)
         else:
             model = RL("MultiInputPolicy", env,
                     tensorboard_log=save_dir,
                     learning_rate=learning_rate,
+                    gamma=gamma,
                     verbose=1)
     elif algorithm in OFF_POLICY_ALGORITHMS:
         # Off-policy algorithms keep a replay buffer, which PPO/A2C do not. Its size must be
@@ -1015,7 +1056,7 @@ An example is '251206_prone_linear_1e6_test'
             )
 
         if load_model:
-            model = RL.load(load_model, env, buffer_size=args.buffer_size)
+            model = RL.load(load_model, env, buffer_size=args.buffer_size, gamma=gamma)
         else:
             # 18.08.2026 'learning_rate' was missing here: --lr was silently ignored for every
             # off-policy run and SB3's default of 3e-4 applied instead. It happens to equal the
@@ -1024,6 +1065,7 @@ An example is '251206_prone_linear_1e6_test'
             off_policy_kwargs = dict(
                 tensorboard_log=save_dir,
                 learning_rate=learning_rate,
+                gamma=gamma,
                 buffer_size=args.buffer_size,
                 train_freq=args.train_freq,
                 gradient_steps=1,
@@ -1034,15 +1076,21 @@ An example is '251206_prone_linear_1e6_test'
             model = RL("MultiInputPolicy", env, **off_policy_kwargs)
     else:
         if load_model:
-            model = RL.load(load_model, env)
+            model = RL.load(load_model, env, gamma=gamma)
         else:
             model = RL("MultiInputPolicy", env,
                     tensorboard_log=save_dir,
+                    gamma=gamma,
                     verbose=1)
 
     # Save model metadata in model.
     yaml_data = {
         'lr': args.lr,
+        # 12.09.2026 Both define the run: the discount sets how much a late reward is worth (at
+        # 100 Hz, 0.99 is a ~1 s horizon) and 'pbrs_gamma' sets which shaping term was paid.
+        # Runs saved before today carry neither and fall back to 0.99 / 1.0, i.e. what they did.
+        'gamma': gamma,
+        'pbrs_gamma': pbrs_gamma,
         'nopen': nopen,
         'pbrs': pbrs,
         'pbrs_w': pbrs_w,
@@ -1145,7 +1193,8 @@ An example is '251206_prone_linear_1e6_test'
             pbrs=pbrs, render_mode='rgb_array',
             touch_params=ROLL_OVER_TOUCH_PARAMS if touch else None,
             achieved_goal_in_observation=achieved_goal_in_observation,
-            proprio_params=proprio_params, pbrs_w=pbrs_w, pen_factor=pen_factor,
+            proprio_params=proprio_params, pbrs_w=pbrs_w, pbrs_gamma=pbrs_gamma,
+            pen_factor=pen_factor,
             pen_metabolic=pen_metabolic,
             goal_function=goal_function,
             gravity_goal_eps=args.gravity_goal_eps,

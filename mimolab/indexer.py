@@ -27,6 +27,10 @@ RUN_DIR_RE = re.compile(r"^(\d{2}-\d{2}-\d{2})_(prone|supine)_(.*?)(?:_run_(\d+)
 # Columns lifted out of data.yml into their own field. Everything else stays in the yaml blob.
 YAML_COLUMNS = [
     "algorithm", "her", "sparse_reward", "pbrs", "pbrs_w", "pen_factor",
+    # 12.09.2026 The discount and the PBRS discount. Both are absent from every run saved before
+    # that date, where they were 0.99 and 1.0; they index as NULL, not as those values, because
+    # nothing re-reads an unchanged event file to fill them in.
+    "gamma", "pbrs_gamma",
     "morph_age", "physio_age", "episode_steps", "goal_low", "goal_high",
     "goal_curriculum", "no_done_active", "isr", "side_lying", "lr",
     "lr_schedule", "num_train", "target_entropy", "buffer_size", "obs_noise",

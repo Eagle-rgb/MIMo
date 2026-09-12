@@ -142,6 +142,25 @@ def test_pbrs_regression():
             env.reset()
     check("step reward equals the original PBRS formula", worst < 1e-9,
           f"max abs deviation {worst:.3e}")
+
+    # 12.09.2026 '--pbrs_gamma'. The default must stay the uncorrected 'Phi(s') - Phi(s)', which
+    # is what every stored run trained with; a value gives Ng et al.'s 'gamma*Phi(s') - Phi(s)'.
+    # Same env, no second build -- pbrs_gamma is read on every call, so this exercises exactly
+    # the path a '--pbrs_gamma' run takes.
+    prev, curr, goal = np.array([0.2]), np.array([0.4]), np.array([0.95])
+    info = {'ctrl_cost': 0.0, 'prev_achieved_goal': prev}
+    phi_curr, phi_prev = env._potential(curr[None], goal[None]), env._potential(prev[None], goal[None])
+    legacy = env.pbrs_w * float(phi_curr[0] - phi_prev[0])
+    check("pbrs_gamma defaults to 1.0, i.e. the historical shaping term",
+          env.pbrs_gamma == 1.0 and abs(env.compute_reward(curr, goal, info) - legacy) < 1e-12,
+          f"pbrs_gamma={env.pbrs_gamma}, reward {env.compute_reward(curr, goal, info):.6f} "
+          f"vs {legacy:.6f}")
+    env.pbrs_gamma = 0.99
+    corrected = env.pbrs_w * float(0.99 * phi_curr[0] - phi_prev[0])
+    check("pbrs_gamma discounts the new potential only",
+          abs(env.compute_reward(curr, goal, info) - corrected) < 1e-12,
+          f"reward {env.compute_reward(curr, goal, info):.6f} vs {corrected:.6f}")
+    env.pbrs_gamma = 1.0
     env.close()
 
 

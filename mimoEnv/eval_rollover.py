@@ -113,6 +113,10 @@ def env_kwargs(config, starting_position, goal):
         starting_position=starting_position,
         pbrs=config.get('pbrs', False),
         pbrs_w=config.get('pbrs_w', 100),
+        # 12.09.2026 The evaluation scores rho, not the reward, so this changes no reported
+        # number -- it is here so the env is the one the run trained in. Runs saved before today
+        # carry no key and get the historical 1.0.
+        pbrs_gamma=config.get('pbrs_gamma', 1.0),
         pen_factor=config.get('pen_factor', 0.02),
         pen_metabolic=config.get('pen_metabolic', False),
         nopen=config.get('nopen', False),
