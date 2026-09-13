@@ -386,6 +386,33 @@ def missing_limb_arg(value):
         raise argparse.ArgumentTypeError(str(error)) from error
 
 
+def parse_net_arch(value):
+    """ '--net_arch' -> the 'net_arch' entry of SB3's 'policy_kwargs', or None for SB3's default.
+
+    13.09.2026 Written for the PPO sweep over the muscle model. Takes a comma-separated list of
+    hidden layer widths and gives actor and critic the same shape, which is the only form a sweep
+    over "how big is the network" needs: '--net_arch=256,256' becomes
+    'dict(pi=[256, 256], vf=[256, 256])'. SB3's own default for 'MultiInputPolicy' is
+    'dict(pi=[64, 64], vf=[64, 64])', so '--net_arch=64,64' reproduces every stored run exactly.
+
+    Separate actor and critic shapes are deliberately NOT spelled here -- edit 'policy_kwargs' at
+    the call site for that. A CLI syntax for it would be one more thing to round-trip through
+    'data.yml' for a case nobody has needed yet.
+    """
+    if value is None:
+        return None
+    try:
+        layers = [int(width) for width in str(value).replace(' ', '').split(',') if width != '']
+    except ValueError as error:
+        raise argparse.ArgumentTypeError(
+            f"--net_arch expects a comma-separated list of integers, e.g. '256,256'; got "
+            f"'{value}'.") from error
+    if not layers or any(width < 1 for width in layers):
+        raise argparse.ArgumentTypeError(
+            f"--net_arch needs at least one layer and every width must be >= 1; got '{value}'.")
+    return dict(pi=list(layers), vf=list(layers))
+
+
 def main():
     """ CLI for the demonstration environments.
 
@@ -509,6 +536,54 @@ An example is '251206_prone_linear_1e6_test'
                         help="Disable action penalty in reward function.")
     parser.add_argument('--lr', required=False, default=3e-4, type=float,
                         help="Learning rate. Default 1e-3 for PPO algorithm. Only used for PPO algorithm.")
+    # 13.09.2026 PPO update-size knobs, added for the muscle-model sweep. All default to None,
+    # i.e. SB3's own defaults, so every stored run reloads with exactly what it trained on.
+    #
+    # They exist because the muscle model's 92-dim action space breaks PPO's trust region where
+    # the 46-dim spring-damper one does not. The importance ratio is a PRODUCT over action
+    # dimensions, so the same per-dimension drift produces a far larger joint ratio at 92 dims,
+    # and clipping at 0.2 then catches nearly every sample. Measured on
+    # 26-09-08_supine_muscle_metabolicpen50_4e6: clip_fraction 0.5-0.9 where healthy PPO sits at
+    # 0.1-0.2, and approx_kl typically 0.1-1.2 with spikes to 568 where healthy is ~0.01. The
+    # '..._entcoef_logstdinit_actionbias' variant is the same pathology taken to its conclusion:
+    # clip_fraction 0.997, approx_kl up to 1e12, std driven to 0.09 and ep_rho_max_mean falling
+    # from 0.72 back to 0.06 in all six seeds.
+    parser.add_argument('--batch_size', default=None, type=int,
+                        help="PPO minibatch size. SB3's default is 64. What it actually controls "
+                             "is how many gradient steps one rollout pays for: "
+                             "'n_epochs * n_steps / batch_size', i.e. 320 at the defaults "
+                             "(10 * 2048 / 64). --batch_size=256 makes that 80, which is the "
+                             "direct way to shrink how far the policy moves per rollout. SB3 "
+                             "warns if n_steps is not a multiple of it. SAC/TD3/DDPG take it "
+                             "too, as the size of the minibatch sampled from the replay buffer "
+                             "(SB3 default 256); the other flags below are PPO-only.")
+    parser.add_argument('--n_steps', default=None, type=int,
+                        help="PPO rollout length per update. SB3's default is 2048, which at "
+                             "--episode_steps=500 is only ~4 episodes of on-policy data behind "
+                             "each policy update -- a thin sample for a 92-dim muscle policy. "
+                             "Raising it lowers gradient variance at the cost of updates per "
+                             "step. Only applies to a fresh model: a checkpoint's rollout buffer "
+                             "is already allocated, so --load_model keeps the stored value.")
+    parser.add_argument('--n_epochs', default=None, type=int,
+                        help="PPO passes over each rollout. SB3's default is 10. Together with "
+                             "--batch_size this is the update-size knob; lowering it to 4-5 is "
+                             "the cheapest way to cut approx_kl if a run's clip_fraction sits "
+                             "above 0.3.")
+    parser.add_argument('--clip_range', default=None, type=float,
+                        help="PPO's policy-ratio clip. SB3's default is 0.2, tuned on MuJoCo "
+                             "tasks with far fewer action dimensions than the muscle model's 92.")
+    parser.add_argument('--target_kl', default=None, type=float,
+                        help="Stop a rollout's epoch loop early once approx_kl exceeds "
+                             "1.5 * target_kl. Unset (SB3's default) means no limit at all, "
+                             "which is how the muscle runs reached approx_kl 568. 0.01-0.03 is "
+                             "the usual range; it is the one knob that bounds the damage a bad "
+                             "rollout can do rather than making every update smaller.")
+    parser.add_argument('--net_arch', default=None, type=parse_net_arch,
+                        help="Hidden layer widths for actor and critic, comma-separated, e.g. "
+                             "'256,256'. Unset is SB3's default for MultiInputPolicy, "
+                             "dict(pi=[64, 64], vf=[64, 64]), which is what every stored run "
+                             "used. Only applies to a fresh model -- a checkpoint carries its "
+                             "own architecture and SB3 raises if asked to load into another one.")
     parser.add_argument('--buffer_size', default=300_000, type=int,
                         help="Replay buffer size for the off-policy algorithms (SAC/TD3/DDPG). "
                              "Must stay well below the SB3 default of 1e6: one roll_over observation "
@@ -567,27 +642,6 @@ An example is '251206_prone_linear_1e6_test'
                         help="Use PBRS in roll_over reward shaping.")
     parser.add_argument('--pbrs_w', default=100, type=float,
                         help="Potential difference weighting in PBRS.")
-    # 12.09.2026 Both added while asking why MIMo rolls in ~0.3 s where Siegel et al. (2024)
-    # measured 3.6 +- 2.8 s in infants. See 'The discount and the roll duration' in CLAUDE.md.
-    parser.add_argument('--gamma', default=0.99, type=float,
-                        help="Discount factor of the RL algorithm. The default 0.99 is SB3's "
-                             "own, i.e. what every stored run trained with -- it was never "
-                             "passed before. At 100 Hz it is an effective horizon of ~1 s "
-                             "(half-life 0.69 s), which is itself an incentive to roll fast: a "
-                             "reward 3.6 s away, the mean roll duration of Siegel's infants, is "
-                             "worth 0.99^360 = 0.027 of an immediate one. Use 0.999 (~10 s) to "
-                             "test whether MIMo's 0.3 s roll is an artefact of the discount, and "
-                             "raise --episode_steps with it -- the 500-step default is a 5 s "
-                             "ceiling and --episode_steps=100 a 1 s one.")
-    parser.add_argument('--pbrs_gamma', default=None, type=float,
-                        help="Discount inside the PBRS term, which is "
-                             "'pbrs_w * (pbrs_gamma * Phi(s') - Phi(s))'. Unset keeps the "
-                             "historical 1.0, so every stored run reloads bit-identically. Ng et "
-                             "al. (1999) require the agent's own discount here; at 1.0 the "
-                             "shaping is not policy-invariant and leaves a residual "
-                             "'-pbrs_w * (1 - gamma) * distance' per step (~-1/step at reset), "
-                             "i.e. an implicit time penalty. Pass the same value as --gamma for "
-                             "the corrected form.")
     parser.add_argument('--isr', action='store_true',
                         help="Use Initial State Randomization. NOT a default -- it is off in "
                              "every headline roll-over configuration and inflates rho_max, "
@@ -781,13 +835,8 @@ An example is '251206_prone_linear_1e6_test'
     log_actuations = args.log_actuations
     nopen = args.nopen
     learning_rate = args.lr
-    gamma = args.gamma
     pbrs = args.pbrs
     pbrs_w = args.pbrs_w
-    # 12.09.2026 Unset means the historical, uncorrected shaping term. The resolved float is what
-    # goes into data.yml, so a reloaded run keeps its own shaping whatever --gamma it is continued
-    # with, and the ~500 runs saved before today carry no key and fall back to 1.0 here.
-    pbrs_gamma = 1.0 if args.pbrs_gamma is None else args.pbrs_gamma
     isr = args.isr
     observation_normalization = args.obs_norm
     touch = args.touch
@@ -862,6 +911,16 @@ An example is '251206_prone_linear_1e6_test'
     if (goal_low is None) != (goal_high is None):
         raise ValueError("Provide both --goal_low and --goal_high, or neither.")
 
+    # 13.09.2026 The PPO update-size knobs have no meaning outside PPO. Say so rather than
+    # accepting them silently -- a sweep script that passes --n_epochs to a SAC run and sees no
+    # difference is exactly the kind of quiet no-op this file keeps a record of.
+    ppo_only_set = [flag for flag in ('n_steps', 'n_epochs', 'clip_range', 'target_kl', 'net_arch')
+                    if getattr(args, flag) is not None]
+    if ppo_only_set and algorithm != 'PPO':
+        raise ValueError(
+            f"--{', --'.join(ppo_only_set)} {'is' if len(ppo_only_set) == 1 else 'are'} PPO-only, "
+            f"but --algorithm={algorithm}. --batch_size is the one that applies to both.")
+
 
     if pbrs and not sparse_reward and not done_active:
         # The PBRS potential jumps to +reward_success at the goal. That is only safe while the
@@ -874,15 +933,6 @@ An example is '251206_prone_linear_1e6_test'
             "goal, so leaving the goal region pays about -pbrs_w * reward_success (~-50000) and "
             "the critic diverges. Use --pbrs with terminating episodes (drop --no_done_active), "
             "or use --sparse_reward, which has no potential to be discontinuous.")
-
-    # 12.09.2026 Not an error: 1.0 is the historical value and every stored PBRS run used it. But
-    # it is the one thing about this reward that is quietly wrong, so it says so once per run.
-    if pbrs and not sparse_reward and pbrs_gamma != gamma:
-        print(f"Note: --pbrs_gamma={pbrs_gamma} differs from --gamma={gamma}, so the shaping is "
-              f"not policy-invariant (Ng et al. 1999). It leaves about "
-              f"{-pbrs_w * (1 - gamma):+.2f} per step at reset distance, i.e. an implicit "
-              f"penalty on taking longer. Pass --pbrs_gamma={gamma} for the corrected form; "
-              f"1.0 is what every run before 12.09.2026 trained with.")
 
     proprio_params = DEFAULT_PROPRIOCEPTION_PARAMS
 
@@ -965,7 +1015,6 @@ An example is '251206_prone_linear_1e6_test'
             achieved_goal_in_observation=achieved_goal_in_observation,
             proprio_params=proprio_params,
             pbrs_w=pbrs_w,
-            pbrs_gamma=pbrs_gamma,
             pen_factor=pen_factor,
             pen_metabolic=pen_metabolic,
             goal_function=goal_function,
@@ -1015,24 +1064,61 @@ An example is '251206_prone_linear_1e6_test'
             env.observation_normalization_mean = mean_dict
             env.observation_normalization_std = std_dict
 
+    # 13.09.2026 The PPO update-size knobs. Only what was actually passed goes in, so an
+    # unset flag leaves SB3's own default in place and nothing about a stored run changes.
+    ppo_kwargs = {}
+    for flag in ('batch_size', 'n_steps', 'n_epochs', 'clip_range', 'target_kl'):
+        value = getattr(args, flag)
+        if value is not None:
+            ppo_kwargs[flag] = value
+
     # load pretrained model or create new one
     # Set learning rate for PPO algorithm.
     if algorithm=='PPO':
-        # 12.09.2026 'gamma' is passed explicitly from here on. Its default equals SB3's own, so
-        # nothing changes for a run that does not ask for another one; on the load path it lands
-        # through the same 'model.__dict__.update(kwargs)' that --lr has always used.
         if load_model:
+            # SB3's 'load' ends in 'model.__dict__.update(kwargs)', which is fine for the plain
+            # scalars but wrong for two of these. 'n_steps' sizes the rollout buffer, which
+            # '_setup_model' has already allocated from the checkpoint's own value, so writing a
+            # different one would desync the buffer from the collector. 'net_arch' is part of
+            # 'policy_kwargs', which 'load' compares against the stored architecture and raises
+            # on -- the weights in the zip have a shape. Both therefore stay as trained, and say
+            # so rather than appearing to take effect.
+            load_kwargs = {key: value for key, value in ppo_kwargs.items() if key != 'n_steps'}
+            # 'clip_range' is a schedule inside PPO ('self.clip_range(progress)'), not a float,
+            # so a raw float through '__dict__.update' would be called and raise on the first
+            # update. Everything else is a plain attribute.
+            if 'clip_range' in load_kwargs:
+                from stable_baselines3.common.utils import get_schedule_fn
+                load_kwargs['clip_range'] = get_schedule_fn(load_kwargs['clip_range'])
             model = RL.load(load_model, env,
                             tensorboard_log=save_dir,
                             learning_rate=learning_rate,
-                            gamma=gamma,
-                            verbose=1)
+                            verbose=1,
+                            **load_kwargs)
+            # Report the two only when they would actually have changed something. Reloading a
+            # run replays its own 'data.yml' into the defaults, so a bare equality against None
+            # would fire on every continued run and say the opposite of the truth.
+            stored_arch = (model.policy_kwargs or {}).get('net_arch')
+            for flag, current, stored in (('n_steps', args.n_steps, model.n_steps),
+                                          ('net_arch', args.net_arch, stored_arch)):
+                if current is not None and current != stored:
+                    print(f"Note: --{flag}={current} is ignored with --load_model; the "
+                          f"checkpoint was built with {stored} and that is what continues. "
+                          f"Start a fresh run to change it.")
         else:
+            policy_kwargs = {} if args.net_arch is None else dict(net_arch=args.net_arch)
             model = RL("MultiInputPolicy", env,
                     tensorboard_log=save_dir,
                     learning_rate=learning_rate,
-                    gamma=gamma,
-                    verbose=1)
+                    policy_kwargs=policy_kwargs,
+                    verbose=1,
+                    **ppo_kwargs)
+        # The quantity the sweep is actually varying: how many gradient steps one rollout of
+        # on-policy data pays for. 320 at SB3's defaults, and the reason --batch_size and
+        # --n_epochs are not independent axes.
+        print(f"PPO: n_steps={model.n_steps}, batch_size={model.batch_size}, "
+              f"n_epochs={model.n_epochs}, target_kl={model.target_kl} -> "
+              f"{model.n_epochs * model.n_steps // model.batch_size} gradient steps per rollout.")
     elif algorithm in OFF_POLICY_ALGORITHMS:
         # Off-policy algorithms keep a replay buffer, which PPO/A2C do not. Its size must be
         # passed explicitly: SB3 defaults to 1e6 transitions, and with this environment's
@@ -1056,7 +1142,7 @@ An example is '251206_prone_linear_1e6_test'
             )
 
         if load_model:
-            model = RL.load(load_model, env, buffer_size=args.buffer_size, gamma=gamma)
+            model = RL.load(load_model, env, buffer_size=args.buffer_size)
         else:
             # 18.08.2026 'learning_rate' was missing here: --lr was silently ignored for every
             # off-policy run and SB3's default of 3e-4 applied instead. It happens to equal the
@@ -1065,7 +1151,6 @@ An example is '251206_prone_linear_1e6_test'
             off_policy_kwargs = dict(
                 tensorboard_log=save_dir,
                 learning_rate=learning_rate,
-                gamma=gamma,
                 buffer_size=args.buffer_size,
                 train_freq=args.train_freq,
                 gradient_steps=1,
@@ -1073,24 +1158,23 @@ An example is '251206_prone_linear_1e6_test'
                 replay_buffer_class=replay_buffer_class,
                 replay_buffer_kwargs=replay_buffer_kwargs,
                 verbose=1)
+            # 13.09.2026 The one PPO knob that is also an off-policy one: it sizes the minibatch
+            # drawn from the replay buffer. Only passed when asked for, so SB3's 256 stands
+            # otherwise and no stored SAC run changes.
+            if args.batch_size is not None:
+                off_policy_kwargs['batch_size'] = args.batch_size
             model = RL("MultiInputPolicy", env, **off_policy_kwargs)
     else:
         if load_model:
-            model = RL.load(load_model, env, gamma=gamma)
+            model = RL.load(load_model, env)
         else:
             model = RL("MultiInputPolicy", env,
                     tensorboard_log=save_dir,
-                    gamma=gamma,
                     verbose=1)
 
     # Save model metadata in model.
     yaml_data = {
         'lr': args.lr,
-        # 12.09.2026 Both define the run: the discount sets how much a late reward is worth (at
-        # 100 Hz, 0.99 is a ~1 s horizon) and 'pbrs_gamma' sets which shaping term was paid.
-        # Runs saved before today carry neither and fall back to 0.99 / 1.0, i.e. what they did.
-        'gamma': gamma,
-        'pbrs_gamma': pbrs_gamma,
         'nopen': nopen,
         'pbrs': pbrs,
         'pbrs_w': pbrs_w,
@@ -1156,6 +1240,16 @@ An example is '251206_prone_linear_1e6_test'
         # The horizon in force, not args.episode_steps: eval_rollover.py reads this to evaluate
         # a run at the length it was trained on, and 'None' would send it back to the default.
         'episode_steps': episode_steps,
+        # 13.09.2026 The PPO update-size knobs. Experiment-defining in the strongest sense --
+        # they are the run's optimiser, and a sweep over them is only readable if each run says
+        # which cell it is. None means "SB3's default", which is what the ~550 runs stored before
+        # today used and what they fall back to, so nothing on disk is re-baselined.
+        'batch_size': args.batch_size,
+        'n_steps': args.n_steps,
+        'n_epochs': args.n_epochs,
+        'clip_range': args.clip_range,
+        'target_kl': args.target_kl,
+        'net_arch': args.net_arch,
         # Stability knobs. 'lr' above is the base rate; with a schedule it is the value at step 0.
         'eval_every': args.eval_every,
         'eval_episodes': args.eval_episodes,
@@ -1193,8 +1287,7 @@ An example is '251206_prone_linear_1e6_test'
             pbrs=pbrs, render_mode='rgb_array',
             touch_params=ROLL_OVER_TOUCH_PARAMS if touch else None,
             achieved_goal_in_observation=achieved_goal_in_observation,
-            proprio_params=proprio_params, pbrs_w=pbrs_w, pbrs_gamma=pbrs_gamma,
-            pen_factor=pen_factor,
+            proprio_params=proprio_params, pbrs_w=pbrs_w, pen_factor=pen_factor,
             pen_metabolic=pen_metabolic,
             goal_function=goal_function,
             gravity_goal_eps=args.gravity_goal_eps,

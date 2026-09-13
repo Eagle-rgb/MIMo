@@ -30,8 +30,6 @@ CREATE TABLE IF NOT EXISTS runs (
     sparse_reward     INTEGER,
     pbrs              INTEGER,
     pbrs_w            REAL,
-    gamma             REAL,               -- 12.09.2026; NULL on runs saved before it, i.e. 0.99
-    pbrs_gamma        REAL,               -- 12.09.2026; NULL means the uncorrected 1.0 shaping
     pen_factor        REAL,
     morph_age         INTEGER,
     physio_age        INTEGER,
@@ -130,8 +128,6 @@ CREATE INDEX IF NOT EXISTS jobs_state ON jobs(state);
 # against a ~40 MB index that is otherwise still perfectly good.
 MIGRATIONS = [
     ("runs", "use_muscle", "INTEGER"),
-    ("runs", "gamma", "REAL"),
-    ("runs", "pbrs_gamma", "REAL"),
 ]
 
 

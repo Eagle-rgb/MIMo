@@ -280,7 +280,7 @@ def collect_episode(env, policy, seed, episode_steps):
     }
 
 
-def rolling_window(rho, onset_rho):
+def rolling_window(rho, onset_rho, end_rho=SIDE_LYING_THRESHOLD):
     """Siegel's rolling movement: supine up to lateral rotation.
 
     The end is the first step at which rho reaches side lying, which is Kobayashi's and Siegel's
@@ -290,11 +290,13 @@ def rolling_window(rho, onset_rho):
     Args:
         rho (np.ndarray): Per-step task progress, 0 at the starting posture and 1 at a full roll.
         onset_rho (float): rho below which MIMo counts as not yet rolling.
+        end_rho (float): rho that ends the window. Side lying for Siegel; 11.09.2026 exposed for
+            `eval_energy.py`, which can also crop to the completed roll.
 
     Returns:
         tuple[int, int]|None: (start, end) indices inclusive, or None if he never rolled.
     """
-    reached = np.flatnonzero(rho >= SIDE_LYING_THRESHOLD)
+    reached = np.flatnonzero(rho >= end_rho)
     if reached.size == 0:
         return None
     end = int(reached[0])
