@@ -664,6 +664,22 @@ An example is '251206_prone_linear_1e6_test'
                              "to firm (solimp[2], baseline 0.001). Turns the linear spring of "
                              "--floor_softness into a progressive, foam-like response; 0.03 "
                              "gives a ~13.5 mm mat-like indentation.")
+    # 04.10.2026 Incline of the floor, constant over the whole run.
+    parser.add_argument('--slope', default=0.0, type=float, required=False,
+                        help="Incline of the floor in degrees, -90 to 90 (default 0, the level "
+                             "floor). The slope runs across MIMo's rolling direction: positive "
+                             "rises towards his left, so rolling left is uphill and rolling "
+                             "right downhill; negative is the mirror image. rho stays measured "
+                             "against the floor, not against true vertical.")
+    # 06.10.2026 The inclined device of Siegel et al. (2024). Both unset is no device.
+    parser.add_argument('--seatback_angle', default=None, type=float, required=False,
+                        help="Put MIMo in the two-panel device of Siegel et al. (2024) and "
+                             "raise the panel under his trunk and head by this many degrees "
+                             "(the paper used 0, 10, 18 and 28). Giving only one of the two "
+                             "angles sets the other to 0. Supine only.")
+    parser.add_argument('--base_angle', default=None, type=float, required=False,
+                        help="Like --seatback_angle, for the panel under the legs (the paper "
+                             "used 0 with a 0 seatback and 15 otherwise).")
     parser.add_argument('--obs_norm', action='store_true', default=False,
                         help="Use observation normalization.")
     parser.add_argument('--touch', action='store_true', default=False,
@@ -1037,6 +1053,9 @@ An example is '251206_prone_linear_1e6_test'
             floor_softness=args.floor_softness,
             floor_friction=args.floor_friction,
             floor_solimp_width=args.floor_solimp_width,
+            slope=args.slope,
+            seatback_angle=args.seatback_angle,
+            base_angle=args.base_angle,
             cos_goal_pool=args.cos_goal_pool,
             muscle_action_space=muscle_action_space,
             strip_textures=strip_textures,
@@ -1207,6 +1226,13 @@ An example is '251206_prone_linear_1e6_test'
         'floor_softness': args.floor_softness,
         'floor_friction': args.floor_friction,
         'floor_solimp_width': args.floor_solimp_width,
+        # 04.10.2026 Likewise: a run trained on an incline is not the level-floor experiment.
+        # Absent from every data.yml written before that date, where it falls back to 0.
+        'slope': args.slope,
+        # 06.10.2026 The device. Absent from every data.yml written before that date, where
+        # None is no device.
+        'seatback_angle': args.seatback_angle,
+        'base_angle': args.base_angle,
         'side_lying': side_lying,
         'physio_age': physio_age,
         'morph_age': morph_age,
@@ -1311,6 +1337,9 @@ An example is '251206_prone_linear_1e6_test'
             floor_softness=args.floor_softness,
             floor_friction=args.floor_friction,
             floor_solimp_width=args.floor_solimp_width,
+            slope=args.slope,
+            seatback_angle=args.seatback_angle,
+            base_angle=args.base_angle,
             vision_params=DEFAULT_VISION_PARAMS if args.vision else None,
             cos_goal_pool=args.cos_goal_pool,
             muscle_action_space=muscle_action_space,

@@ -25,13 +25,17 @@ for i in $(seq 0 5); do
 		"python mimoEnv/illustrations.py" \
 		"--train_for=1000000" \
 		"--save_every=1000000" \
-		"--roll_over_starting_position=prone" \
+		"--roll_over_starting_position=supine" \
 		"--algorithm=PPO" \
-		"--missing_limb=leftarm" \
+		"--use_muscle" \
+		"--pen_metabolic" \
+		"--pen_factor=50" \
 		"--eval_every=25000" \
 		"--eval_episodes=20" \
 		"--roll_over_model_path_auto" \
 		"--save_model=${MODEL_NAME}_run_${i}" \
+		"--batch_size=256" \
+		"--target_kl=0.1" \
 		"--pbrs" \
 		"--morph_age=9" \
 		"--physio_age=9" \

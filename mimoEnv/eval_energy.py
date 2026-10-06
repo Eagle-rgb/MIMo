@@ -832,6 +832,12 @@ def main():
         parser.error("--model is required (or use --selfcheck)")
 
     config, start, goal, episode_steps = resolve_run(args.model, args)
+    # 04.10.2026 '--slope' tilts gravity rather than the floor, so on an inclined run height is
+    # no longer 'xipos[:, 2]' and Ep = m g h below would be measured along the floor normal.
+    if config.get('slope'):
+        raise SystemExit(f"This run was trained on a {config['slope']:+g} deg slope. "
+                         "eval_energy.py takes height as z, which is the floor normal and not "
+                         "the vertical on an incline, so its potential energy would be wrong.")
     env = build_env(config, start, goal)
     policy = load_policy(args.model, config.get("algorithm", "PPO"), env)
     probe = EnergyProbe(env.model)

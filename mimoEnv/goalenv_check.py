@@ -501,11 +501,94 @@ def test_gravity_goal():
     env.close()
 
 
+def test_alternating_starting_position():
+    """--roll_over_starting_position=alternating: one policy, both rolling directions.
+
+    The posture flips on every reset, so anything that reads 'starting_position' outside
+    'reset_model' sees a value that is right half the time. The one that mattered was the
+    'gravity' reference recording (fixed 16.09.2026): it set the posture per reference and then
+    called 'reset_model', which flipped it straight back, so the samples alternated +-1 and both
+    references came out as their mean (0, 0) -- identical, hence no representable difference
+    between "roll to prone" and "roll to supine". Nothing raised; only the printed standard
+    deviations gave it away (0.999 against 0.000 when correct).
+
+    This is also the only configuration in which an absolute goal is required: 'cos' is progress
+    *relative to the starting posture* and reads ~0 at reset and ~1 on success in both
+    directions, so it cannot express which way to roll. Both are checked here.
+
+    Two environments, one at a time.
+    """
+    print("\n13. Alternating starting position (--roll_over_starting_position=alternating)")
+
+    # -- gravity: the absolute goal, the one this configuration needs ---------------------
+    env = make_env(starting_position='alternating', goal_function='gravity',
+                   gravity_reference_samples=4, sparse_reward=True, pbrs=False,
+                   done_active=False, strip_textures=True)
+
+    prone_ref = np.asarray(env.prone_reference_goal, dtype=float)
+    supine_ref = np.asarray(env.supine_reference_goal, dtype=float)
+    separation = float(np.abs(prone_ref - supine_ref).mean())
+    check("the two reference goals are distinct", separation > 1.5,
+          f"mean |prone_ref - supine_ref| = {separation:.3f} (was 0.000 before the fix)")
+    check("the prone reference is prone", bool(np.all(prone_ref < -0.9)),
+          f"{np.round(prone_ref, 3)}")
+    check("the supine reference is supine", bool(np.all(supine_ref > 0.9)),
+          f"{np.round(supine_ref, 3)}")
+
+    worst_sd = max(float(np.max(env.reference_goal_std[pos])) for pos in ('prone', 'supine'))
+    check("the reference samples do not alternate", worst_sd < 0.1,
+          f"worst sd {worst_sd:.3f} -- an alternating record reads ~0.999")
+
+    check("the alternating flag survives the recording",
+          env.alternating_starting_position is True)
+
+    # The posture has to flip every reset, and the goal has to be the opposite reference.
+    postures, goal_ok, achieved_ok = [], True, True
+    for i in range(6):
+        env.reset(seed=500 + i)
+        postures.append(env.starting_position)
+        want = supine_ref if env.starting_position == 'prone' else prone_ref
+        goal_ok &= bool(np.allclose(np.asarray(env.goal, dtype=float), want))
+        achieved = np.asarray(env.get_achieved_goal(), dtype=float)
+        own = prone_ref if env.starting_position == 'prone' else supine_ref
+        achieved_ok &= bool(np.abs(achieved - own).mean() < 0.15)
+    check("the posture alternates on every reset",
+          postures == ['supine', 'prone'] * 3, " -> ".join(postures))
+    check("the desired goal is the opposite posture's reference", goal_ok)
+    check("the achieved goal at reset matches the posture MIMo is in", achieved_ok)
+
+    # Rendering only, but it is read per posture and was set once at construction.
+    env.starting_position = 'supine'
+    env.fix_top_camera_rotation_supine()
+    quat_supine = env.model.cam_quat[env.model.camera('top').id].copy()
+    env.starting_position = 'prone'
+    env.fix_top_camera_rotation_supine()
+    quat_prone = env.model.cam_quat[env.model.camera('top').id].copy()
+    check("the top camera is reframed per posture",
+          not np.allclose(quat_supine, quat_prone))
+
+    env.close()
+    del env
+
+    # -- cos: relative, and therefore blind to the direction ------------------------------
+    env = make_env(starting_position='alternating', strip_textures=True)
+    achieved = []
+    for i in range(4):
+        env.reset(seed=700 + i)
+        achieved.append(float(np.asarray(env.get_achieved_goal(), dtype=float).mean()))
+    check("'cos' reads ~0 at reset in both postures (it is relative, not absolute)",
+          max(abs(a) for a in achieved) < 0.1,
+          f"max |achieved| = {max(abs(a) for a in achieved):.3f} -- "
+          "this is why the direction needs --goal_achievement_function=gravity")
+    env.close()
+
+
 SECTIONS = [
     'test_sb3_env_checker', 'test_purity', 'test_vectorization', 'test_pbrs_regression',
     'test_sparse_reward', 'test_goal_sampling', 'test_info_contract',
     'test_her_relabel_end_to_end', 'test_pbrs_bounded_under_relabelling',
     'test_goal_tolerance', 'test_episode_horizon', 'test_gravity_goal',
+    'test_alternating_starting_position',
 ]
 
 
@@ -543,6 +626,7 @@ if __name__ == '__main__':
     test_goal_tolerance()
     test_episode_horizon()
     test_gravity_goal()
+    test_alternating_starting_position()
 
     print()
     if FAILURES:

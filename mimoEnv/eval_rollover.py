@@ -136,6 +136,12 @@ def env_kwargs(config, starting_position, goal):
         floor_softness=config.get('floor_softness'),
         floor_friction=config.get('floor_friction'),
         floor_solimp_width=config.get('floor_solimp_width'),
+        # 04.10.2026 Incline of the floor in degrees. Absent from every data.yml written before
+        # that date, where 0 is the level floor those runs trained on.
+        slope=config.get('slope') or 0.0,
+        # 06.10.2026 The Siegel device. Absent before that date, where None is no device.
+        seatback_angle=config.get('seatback_angle'),
+        base_angle=config.get('base_angle'),
         freeze_arm=config.get('freeze_arm', False),
         freeze_leg=config.get('freeze_leg', False),
         # 04.09.2026 Missing limb. Absent from every data.yml written before that date and
@@ -204,8 +210,16 @@ def floor_label(config):
     softness = config.get('floor_softness')
     friction = config.get('floor_friction')
     width = config.get('floor_solimp_width')
+    # 04.10.2026 The incline is part of the surface, so it is named in the same line.
+    slope = config.get('slope') or 0.0
+    incline = f", slope {slope:+g} deg" if slope else ""
+    # 06.10.2026 In the device MIMo does not lie on the floor at all, so that comes first.
+    seatback, base = config.get('seatback_angle'), config.get('base_angle')
+    if seatback is not None or base is not None:
+        return (f"Siegel device, seatback {seatback or 0.0:g} deg / base {base or 0.0:g} deg"
+                + incline)
     if softness is None and friction is None and width is None:
-        return "rigid (scene default)"
+        return "rigid (scene default)" + incline
     parts = []
     if softness is not None:
         parts.append(f"solref={softness:g}")
@@ -213,7 +227,7 @@ def floor_label(config):
         parts.append(f"solimp_width={width:g}")
     if friction is not None:
         parts.append(f"friction={friction:g}")
-    return "compliant (" + ", ".join(parts) + ")"
+    return "compliant (" + ", ".join(parts) + ")" + incline
 
 
 def build_env(config, starting_position, goal):
@@ -348,6 +362,21 @@ def starting_position_from_path(model_path):
     return None
 
 
+def _is_alternating_run(model_path, config):
+    """True when this checkpoint came from an alternating-posture run.
+
+    'roll_over_starting_position' is on data.yml's deliberate exclusion list, so as with the two
+    fixed postures the save path is the record: --roll_over_model_path_auto writes
+    models/roll_over/<date>/alternating/<date>_alternating_<name>/. The config is still consulted
+    first in case a future run does store the key.
+    """
+    if (config or {}).get('roll_over_starting_position') == 'alternating':
+        return True
+    parts = os.path.abspath(model_path).split(os.sep)
+    return any(part == 'alternating' or re.search(r'(^|[_-])alternating([_-]|$)', part)
+               for part in parts)
+
+
 RUN_DIR_RE = re.compile(r'_run_(\d+)$')
 # 'model_best.zip' is the EvalCallback's pick and 'model_intermediate_90.zip' the 90%-side-lying
 # snapshot. Neither is a checkpoint of the training schedule, so neither counts as "the last one".
@@ -430,6 +459,16 @@ def resolve_run(model_path, args, ages=None):
     # describes the invocation, not the model), so config.get() here always missed and every
     # prone run was silently evaluated as supine -- 198 checkpoints in models/ are affected.
     # The save path does record the posture, so read it from there before falling back.
+    # 16.09.2026 A run trained with '--roll_over_starting_position=alternating' saves under
+    # .../alternating/..., where 'starting_position_from_path' matches neither posture and
+    # returns None -- so the fallback below would have evaluated it as supine, i.e. as one of
+    # the two directions it was trained on, without saying so. Such a run has to be evaluated
+    # once per direction, and which one is a decision for the caller, not a default.
+    if args.starting_position is None and _is_alternating_run(model_path, config):
+        raise SystemExit(
+            "This run was trained with --roll_over_starting_position=alternating, so it has no "
+            "single evaluation posture. Pass --starting_position=prone or "
+            "--starting_position=supine and evaluate it once per direction.")
     start = (args.starting_position
              or config.get('roll_over_starting_position')
              or starting_position_from_path(model_path)
@@ -467,10 +506,17 @@ def resolve_run(model_path, args, ages=None):
     physio_override = ages[0] if ages else args.physio_age
     morph_override = ages[1] if ages else args.morph_age
     age_override = physio_override is not None or morph_override is not None
+    # 04.10.2026 '--slope' follows the same pattern: unset keeps the incline the run trained
+    # on, a value (0 included) scores the policy on another one. 'getattr' because the other
+    # eval_* scripts hand their own namespace in here and do not all define the flag.
+    slope_override = getattr(args, 'slope', None)
     floor_override = (args.rigid_floor
                       or args.floor_softness is not None
                       or args.floor_friction is not None
-                      or args.floor_solimp_width is not None)
+                      or args.floor_solimp_width is not None
+                      or slope_override is not None
+                      or getattr(args, 'seatback_angle', None) is not None
+                      or getattr(args, 'base_angle', None) is not None)
     if (args.missing_limb is not None or args.ghost_obs is not None
             or floor_override or age_override):
         config = dict(config)
@@ -490,6 +536,13 @@ def resolve_run(model_path, args, ages=None):
         config['floor_friction'] = args.floor_friction
     if args.floor_solimp_width is not None:
         config['floor_solimp_width'] = args.floor_solimp_width
+    if slope_override is not None:
+        config['slope'] = slope_override
+    # 06.10.2026 The device, same pattern: unset keeps what the run trained in, a value puts
+    # the policy into that configuration (a floor-trained run into the device, for instance).
+    for key in ('seatback_angle', 'base_angle'):
+        if getattr(args, key, None) is not None:
+            config[key] = getattr(args, key)
     if args.missing_limb is not None:
         # Canonicalised here rather than in the constructor so a typo in a '--group' run fails
         # before the first env is built, not after the first checkpoint has been loaded.
@@ -728,6 +781,11 @@ def _print_group(rows, skipped, summary, args, episodes):
     elif (args.floor_softness is not None or args.floor_friction is not None
           or args.floor_solimp_width is not None):
         print(f"floor               : {floor_label(vars(args))}, forced -- overrides each data.yml")
+    elif args.slope is not None:
+        print(f"slope               : {args.slope:+g} deg, forced -- overrides each data.yml")
+    if args.seatback_angle is not None or args.base_angle is not None:
+        print(f"device              : seatback {args.seatback_angle or 0.0:g} deg / base "
+              f"{args.base_angle or 0.0:g} deg, forced -- overrides each data.yml")
     if args.policy_goal is not None:
         print(f"policy was fed      : desired_goal={args.policy_goal:.2f} (constant)")
     print()
@@ -886,6 +944,18 @@ def main():
                         help="Force the rigid scene default, ignoring the floor settings in "
                              "data.yml. The inverse of --floor_softness: it scores a "
                              "compliant-floor run on the surface every older run used.")
+    parser.add_argument('--slope', default=None, type=float,
+                        help="Incline of the floor in degrees, -90 to 90, overriding the one in "
+                             "the run's data.yml (0 for every run saved before 04.10.2026). "
+                             "Positive rises towards MIMo's left, so rolling left is uphill. "
+                             "Unset evaluates on the incline the run trained on; --slope=0 "
+                             "scores a slope-trained run on the level floor.")
+    parser.add_argument('--seatback_angle', default=None, type=float,
+                        help="Evaluate in the device of Siegel et al. (2024) with this seatback "
+                             "angle in degrees, overriding the run's data.yml. Unset keeps what "
+                             "the run trained in. Supine only.")
+    parser.add_argument('--base_angle', default=None, type=float,
+                        help="Like --seatback_angle, for the panel under the legs.")
     parser.add_argument('--floor_softness_sweep', default=None,
                         help="Evaluate one --model across a range of floor softnesses, one row "
                              "each ('0.02:0.12:0.02' or '0.05,0.1,0.2'). The env is rebuilt per "
@@ -966,6 +1036,9 @@ def main():
                              or args.floor_solimp_width is not None):
         parser.error("--rigid_floor forces the scene default; it does not combine with the "
                      "individual floor overrides.")
+
+    if args.slope is not None and not -90.0 <= args.slope <= 90.0:
+        parser.error(f"--slope must lie in [-90, 90] degrees, got {args.slope}.")
 
     if args.floor_softness_sweep is not None:
         if args.group:

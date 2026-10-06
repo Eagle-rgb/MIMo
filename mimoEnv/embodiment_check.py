@@ -459,6 +459,149 @@ def test_strip_textures():
     lean.close()
 
 
+def test_slope():
+    """ ``--slope`` must tilt gravity about MIMo's long axis and change nothing else.
+
+    04.10.2026 The incline is a patch on the compiled model like the floor properties, so the
+    claims are the same kind: a level run is untouched, the patch is the only difference to it,
+    and it is still there after ``set_embodiment`` has compiled a new model. The sign is checked
+    against MIMo's own body, because "positive rises towards his left" is a statement about
+    him and not about the world frame.
+    """
+    print("\ntest_slope")
+    level = make_env(strip_textures=True)
+    level_arrays = snapshot(level.model)
+    level_gravity = np.array(level.model.opt.gravity, copy=True)
+    level.close()
+    del level
+    gc.collect()
+    g = float(np.linalg.norm(level_gravity))
+    check("a level env keeps the compiled gravity", np.array_equal(level_gravity, [0.0, 0.0, -g]),
+          f"{level_gravity}")
+
+    def expected(degrees):
+        angle = np.deg2rad(degrees)
+        return g * np.array([0.0, -np.sin(angle), -np.cos(angle)])
+
+    env = make_env(strip_textures=True, slope=5.0)
+    check("gravity is rotated about the world x axis",
+          np.allclose(env.model.opt.gravity, expected(5.0), atol=1e-12, rtol=0.0),
+          f"{env.model.opt.gravity}")
+    worst = max((float(np.max(np.abs(level_arrays[f] - np.asarray(getattr(env.model, f)))))
+                 if level_arrays[f].size else 0.0) for f in FIELDS)
+    check("nothing but gravity differs from the level model", worst == 0.0,
+          f"worst {worst:.3e} over {len(FIELDS)} fields")
+
+    env.reset(seed=0)
+    left, right = env.data.body('left_hand').xpos[1], env.data.body('right_hand').xpos[1]
+    check("world +y is MIMo's left, so a positive slope rises towards his left", left > right,
+          f"left hand y {left:+.3f}, right hand y {right:+.3f}")
+
+    env._apply_slope()
+    check("a second pass over the same model is a no-op",
+          np.allclose(env.model.opt.gravity, expected(5.0), atol=1e-12, rtol=0.0))
+
+    # 45 degrees is past the friction cone of the default floor (mu = 1), so a limp MIMo has to
+    # go downhill, which for a positive slope is towards -y. Also the swap check: the new angle
+    # only reaches the model through 'initialize' on the recompiled one.
+    env.slope = 45.0
+    env.set_embodiment(9.0, 9.0)
+    check("the slope survives an embodiment swap",
+          np.allclose(env.model.opt.gravity, expected(45.0), atol=1e-12, rtol=0.0),
+          f"{env.model.opt.gravity}")
+    env.reset(seed=0)
+    start_y = float(env.data.body('hip').xpos[1])
+    for _ in range(100):
+        env.step(env.actuation_model.neutral_action())
+    drift = float(env.data.body('hip').xpos[1]) - start_y
+    check("a limp MIMo goes downhill, towards -y on a positive slope", drift < -0.1,
+          f"hip moved {drift:+.3f} m in 100 steps at +45 deg")
+    env.close()
+
+    for bad in (90.5, -91.0):
+        try:
+            make_env(strip_textures=True, slope=bad)
+            raised = False
+        except ValueError:
+            raised = True
+        check(f"slope={bad} raises", raised)
+
+
+def test_siegel_device():
+    """ ``--seatback_angle``/``--base_angle`` must add the device and leave MIMo himself alone.
+
+    06.10.2026 The claims: no device unless asked; with it, MIMo's own body is the one the level
+    env compiles; he starts in contact with the device, at rest and at rho = 0; and rho is a roll
+    about his own long axis, so that a complete roll reads 1 at any incline -- against the
+    world's vertical it would read 0.93 at 40/30 and never count as a success.
+    """
+    print("\ntest_siegel_device")
+    import mujoco
+    from mimoEnv import siegel_device
+
+    level = make_env(strip_textures=True)
+    level_arrays = snapshot(level.model)
+    level_ngeom = level.model.ngeom
+    check("no device unless asked for", not siegel_device.device_geom_ids(level.model))
+    level.close()
+    del level
+    gc.collect()
+
+    env = make_env(strip_textures=True, seatback_angle=28.0, base_angle=15.0)
+    device_ids = siegel_device.device_geom_ids(env.model)
+    check("the device adds two panels and six rims", len(device_ids) == 8,
+          f"{len(device_ids)} colliding geoms, {env.model.ngeom - level_ngeom} in total")
+    mimo = [i for i in range(env.model.ngeom) if env.model.geom_bodyid[i] != 0
+            and env.model.body(env.model.geom_bodyid[i]).name not in
+            ('siegel_device', 'siegel_seatback', 'siegel_base')]
+    # The device's three bodies are appended after MIMo's, hence the slice on 'body_mass'.
+    worst = max(float(np.max(np.abs(
+                    level_arrays[f] - np.asarray(getattr(env.model, f))[:len(level_arrays[f])])))
+                for f in ("body_mass", "jnt_range", "actuator_gear", "dof_damping",
+                          "jnt_stiffness"))
+    check("MIMo's own body is unchanged", worst == 0.0 and len(mimo) == level_ngeom - 1,
+          f"worst {worst:.3e}, {len(mimo)} MIMo geoms")
+
+    for seatback, base in ((0.0, 0.0), (28.0, 15.0), (40.0, 30.0)):
+        env.seatback_angle, env.base_angle = seatback, base
+        env.set_embodiment(9.0, 9.0)
+        env.reset(seed=0)
+        label = f"{seatback:g}/{base:g}"
+        touching = any((c.geom1 in device_ids) != (c.geom2 in device_ids)
+                       for c in env.data.contact[:env.data.ncon])
+        rho = float(env.get_achieved_goal_cos_mean()[0])
+        speed = float(np.linalg.norm(env.data.qvel[:3]))
+        check(f"{label}: MIMo starts on the device, at rho 0 and nearly at rest",
+              touching and rho < 0.01 and speed < 0.1,
+              f"rho {rho:.4f}, root speed {speed:.3f} m/s")
+        for _ in range(100):
+            _, _, _, _, info = env.step(env.actuation_model.neutral_action())
+        check(f"{label}: a limp MIMo stays supine", float(info['episode_rho_max']) < 0.02,
+              f"rho_max {float(info['episode_rho_max']):.4f} over 100 steps")
+
+        # The ideal roll: 180 deg about the root's own long axis (local z), kinematics only.
+        env.reset(seed=0)
+        turn, turned = np.zeros(4), np.zeros(4)
+        mujoco.mju_axisAngle2Quat(turn, np.array([0.0, 0.0, 1.0]), np.pi)
+        mujoco.mju_mulQuat(turned, env.data.qpos[3:7].copy(), turn)
+        env.data.qpos[3:7] = turned
+        mujoco.mj_forward(env.model, env.data)
+        rho = float(env.get_achieved_goal_cos_mean()[0])
+        world = float(np.mean([(1.0 - env.data.body(b).xmat.reshape(3, 3)[2, 0]) / 2.0
+                               for b in ('hip', 'chest')]))
+        check(f"{label}: a complete roll reads rho 1", rho > 0.99,
+              f"rho {rho:.3f}; against the world's vertical it would be {world:.3f}")
+    env.close()
+
+    for bad in (dict(starting_position='prone'), dict(isr=True), dict(goal_function='gravity')):
+        try:
+            make_env(strip_textures=True, seatback_angle=10.0, **bad)
+            raised = False
+        except ValueError:
+            raised = True
+        check(f"the device with {bad} raises", raised)
+
+
 def test_writes_no_files():
     """ The cluster regression, at the level the cluster actually runs.
 
@@ -504,7 +647,7 @@ SECTIONS = [
     'test_construction_matches_stored_scenes', 'test_set_embodiment_matches_stored_scenes',
     'test_fractional_ages', 'test_missing_limb_cut', 'test_missing_limb_ghost',
     'test_age_curriculum_ladder', 'test_age_curriculum_variance', 'test_strip_textures',
-    'test_writes_no_files',
+    'test_slope', 'test_siegel_device', 'test_writes_no_files',
 ]
 
 

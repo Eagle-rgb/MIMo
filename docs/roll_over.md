@@ -1409,6 +1409,8 @@ purpose. "yaml" marks the flags that round-trip through `data.yml` (§7).
 | `--ghost_obs` | choice `rest\|zero`, default `rest` | ✓ | ghost mode only |
 | `--ghost_reference_samples` | int, `20` | ✓ | ghost mode only |
 | `--floor_softness`, `--floor_friction`, `--floor_solimp_width` | float, `None` | ✓ | §2.9; `None` = the floor the scenes compile |
+| `--slope` | float, `0` | ✓ | incline of the floor in degrees, −90…90; positive rises towards MIMo's left. Implemented as a tilt of gravity, so ρ is measured against the floor normal |
+| `--seatback_angle`, `--base_angle` | float, `None` | ✓ | the two-panel device of Siegel et al. (2024), `mimoEnv/siegel_device.py`; `None`/`None` = no device. Supine and `cos` only; ρ becomes the roll about the body's own long axis |
 | `--freeze_arm`, `--freeze_leg` | flag | ✓ | substitutes `SpringDamperModel_Stationary_Limbs` (see §8) |
 | `--isr` | flag | ✓ | Initial State Randomization, off at 75 % of training |
 | `--mgc` | choice `growth\|inverse\|stochastic\|none`, default `none` | ✓ | morphological growth curriculum (§2.7) |

@@ -16,9 +16,14 @@
 # Both are verified to be the same body: remaining mass 7.9469 kg either way for left_leg,
 # and the centre of mass of the remaining bodies agrees to |diff| = 0.0e+00.
 #
-#   ./run_missing_limb.sh                        # left_leg, 3 seeds, cut, from scratch
-#   ./run_missing_limb.sh left_arm 3 cut         # train without the arm
-#   ./run_missing_limb.sh left_leg 3 ghost       # fine-tune the intact policy onto a ghost leg
+#   ./run_missing_limb.sh                             # left_leg, 3 seeds, cut, from scratch
+#   ./run_missing_limb.sh left_arm 3 cut              # train without the arm
+#   ./run_missing_limb.sh right_side 3 cut            # without the whole right side
+#   ./run_missing_limb.sh left_arm+right_leg 3 cut    # any combination of the four limbs
+#   ./run_missing_limb.sh left_leg 3 ghost            # fine-tune the intact policy onto a ghost leg
+#
+# The limb argument is anything '--missing_limb' takes: one of left_arm, right_arm, left_leg,
+# right_leg, the groups left_side and right_side, or several joined with '+'.
 #
 # Needs `conda activate mimo` first. ~28 min per cut run (measured 593 fps), ~9 min per
 # ghost fine-tuning run.
@@ -35,16 +40,16 @@ BASELINE=models/roll_over/26-08-12/supine/26-08-12_supine_tst_ctr_cost_logger_ru
 # osmesa, not egl -- egl fails in this conda env.
 export MUJOCO_GL=osmesa
 
-# The cut scenes have to exist before anything starts.
-python mimoEnv/assets/roll_over/generate_amputated_scenes.py --check || {
-  echo "Generating the amputated scenes first."
-  python mimoEnv/assets/roll_over/generate_amputated_scenes.py
-}
+# 08.09.2026 No scene generation any more: 'cut' deletes the body subtree in an in-memory
+# MjSpec, so any limb combination works without a file existing for it.
+
+# '+' is legal in a path but makes the eval glob below awkward to read, so the run name uses '_'.
+TAG=${LIMB//+/_}
 
 # One MIMo env costs ~3.6 GB RSS. Only one fits on 16 GB, hence the sequential loop rather
 # than backgrounding -- same reasoning as run_her_sparse.sh.
 for i in $(seq 0 $((RUNS - 1))); do
-  NAME="missing_${LIMB}_${MODE}_run_${i}"
+  NAME="missing_${TAG}_${MODE}_run_${i}"
   echo "=== $(date +%F\ %H:%M) START $NAME ==="
 
   COMMON=(
@@ -76,4 +81,4 @@ done
 
 echo
 echo "Evaluate (never --test, always the protocol):"
-echo "  python mimoEnv/eval_rollover.py --group='models/roll_over/*/supine/*missing_${LIMB}_${MODE}_run_*' --episodes=50 --json=missing_${LIMB}_${MODE}.json"
+echo "  python mimoEnv/eval_rollover.py --group='models/roll_over/*/supine/*missing_${TAG}_${MODE}_run_*' --episodes=50 --json=missing_${TAG}_${MODE}.json"

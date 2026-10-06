@@ -1225,6 +1225,12 @@ def main():
         parser.error("--model is required (or use --selfcheck / --physics_check)")
 
     config = load_run_config(args.model)
+    # 06.10.2026 In the Siegel device MIMo lies on the device's panels, not on the 'floor' geom
+    # this script records contacts with, so every force would read zero.
+    if config.get('seatback_angle') is not None or config.get('base_angle') is not None:
+        raise SystemExit("This run was trained in the Siegel device. eval_ground_contact.py "
+                         "records contacts with the 'floor' geom only and would report zero "
+                         "force for a MIMo lying on the device.")
     starting_position = args.starting_position or starting_position_from_path(args.model)
     episode_steps = config.get("episode_steps") or DEFAULT_EPISODE_STEPS
     kwargs = env_kwargs(config, starting_position, FULL_ROLL_GOAL)

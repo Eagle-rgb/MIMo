@@ -29,6 +29,7 @@ import mujoco
 import numpy as np
 import os
 from mimoEnv.utils import get_minimal_z_coordinate
+from mimoEnv import siegel_device
 from gymnasium import spaces
 
 AGES = [1, 3, 6, 9]
@@ -537,6 +538,21 @@ class MIMoRollOverEnv(MIMoEnv):
                  # ('solimp[2]'). This is the difference between a linear spring and foam; 0.03
                  # gives a 13.5 mm mat-like indentation. Baseline is 0.001.
                  floor_solimp_width=None,
+                 # 04.10.2026 Incline of the floor in degrees, in [-90, 90]; 0 is the level floor
+                 # every stored run trained on. The tilt is about MIMo's long axis, so the slope
+                 # runs across the direction he rolls in: positive rises towards his LEFT (world
+                 # +y, in both starting postures), i.e. a roll to the left is uphill and a roll
+                 # to the right downhill; negative is the mirror image. Constant for the whole
+                 # run. See '_apply_slope' for how it is implemented and what it does to rho.
+                 slope=0.0,
+                 # 06.10.2026 The inclined device of Siegel et al. (2024): two padded panels
+                 # hinged under the pelvis, the seatback under trunk and head and the base under
+                 # the legs, each raised by its own angle in degrees (see 'mimoEnv/siegel_device
+                 # .py'). Both None is no device, i.e. the floor every stored run trained on.
+                 # Giving one makes the other 0, and 0/0 is a real condition -- the flat device
+                 # with its sidewalls, which is not the floor. Supine only.
+                 seatback_angle=None,
+                 base_angle=None,
                  # The pooling function for the cos goal.
                  cos_goal_pool='mean',
                  # 05.09.2026 Range of the muscle model's action space. 'symmetric' commands each
@@ -573,6 +589,33 @@ class MIMoRollOverEnv(MIMoEnv):
                             ("floor_solimp_width", floor_solimp_width)):
             if value is not None and value <= 0.0:
                 raise ValueError(f"'{name}' must be positive, got {value}.")
+
+        if slope is None:
+            slope = 0.0
+        if not -90.0 <= slope <= 90.0:
+            raise ValueError(f"'slope' must lie in [-90, 90] degrees, got {slope}.")
+
+        # 06.10.2026 The device. Everything it does not support raises, because each of them
+        # would train without an error on something other than what was asked for.
+        self.device = seatback_angle is not None or base_angle is not None
+        if self.device:
+            seatback_angle = 0.0 if seatback_angle is None else float(seatback_angle)
+            base_angle = 0.0 if base_angle is None else float(base_angle)
+            if starting_position != 'supine':
+                # The prone reset pose is not a rolled-over supine one: it swaps head and feet
+                # ('get_starting_quat'), so the legs would lie on the seatback. Siegel measured
+                # supine-to-prone only.
+                raise ValueError("The device ('seatback_angle'/'base_angle') supports "
+                                 f"starting_position='supine' only, got '{starting_position}'.")
+            if isr:
+                raise ValueError("The device ('seatback_angle'/'base_angle') cannot be combined "
+                                 "with isr: an imposed roll angle has no resting pose in a V.")
+            if goal_function != 'cos':
+                # Its reference vectors are recorded from prone resets, which do not exist here.
+                raise ValueError("The device ('seatback_angle'/'base_angle') supports "
+                                 f"goal_function='cos' only, got '{goal_function}'.")
+        self.seatback_angle = seatback_angle
+        self.base_angle = base_angle
 
         if gravity_goal_eps <= 0.0:
             raise ValueError(f"'gravity_goal_eps' must be positive, got {gravity_goal_eps}.")
@@ -669,6 +712,7 @@ class MIMoRollOverEnv(MIMoEnv):
         self.floor_softness=floor_softness
         self.floor_friction=floor_friction
         self.floor_solimp_width=floor_solimp_width
+        self.slope=float(slope)
 
         # 'gravity' goal function: the reference posture vectors recorded at the end of the
         # constructor, and a flag saying whether they exist yet -- 'sample_goal' runs before they
@@ -763,15 +807,32 @@ class MIMoRollOverEnv(MIMoEnv):
             # started instead of distance to the target.
             self.goal = self.sample_goal()
 
+        # 16.09.2026 The quaternion the 'top' camera compiles with, i.e. the one that frames a
+        # prone MIMo. Cached before the first patch below so that an alternating run can put it
+        # back when the posture flips to prone; under a fixed posture this is set once and the
+        # method behaves exactly as it did before.
+        self._top_cam_quat_default = None
         self.fix_top_camera_rotation_supine()
 
     def fix_top_camera_rotation_supine(self):
-        """ For 'supine' starting position, rotate 'top' camera 180°, because else MIMo's head is at the bottom of the screen. """
+        """ For 'supine' starting position, rotate 'top' camera 180°, because else MIMo's head is at the bottom of the screen.
+
+        16.09.2026 Also restores the compiled orientation for 'prone'. That is a no-op for a run
+        with a fixed posture -- the value put back is the one the model already carries -- but it
+        is what lets 'reset_model' call this on every alternating episode and get a correctly
+        framed camera in both directions. Without it the camera kept whichever rotation the last
+        supine episode left behind.
+        """
+        cam_top_id = self.model.camera('top').id
+        if self._top_cam_quat_default is None:
+            self._top_cam_quat_default = self.model.cam_quat[cam_top_id].copy()
+
         if self.starting_position == 'supine':
-            cam_top_id = self.model.camera('top').id
             quat = np.zeros(4)
             mujoco.mju_euler2Quat(quat, [0.0, 0.0, 0.0], 'xyz')
             self.model.cam_quat[cam_top_id] = quat
+        else:
+            self.model.cam_quat[cam_top_id] = self._top_cam_quat_default
 
     def _build_model_spec(self):
         """ Grow :data:`BASE_SCENE` to this run's two ages, minus any amputated limb.
@@ -792,6 +853,11 @@ class MIMoRollOverEnv(MIMoEnv):
         """
         spec = grow_spec(self.model_path, self.age_morph, self.age_physio,
                          remove=limb_bodies(self.missing_limb, self.missing_limb_mode))
+        if self.device:
+            # 06.10.2026 Into the spec rather than onto the compiled model: geoms cannot be
+            # added after compilation. The device does not grow with MIMo -- Siegel's was one
+            # device for all infants.
+            siegel_device.add_siegel_device(spec, self.seatback_angle, self.base_angle)
         return self._finish_model_spec(spec)
 
     def initialize(self):
@@ -810,6 +876,7 @@ class MIMoRollOverEnv(MIMoEnv):
         # gravity goal runs actual resets, and those should already see the floor the episodes
         # will run on.
         self._apply_floor_properties()
+        self._apply_slope()
 
         if self.goal_function == 'gravity':
             self._vestibular_site_id = self.model.site('vestibular').id
@@ -1113,6 +1180,45 @@ class MIMoRollOverEnv(MIMoEnv):
         obs[mask] = 0.0 if reference is None else reference
         return obs
 
+    def _apply_slope(self):
+        """ Incline the floor by 'self.slope' degrees ('--slope').
+
+        04.10.2026 Implemented by tilting **gravity**, not the floor geom: 'opt.gravity' is
+        rotated about the world x axis, which is MIMo's long axis in both starting postures (his
+        head sits at x = -0.276 supine and +0.274 prone, and a roll moves him along y). That is
+        the same physics as an inclined plane -- it *is* the inclined plane, written in the
+        floor's own frame -- and it leaves everything that is defined against the floor valid
+        without touching it:
+
+        * 'get_minimal_z_coordinate' and 'put_in_starting_position' still lay MIMo on z = 0;
+        * rho ('get_dot_local_x_to_global_z') is the body's x axis against the floor **normal**,
+          so 0 is still "back on the floor" and 1 "belly on the floor", at any incline. Measured
+          against true vertical instead, a MIMo lying flat on a 30 deg slope would read 0.07.
+        * the accelerometer measures specific force, so MIMo senses the incline exactly as he
+          would on a real one; the 'gravity' goal records its reference vectors on the slope.
+
+        Tilting the plane geom instead would have needed all three re-derived, and the age scenes
+        share one floor. Like '_apply_floor_properties' this is a patch on the compiled model,
+        re-applied from 'initialize' after every embodiment swap.
+
+        Sign: positive rises towards world +y, which is MIMo's left in both postures. The
+        downhill pull along the floor is 'g * sin(slope)' towards -y.
+
+        What it does not do: the rendered floor stays level, so a video shows MIMo sliding or
+        rolling sideways on a flat-looking floor. And at steep angles this stops being a rolling
+        task -- with the default friction of 1.0 a rigid body slides above 45 deg, and at +-90
+        the floor is a wall with no normal load at all.
+
+        A slope of 0 returns before touching the model, so level runs stay bit-identical.
+        """
+        if self.slope == 0.0:
+            return
+        # The magnitude is read back off the model rather than hardcoded, which also makes a
+        # second pass over the same model a no-op: the rotation preserves the norm.
+        magnitude = np.linalg.norm(self.model.opt.gravity)
+        angle = np.deg2rad(self.slope)
+        self.model.opt.gravity[:] = magnitude * np.array([0.0, -np.sin(angle), -np.cos(angle)])
+
     def _apply_floor_properties(self):
         """ Make the floor compliant, or change its friction ('--floor_softness' and friends).
 
@@ -1229,6 +1335,16 @@ class MIMoRollOverEnv(MIMoEnv):
         rng_state = self.np_random.bit_generator.state
         saved_isr = self.isr
         saved_position = self.starting_position
+        # 16.09.2026 The alternating flip has to be OFF while recording. 'reset_model' starts by
+        # swapping 'starting_position' to the opposite posture, so with '--roll_over_starting_
+        # position=alternating' the loop below set 'prone', the very next reset made it 'supine',
+        # and the 'gravity_reference_samples' samples then alternated +-1. Both references came
+        # out as their mean, i.e. (0, 0) -- identical, so 'desired_goal' was the side-lying
+        # midpoint in every episode and in both directions, and the two rolls became
+        # indistinguishable. Silent: nothing raises, and the printout below looks plausible
+        # unless you read the standard deviations (measured 0.999 against 0.000 when correct).
+        saved_alternating = self.alternating_starting_position
+        self.alternating_starting_position = False
         self.isr = False
 
         try:
@@ -1253,6 +1369,7 @@ class MIMoRollOverEnv(MIMoEnv):
                     print(f"    {label:<22} {value:+.3f}  (sd {sd:.3f})")
         finally:
             self.isr = saved_isr
+            self.alternating_starting_position = saved_alternating
             self.starting_position = saved_position
             self.np_random.bit_generator.state = rng_state
             self.reference_goals_created = True
@@ -1453,10 +1570,19 @@ class MIMoRollOverEnv(MIMoEnv):
         # dominated by the floor plane's render grid spacing, which placed MIMo at a constant
         # z = 0.101 and dropped him 1.3-4.8 cm at every reset, age- and posture-dependent. See
         # 'get_minimal_z_coordinate'.
-        self.data.qpos = qpos
-        mujoco.mj_forward(self.model, self.data)
-        min_z = get_minimal_z_coordinate(self.model, self.data)
-        self.data.qpos[2] += FLOOR_CLEARANCE - min_z
+        if self.device:
+            # 06.10.2026 In the device there is no z = 0 to lie on. Pitch the trunk onto the
+            # seatback, flex the hips so the legs follow the base, and lower him until he
+            # touches -- see 'siegel_device'. The joint noise above is kept; the flexion is
+            # added to it.
+            siegel_device.pitch_and_flex(self.model, qpos, self.seatback_angle, self.base_angle)
+            self.data.qpos = qpos
+            siegel_device.lower_onto_device(self.model, self.data, clearance=FLOOR_CLEARANCE)
+        else:
+            self.data.qpos = qpos
+            mujoco.mj_forward(self.model, self.data)
+            min_z = get_minimal_z_coordinate(self.model, self.data)
+            self.data.qpos[2] += FLOOR_CLEARANCE - min_z
 
         # Set initial velocities to zero.
         qvel = np.zeros(self.data.qvel.shape)
@@ -1491,6 +1617,10 @@ class MIMoRollOverEnv(MIMoEnv):
                 self.starting_position='supine'
             else:
                 self.starting_position='prone'
+            # The 'top' camera is framed per posture and is otherwise only set at construction,
+            # where an alternating run is still nominally 'prone'. Re-apply it for the posture
+            # this episode actually starts in. Rendering only -- no effect on the physics.
+            self.fix_top_camera_rotation_supine()
 
         # Re-sample the goal for the new episode.
         #
@@ -1625,12 +1755,17 @@ class MIMoRollOverEnv(MIMoEnv):
         # always find an angle between -180 and +180 degrees that works here.
         xmat = self.data.body(body_name).xmat.reshape(3, 3)
         dot_product = xmat[2,0]  # dot product from local x axis to global z axis.
+        sine = np.sqrt(xmat[2, 2] ** 2 + xmat[2, 1] ** 2)
+        if self.device:
+            # 06.10.2026 The roll about the body's own long axis instead -- see '_roll_cosine'.
+            dot_product = self._roll_cosine(body_name)
+            sine = np.sqrt(max(0.0, 1.0 - dot_product ** 2))
         if self.starting_position == 'supine':
             dot_product *= -1
 
         # Calculating rotation in radiants by only rotating around y axis. (That is the
         # normalization term as second argument to 'arctan2')
-        angle_rad = np.arctan2(np.sqrt(xmat[2, 2] ** 2 + xmat[2, 1] ** 2), dot_product)
+        angle_rad = np.arctan2(sine, dot_product)
         angle_deg = angle_rad * 180.0 / np.pi
 
         return angle_deg
@@ -1652,8 +1787,40 @@ class MIMoRollOverEnv(MIMoEnv):
 
         Returns:
             float: The dot product between the body's local x axis and the global z axis.
+
+        06.10.2026 In the device ('seatback_angle'/'base_angle') this returns
+        ':meth:`._roll_cosine`' instead, which is the same number whenever the body's long axis
+        is horizontal. Everything built on this method -- rho, the degrees, 'side_lying' --
+        follows.
         """
+        if self.device:
+            return self._roll_cosine(body_name)
         return self.data.body(body_name).xmat.reshape(3, 3)[2, 0]
+
+    def _roll_cosine(self, body_name):
+        """ Cosine of the body's roll about its own long axis: +1 belly up, -1 belly down.
+
+        06.10.2026 Why the device needs it. 'R[2, 0]' is the belly direction against the world's
+        vertical, which measures a roll only while the body lies level. On a seatback the trunk
+        is pitched, so a supine MIMo reads less than 1 and a perfectly prone one more than -1.
+        Measured at Siegel's 28/15 configuration: R[2, 0] is 0.91 for the hip and 0.86 for the
+        chest at reset, and turning the root exactly 180 deg about its own long axis yields a
+        world-vertical rho of about 0.97 -- against a success threshold of 0.95. At 40/30 the
+        same turn yields **0.926**: a complete roll would not count, without an error. With
+        this method it reads 1.000 at every configuration.
+
+        The world's vertical in the body frame is the row (R20, R21, R22); the long axis is local
+        z (it points at the head). Dropping the R22 component and normalising what is left
+        removes the pitch and keeps the roll: R20 / hypot(R20, R21). Measuring against the
+        seatback's normal instead would be simpler, but wrong for the pelvis, which lies at the
+        hinge between two panels, and wrong for a MIMo who has slid onto the base.
+
+        The denominator is floored at 0.5, i.e. the correction stops growing once the long axis
+        is more than 60 deg from horizontal. Without the floor a MIMo sitting upright would have
+        an undefined roll that noise could push to +-1.
+        """
+        row = self.data.body(body_name).xmat.reshape(3, 3)[2]
+        return float(np.clip(row[0] / max(np.hypot(row[0], row[1]), 0.5), -1.0, 1.0))
 
     def get_relative_normalized_rotation(self, body_name):
         """ Returns rho_{body_name}, i.e. the relative (supine vs. prone) rotation 
