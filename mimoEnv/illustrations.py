@@ -214,12 +214,16 @@ def test(wrapped_env, save_dir, model=None, render_video=False, render_frames=Fa
         if not reached_45_deg and curr_45_deg_reached:
             reached_45_deg = True
             print("Reached 45 deg! Saving image...")
-            save_image('frame_2')
+
+            if render_frames:
+                save_image('frame_2')
 
         if not reached_side_lying and curr_side_lying_reached:
             reached_side_lying = True
             print("Reached side lying! Saving image...")
-            save_image('frame_3')
+
+            if render_frames:
+                save_image('frame_3')
 
         if done or trunc:
             time.sleep(1)

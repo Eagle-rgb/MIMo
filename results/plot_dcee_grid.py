@@ -99,10 +99,10 @@ def draw_panel(ax, cells, ages, source, cmap, metric, threshold, label_axes, tit
                                        color=cmap(cell_value(rates, metric, threshold))))
     # The embodiment the policy was trained on: every other cell is read against it, and on a
     # single panel nothing else says where on the grid the run came from.
-    if source in [(p, m) for p in ages for m in ages]:
-        i, j = ages.index(source[0]), ages.index(source[1])
-        ax.add_patch(plt.Rectangle((j, i), CELL, CELL, facecolor='none',
-                                   edgecolor='#333333', linewidth=1.2, zorder=3))
+    #if source in [(p, m) for p in ages for m in ages]:
+    #    i, j = ages.index(source[0]), ages.index(source[1])
+    #    ax.add_patch(plt.Rectangle((j, i), CELL, CELL, facecolor='none',
+    #                               edgecolor='#333333', linewidth=1.2, zorder=3))
 
     ax.set_xlim(-0.2, len(ages) + 0.2)
     ax.set_ylim(-0.2, len(ages) + 0.2)

@@ -28,6 +28,10 @@ because it defines the task. Four flags override it: '--floor_softness',
 '--rigid_floor' is the inverse for scoring a compliant-floor run on the default surface.
 '--floor_softness_sweep' does a whole range in one invocation, rebuilding the env per row.
 
+'--seatback_angle'/'--base_angle' put the policy into the inclined device of Siegel et al. (2024)
+('mimoEnv/siegel_device.py'), and '--siegel_sweep' runs the paper's four configurations in one
+invocation, for one --model or a whole --group.
+
 Group mode adds two rules on top:
 
 * **The last checkpoint, not the best one.** 'model_best.zip' is the EvalCallback's pick under
@@ -903,6 +907,101 @@ def run_floor_softness_sweep(args, config, start, goal, episode_steps, algorithm
     write_json(args.json, payload)
 
 
+def _siegel_args(args, seatback, base):
+    """A copy of the CLI namespace that forces one device configuration through resolve_run."""
+    row_args = argparse.Namespace(**vars(args))
+    row_args.seatback_angle, row_args.base_angle = seatback, base
+    return row_args
+
+
+def run_siegel_sweep(args, run_dirs, episodes):
+    """Score policies zero-shot in the four device configurations of Siegel et al. (2024).
+
+    06.10.2026 Seatback 0, 10, 18 and 28 deg, with the base at 15 deg except under the flat
+    seatback, where it is 0 -- 'siegel_device.SIEGEL_CONFIGURATIONS', the paper's Fig. 5B-E. The
+    policies are whatever --model or --group names; nothing is retrained, so for a floor-trained
+    run every row is a transfer into a mechanical environment it never saw. Note that 0/0 is not
+    the floor: it is the flat device, sidewalls included, 0.30 m up.
+
+    Works on one --model ('run_dirs' is None) and on a --group. The device is compiled into the
+    model, so every configuration needs its own env; '_EnvCache' closes the previous one before
+    building the next, and within a configuration all seeds of a group share one. The episode
+    seeds are the same in every row, so the comparison across configurations is paired.
+    """
+    from mimoEnv.siegel_device import SIEGEL_CONFIGURATIONS
+
+    cells = []
+    cache = _EnvCache()
+    total = len(SIEGEL_CONFIGURATIONS) * (len(run_dirs) if run_dirs else 1)
+    done = 0
+    try:
+        for seatback, base in SIEGEL_CONFIGURATIONS:
+            row_args = _siegel_args(args, seatback, base)
+            if run_dirs:
+                rows, skipped = evaluate_group(run_dirs, row_args, episodes, cache=cache,
+                                               progress=(done, total))
+            else:
+                config, start, goal, episode_steps = resolve_run(args.model, row_args)
+                algorithm = config.get('algorithm', 'SAC')
+                done_label = f"[{done + 1}/{total}] seatback {seatback:g} / base {base:g}"
+                print(done_label, flush=True)
+                env = cache.get(config, start, goal)
+                model = load_policy(args.model, algorithm, env)
+                results = evaluate(model, env, episodes, policy_goal=args.policy_goal,
+                                   episode_steps=episode_steps)
+                row = _row(results, policy_goal=args.policy_goal)
+                row.update(run=args.label or os.path.basename(os.path.dirname(args.model)),
+                           model=os.path.abspath(args.model), algorithm=algorithm,
+                           starting_position=start, goal=goal, episode_steps=episode_steps,
+                           episodes=episodes,
+                           successful=bool(row['rolled'] > args.success_threshold))
+                rows, skipped = [row], []
+            done += len(rows) + len(skipped)
+            cells.append({
+                'seatback_angle': seatback, 'base_angle': base,
+                'summary': _summarise(rows, args.success_threshold) if rows else None,
+                'rows': rows,
+                'skipped': [{'run': n, 'reason': r} for n, r in skipped],
+            })
+    finally:
+        cache.close()
+
+    if not any(cell['summary'] for cell in cells):
+        raise SystemExit("No run had an evaluable checkpoint.")
+
+    print()
+    print(f"Siegel device sweep : zero-shot, {episodes} episodes per run and configuration "
+          f"(deterministic, ISR off)")
+    print(f"policies            : {args.group or args.model}")
+    print()
+    print(f"{'seatback':>8}  {'base':>5}  {'successful':>11}  {'roll':>12}  {'side':>6}  "
+          f"{'rho mean':>8}  {'steps':>7}  {'L/R':>7}")
+    for cell in cells:
+        summary = cell['summary']
+        if summary is None:
+            print(f"{cell['seatback_angle']:>8g}  {cell['base_angle']:>5g}  no evaluable run")
+            continue
+        rows = cell['rows']
+        side = float(np.mean([row['side'] for row in rows]))
+        steps = f"{summary['steps_mean']:.1f}" if summary['steps_mean'] is not None else "-"
+        left = sum(row['left'] or 0 for row in rows if row.get('laterality') is not None)
+        right = sum(row['right'] or 0 for row in rows if row.get('laterality') is not None)
+        print(f"{cell['seatback_angle']:>8g}  {cell['base_angle']:>5g}  "
+              f"{summary['successful']:>4}/{summary['runs']:<3} runs  "
+              f"{summary['roll_rate_mean'] * 100:>5.1f} +-{summary['roll_rate_std'] * 100:>4.1f}  "
+              f"{side * 100:>5.0f}%  {summary['rho_mean']:>8.3f}  {steps:>7}  "
+              f"{left}/{right}".rstrip())
+    print()
+    print(f"  successful = runs above {args.success_threshold * 100:.0f} % full rolls; roll = "
+          "mean +- std of the roll rate over runs; side = episodes reaching side lying")
+
+    write_json(args.json, {
+        'group': args.group, 'model': os.path.abspath(args.model) if args.model else None,
+        'checkpoint': args.checkpoint, 'episodes': episodes, 'sweep': 'siegel_device',
+        'success_threshold': args.success_threshold, 'cells': cells,
+    })
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--model', default=None, help="Path to a single model_*.zip.")
@@ -956,6 +1055,11 @@ def main():
                              "the run trained in. Supine only.")
     parser.add_argument('--base_angle', default=None, type=float,
                         help="Like --seatback_angle, for the panel under the legs.")
+    parser.add_argument('--siegel_sweep', action='store_true',
+                        help="Zero-shot sweep over the four device configurations of Siegel et "
+                             "al. (2024): seatback 0, 10, 18 and 28 deg, base 15 deg except 0 "
+                             "under the flat seatback. One row per configuration, for one "
+                             "--model or a whole --group. Supine runs only.")
     parser.add_argument('--floor_softness_sweep', default=None,
                         help="Evaluate one --model across a range of floor softnesses, one row "
                              "each ('0.02:0.12:0.02' or '0.05,0.1,0.2'). The env is rebuilt per "
@@ -1039,6 +1143,25 @@ def main():
 
     if args.slope is not None and not -90.0 <= args.slope <= 90.0:
         parser.error(f"--slope must lie in [-90, 90] degrees, got {args.slope}.")
+
+    if args.siegel_sweep:
+        clashes = [flag for flag, given in (
+            ('--seatback_angle', args.seatback_angle is not None),
+            ('--base_angle', args.base_angle is not None),
+            ('--floor_softness_sweep', args.floor_softness_sweep is not None),
+            ('--policy_goal_sweep', args.policy_goal_sweep is not None),
+            ('--embodiment_grid', args.embodiment_grid is not None)) if given]
+        if clashes:
+            parser.error("--siegel_sweep sets the device per row and sweeps one axis; drop "
+                         + ", ".join(clashes) + ".")
+        if args.group:
+            run_dirs = discover_runs(args.group)
+            if not run_dirs:
+                parser.error(f"No run directories matched --group={args.group!r}.")
+            run_siegel_sweep(args, run_dirs, args.episodes or 40)
+        else:
+            run_siegel_sweep(args, None, args.episodes or 50)
+        return
 
     if args.floor_softness_sweep is not None:
         if args.group:

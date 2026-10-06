@@ -27,15 +27,13 @@ for i in $(seq 0 5); do
 		"--save_every=1000000" \
 		"--roll_over_starting_position=supine" \
 		"--algorithm=PPO" \
-		"--use_muscle" \
-		"--pen_metabolic" \
-		"--pen_factor=50" \
+		"--pen_factor=0.02" \
 		"--eval_every=25000" \
 		"--eval_episodes=20" \
 		"--roll_over_model_path_auto" \
 		"--save_model=${MODEL_NAME}_run_${i}" \
-		"--batch_size=256" \
-		"--target_kl=0.1" \
+		"--seatback_angle=10" \
+		"--base_angle=15" \
 		"--pbrs" \
 		"--morph_age=9" \
 		"--physio_age=9" \
