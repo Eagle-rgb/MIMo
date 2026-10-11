@@ -143,6 +143,8 @@ def env_kwargs(config, starting_position, goal):
         # 04.10.2026 Incline of the floor in degrees. Absent from every data.yml written before
         # that date, where 0 is the level floor those runs trained on.
         slope=config.get('slope') or 0.0,
+        # 11.10.2026 Start noise in degrees. Absent before that date, where None is 0.01 rad.
+        init_noise_deg=config.get('init_noise'),
         # 06.10.2026 The Siegel device. Absent before that date, where None is no device.
         seatback_angle=config.get('seatback_angle'),
         base_angle=config.get('base_angle'),
@@ -519,6 +521,7 @@ def resolve_run(model_path, args, ages=None):
                       or args.floor_friction is not None
                       or args.floor_solimp_width is not None
                       or slope_override is not None
+                      or getattr(args, 'init_noise', None) is not None
                       or getattr(args, 'seatback_angle', None) is not None
                       or getattr(args, 'base_angle', None) is not None)
     if (args.missing_limb is not None or args.ghost_obs is not None
@@ -542,6 +545,10 @@ def resolve_run(model_path, args, ages=None):
         config['floor_solimp_width'] = args.floor_solimp_width
     if slope_override is not None:
         config['slope'] = slope_override
+    # 11.10.2026 '--init_noise', same pattern: unset keeps the start noise the run trained
+    # with, a value scores the policy from more (or less) scattered start postures.
+    if getattr(args, 'init_noise', None) is not None:
+        config['init_noise'] = args.init_noise
     # 06.10.2026 The device, same pattern: unset keeps what the run trained in, a value puts
     # the policy into that configuration (a floor-trained run into the device, for instance).
     for key in ('seatback_angle', 'base_angle'):
@@ -787,6 +794,8 @@ def _print_group(rows, skipped, summary, args, episodes):
         print(f"floor               : {floor_label(vars(args))}, forced -- overrides each data.yml")
     elif args.slope is not None:
         print(f"slope               : {args.slope:+g} deg, forced -- overrides each data.yml")
+    if args.init_noise is not None:
+        print(f"start noise         : +-{args.init_noise:g} deg, forced -- overrides each data.yml")
     if args.seatback_angle is not None or args.base_angle is not None:
         print(f"device              : seatback {args.seatback_angle or 0.0:g} deg / base "
               f"{args.base_angle or 0.0:g} deg, forced -- overrides each data.yml")
@@ -1043,6 +1052,11 @@ def main():
                         help="Force the rigid scene default, ignoring the floor settings in "
                              "data.yml. The inverse of --floor_softness: it scores a "
                              "compliant-floor run on the surface every older run used.")
+    parser.add_argument('--init_noise', default=None, type=float,
+                        help="Half-width in degrees of the uniform joint noise at reset, "
+                             "overriding the one in the run's data.yml (0.01 rad = 0.573 deg "
+                             "for every run saved before 11.10.2026). Scores a policy from "
+                             "more scattered start postures; the episode seeds stay the same.")
     parser.add_argument('--slope', default=None, type=float,
                         help="Incline of the floor in degrees, -90 to 90, overriding the one in "
                              "the run's data.yml (0 for every run saved before 04.10.2026). "
@@ -1143,6 +1157,8 @@ def main():
 
     if args.slope is not None and not -90.0 <= args.slope <= 90.0:
         parser.error(f"--slope must lie in [-90, 90] degrees, got {args.slope}.")
+    if args.init_noise is not None and args.init_noise < 0.0:
+        parser.error(f"--init_noise must not be negative, got {args.init_noise}.")
 
     if args.siegel_sweep:
         clashes = [flag for flag, given in (

@@ -7,9 +7,9 @@ if [ $# -ne 2 ]
 fi
 
 USERNAME=$1
-HOSTPREFIXES=("adrastos" "alkmene" "ajax" "anaxo" "achilles" "axylos" "aktor"
-	"admeta" "amata" "agylla" "adamas" "arabia" "adonis" "aither" "apate"
-	"atropos" "aletheia" "acheloos" "anemoi")
+HOSTPREFIXES=(	"adrastos" "alkmene" "ajax" "anaxo" "achilles" "axylos"
+				"aktor" "amata" "agylla" "adamas" "arabia" "adonis"
+				"aither" "apate" "arges" "atropos" "aletheia" "anemoi")
 NUMBER_OF_RUNS=$2
 
 # Date. Used to run gemini_plot script after all runs are finished. Do this before

@@ -236,6 +236,22 @@ passing its checks looks broken in the page -- which is what happened to the leg
 arrows are server-rendered, so they appeared, while the handler that moves the row did not exist in
 the cached script.
 
+**The bar panel has the Figure panel's controls, and shares their code.** Each row carries an
+up/down pair and a colour swatch, exactly like a series in the Figure panel: row order is bar
+order (the sources go out in that order and the script is asked for `--sort=given`), and clicking
+a swatch pins that bar's colour. The order arrows and the colour picker are not written twice --
+the table carries `data-redraw="main"` or `"bars"` and one handler dispatches on it. Two details
+differ from the curve, and both follow from how the chart works: a bar exists only for a *ticked*
+row, so an unticked row shows an empty swatch rather than borrowing a colour from a bar that is
+not drawn; and the pin is keyed on the **bar label**, not on the job, because two payloads sharing
+a label are one bar and cannot have two colours. Width and Height in inches override the column
+preset, as in the Figure panel.
+
+**An untouched bar used to be labelled with its job id.** The panel sent no label at all when the
+text field was empty, and `plot_eval_success.py` then falls back to the payload's file name --
+`group-260911-143616-8de353`. The effective label (the field, else the experiment name the
+placeholder shows) is now always sent, which is also what makes the colour key stable.
+
 **The evaluation bar chart is drawn by `results/plot_eval_success.py`, not reimplemented.** A
 `--group` run keeps its JSON in `.mimolab/evals/`, and the bar panel shells out to that script with
 the stored payloads. It is the script the thesis figures already come from, so a second

@@ -553,6 +553,10 @@ class MIMoRollOverEnv(MIMoEnv):
                  # with its sidewalls, which is not the floor. Supine only.
                  seatback_angle=None,
                  base_angle=None,
+                 # 11.10.2026 Half-width of the uniform joint noise added at every reset, in
+                 # DEGREES. None is the historical +-0.01 rad (0.573 deg) that every stored run
+                 # used, bit-identical. See 'put_in_starting_position'.
+                 init_noise_deg=None,
                  # The pooling function for the cos goal.
                  cos_goal_pool='mean',
                  # 05.09.2026 Range of the muscle model's action space. 'symmetric' commands each
@@ -594,6 +598,9 @@ class MIMoRollOverEnv(MIMoEnv):
             slope = 0.0
         if not -90.0 <= slope <= 90.0:
             raise ValueError(f"'slope' must lie in [-90, 90] degrees, got {slope}.")
+
+        if init_noise_deg is not None and init_noise_deg < 0.0:
+            raise ValueError(f"'init_noise_deg' must not be negative, got {init_noise_deg}.")
 
         # 06.10.2026 The device. Everything it does not support raises, because each of them
         # would train without an error on something other than what was asked for.
@@ -713,6 +720,7 @@ class MIMoRollOverEnv(MIMoEnv):
         self.floor_friction=floor_friction
         self.floor_solimp_width=floor_solimp_width
         self.slope=float(slope)
+        self.init_noise_deg=init_noise_deg
 
         # 'gravity' goal function: the reference posture vectors recorded at the end of the
         # constructor, and a flag saying whether they exist yet -- 'sample_goal' runs before they
@@ -1554,11 +1562,27 @@ class MIMoRollOverEnv(MIMoEnv):
             random = self.deterministic_initial_state_sampling
         else:
             # Set initial positions stochastically.
+            # 11.10.2026 The half-width is '--init_noise' (degrees) when given. The literal
+            # 0.01 rad stays for None rather than a converted 0.573 deg, so that stored runs
+            # draw bit-identical start states. The draw is made even at a width of 0: the env
+            # draws ISR angles and goals from the same generator, so skipping it would shift
+            # which episodes follow (see 'sample_goal').
+            noise = 0.01 if self.init_noise_deg is None else np.deg2rad(self.init_noise_deg)
             random = self.np_random.uniform(
-                low=-0.01, high=0.01, size=len(qpos[7:])
+                low=-noise, high=noise, size=len(qpos[7:])
             )
 
         qpos[7:] = qpos[7:] + random
+
+        # 11.10.2026 With a wide noise a joint can be drawn beyond its limit, and MuJoCo
+        # answers a violated limit with a constraint force that kicks MIMo at step 0. Clip
+        # to the joint ranges -- only when the noise was asked for, so the default path is
+        # untouched.
+        if self.init_noise_deg is not None:
+            limited = (self.model.jnt_limited == 1) & (self.model.jnt_qposadr >= 7)
+            adr = self.model.jnt_qposadr[limited]
+            qpos[adr] = np.clip(qpos[adr], self.model.jnt_range[limited, 0],
+                                self.model.jnt_range[limited, 1])
 
         # Set initial rotation.
         qpos[3:7] = self.get_starting_quat()

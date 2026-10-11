@@ -945,6 +945,67 @@ def _dcee_plot():
     return f"{len(grid)} grid(s) stored; restyled from the payload without re-evaluating"
 
 
+@check("the bar chart takes an order, a pinned colour and an exact size")
+def _bar_controls():
+    """The Figure panel's controls, on the bars: row order, per-bar colour, explicit size.
+
+    Order and colour go through the label, which is what plot_eval_success.py groups by -- two
+    sources sharing a label are one bar and cannot have two colours.
+    """
+    files = evals.group_jsons(limit=3)
+    if len(files) < 2:
+        return "skipped -- fewer than two group evaluations stored"
+    sources = [(e["label"].split(" (")[0], e["run_path"]) for e in files[:3]]
+
+    def render(**kwargs):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = os.path.join(tmp, "bars.pdf")
+            data = plots.eval_bars(kwargs.pop("sources", sources), out,
+                                   python=sys.executable, cwd=SETTINGS.mimo_root, **kwargs)
+        box = [float(v) for v in
+               re.search(rb"/MediaBox\s*\[([\d.\s-]+)\]", data).group(1).split()]
+        return data, (box[2] / 72, box[3] / 72)
+
+    base, size = render()
+    reordered, _ = render(sources=list(reversed(sources)))
+    assert reordered != base, "the row order did not reach the figure (--sort=given?)"
+    pinned, _ = render(colors={sources[0][0]: "#808080"})
+    assert pinned != base, "a pinned bar colour changed nothing"
+    try:
+        render(colors={sources[0][0]: "'; rm -rf"})
+    except RuntimeError:
+        pass
+    else:
+        raise AssertionError("a colour matplotlib does not know was accepted")
+
+    # Exactly the requested page, like the curve and the DCEE grid: plot_eval_success.py used to
+    # crop with bbox_inches='tight', which returned 5.72 in for a 5.6 in request.
+    _wide, wide_size = render(width=5.6, height=2.4)
+    assert abs(wide_size[0] - 5.6) < 0.05 and abs(wide_size[1] - 2.4) < 0.05, \
+        f"explicit size came out {wide_size[0]:.2f} x {wide_size[1]:.2f} in"
+    assert abs(size[0] - plots.THESIS_SIZES["single"][0]) < 0.05, \
+        f"the column preset came out {size[0]:.2f} in"
+
+    # static/app.js paints the swatch beside each row from its own copy of the palette; if the two
+    # drift, the swatch is not the colour the bar comes out as.
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    from results.plot_eval_success import bar_colors
+    import matplotlib.colors as mcolors
+    js = (Path(__file__).resolve().parent / "static" / "app.js").read_text()
+    ages = dict(re.findall(r"'(\d)': '(#[0-9a-f]{6})'", js.split("BAR_AGE_COLORS =", 1)[1]
+                           .split("};", 1)[0]))
+    assert ages == {a: mcolors.to_hex(c) for a, c in
+                    {k: v for k, v in zip("1369", bar_colors(["1", "3", "6", "9"]))}.items()}, \
+        "app.js does not have the script's age colours"
+    ramp = re.findall(r"#[0-9a-f]{6}", js.split("BAR_RAMP =", 1)[1].split("];", 1)[0])
+    for n in (2, 3, 5):
+        want = [mcolors.to_hex(c) for c in bar_colors([f"x{i}" for i in range(n)])]
+        got = [ramp[0] if i == 0 else ramp[1] if i == n - 1 else None for i in range(n)]
+        assert want[0] == got[0] and want[-1] == got[-1], \
+            f"the ramp ends disagree at n={n}: {want} vs {ramp}"
+    return f"order, colour and a {wide_size[0]:.1f} x {wide_size[1]:.1f} in page all honoured"
+
+
 @check("the bar panel offers only evaluations of the selected runs")
 def _bar_scope():
     everything = evals.group_jsons()

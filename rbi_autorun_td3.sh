@@ -7,9 +7,9 @@ if [ $# -ne 3 ]
 fi
 
 USERNAME=$1
-HOSTPREFIXES=("adrastos" "alkmene" "ajax" "anaxo" "achilles" "axylos" "aktor"
-	"admeta" "amata" "agylla" "adamas" "arabia" "adonis" "aither" "apate"
-	"atropos" "aletheia" "acheloos" "ares")
+HOSTPREFIXES=(	"adrastos" "alkmene" "ajax" "anaxo" "achilles" "axylos"
+				"aktor" "amata" "agylla" "adamas" "arabia" "adonis"
+				"aither" "apate" "arges" "atropos" "aletheia" "anemoi")
 NUMBER_OF_RUNS=$3
 MODEL_NAME=$2
 

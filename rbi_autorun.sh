@@ -7,9 +7,9 @@ if [ $# -ne 3 ]
 fi
 
 USERNAME=$1
-HOSTPREFIXES=("adrastos" "alkmene" "ajax" "anaxo" "achilles" "axylos" "aktor"
-	"admeta" "amata" "agylla" "adamas" "arabia" "adonis" "aither" "apate"
-	"atropos" "aletheia" "acheloos" "ares")
+HOSTPREFIXES=(	"adrastos" "alkmene" "ajax" "anaxo" "achilles" "axylos"
+				"aktor" "amata" "agylla" "adamas" "arabia" "adonis"
+				"aither" "apate" "arges" "atropos" "aletheia" "anemoi")
 NUMBER_OF_RUNS=$3
 MODEL_NAME=$2
 
@@ -18,7 +18,7 @@ MODEL_NAME=$2
 # date.
 today=$(date +%y-%m-%d)
 
-if [ $NUMBER_OF_RUNS -ge ${#HOSTPREFIXES[@]} ]
+if [ $NUMBER_OF_RUNS -g ${#HOSTPREFIXES[@]} ]
 	then
 		echo "Error. Too many runs. Maximum ${#HOSTPREFIXES[@]} runs allowed."
 		return
@@ -34,16 +34,17 @@ for i in $(seq 0 $((NUMBER_OF_RUNS-1))); do
 		"python mimoEnv/illustrations.py" \
 		"--train_for=1000000" \
 		"--save_every=1000000" \
-		"--roll_over_starting_position=supine" \
+		"--roll_over_starting_position=prone" \
 		"--algorithm=PPO" \
-		"--pen_factor=0.02" \
+		"--pen_metabolic" \
+		"--pen_factor=34" \
 		"--eval_every=25000" \
 		"--eval_episodes=20" \
 		"--roll_over_model_path_auto" \
 		"--save_model=${MODEL_NAME}_run_${i}" \
-		"--seatback_angle=18" \
-		"--base_angle=15" \
 		"--pbrs" \
+		"--missing_limb=left_side+right_arm" \
+		"--missing_limb_mode=cut" \
 		"--morph_age=9" \
 		"--physio_age=9" \
 		"--pbrs_w=100" \

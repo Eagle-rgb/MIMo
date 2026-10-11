@@ -430,6 +430,8 @@ tr[data-posture="prone"] td.stripe i { background: var(--prone); }
 }
 .swatch:hover { box-shadow: 0 0 0 2px var(--rule); }
 .swatch[data-pinned="1"] { box-shadow: 0 0 0 1px var(--surface), 0 0 0 2.5px var(--ink-soft); }
+/* A bar is drawn only for a ticked row, so an unticked one has no colour to show yet. */
+.swatch[data-empty="1"] { border-color: var(--rule); }
 
 .labeltable td { position: relative; }
 .colorpop {

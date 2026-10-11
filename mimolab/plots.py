@@ -802,7 +802,7 @@ def dcee_grid(sources, out_path, metric="successful", threshold=0.75, width=None
 
 def eval_bars(sources, out_path, metric="successful", threshold=0.75, xlabel="", ylabel=None,
               annotate=False, column="single", height=3.0, title=None, sort="given",
-              python=None, cwd=None):
+              colors=None, width=None, python=None, cwd=None):
     """Draw the success bar chart by calling results/plot_eval_success.py.
 
     Deliberately a subprocess rather than a reimplementation: that script already produces the
@@ -830,7 +830,9 @@ def eval_bars(sources, out_path, metric="successful", threshold=0.75, xlabel="",
         for row in payload.get("rows", []):
             if row.get("starting_position"):
                 postures.add(row["starting_position"])
-    total_width = (THESIS_SIZES.get(column) or THESIS_SIZES["single"])[0]
+    # An explicit width is the width of the whole figure, like the one in the Figure panel, so it
+    # is divided the same way the column preset is.
+    total_width = width or (THESIS_SIZES.get(column) or THESIS_SIZES["single"])[0]
     panel_width = total_width / max(1, len(postures))
 
     argv = [python or "python", "results/plot_eval_success.py",
@@ -844,6 +846,10 @@ def eval_bars(sources, out_path, metric="successful", threshold=0.75, xlabel="",
         argv.append(f"--title={title}")
     if annotate:
         argv.append("--annotate")
+    # Keyed on the bar label, which is what the script groups by: two sources sharing a label are
+    # one bar. The label travels with the source below, so both sides agree on the key.
+    for label, value in (colors or {}).items():
+        argv.append(f"--color={label}={value}")
     for label, path in sources:
         argv.append("--json")
         argv.append(f"{label}={path}" if label else str(path))

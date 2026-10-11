@@ -67,7 +67,7 @@ from mimoEnv.envs.gaussiannoiseobswrapper import GaussianNoiseObsWrapper
 
 def test(wrapped_env, save_dir, model=None, render_video=False, render_frames=False,
          render_actuations=False, roll_over_starting_position='prone', log_obs=None,
-         render_video_filename="episode_0"):
+         render_video_filename="episode_0", seed=None):
     """ Tests the model for one episode.
 
     Args:
@@ -84,8 +84,9 @@ def test(wrapped_env, save_dir, model=None, render_video=False, render_frames=Fa
             derived rotation measures. ``None`` (the default) means "follow 'render_video'", so a
             rendered video always comes with the numbers behind it -- reading a posture off a video
             is guesswork otherwise.
+        seed (int | None): Seed of the start states ('--init_seed'). ``None`` is unseeded.
     """ 
-    obs, _ = wrapped_env.reset()
+    obs, _ = wrapped_env.reset(seed=seed)
     images = []
     done=False
     trunc=False
@@ -675,6 +676,16 @@ An example is '251206_prone_linear_1e6_test'
                              "rises towards his left, so rolling left is uphill and rolling "
                              "right downhill; negative is the mirror image. rho stays measured "
                              "against the floor, not against true vertical.")
+    # 11.10.2026 Start noise and the seed of the start states.
+    parser.add_argument('--init_noise', default=None, type=float, required=False,
+                        help="Half-width in DEGREES of the uniform noise added to every joint "
+                             "at reset. Unset is the historical +-0.01 rad (0.573 deg). Values "
+                             "are clipped to the joint limits.")
+    parser.add_argument('--init_seed', default=None, type=int, required=False,
+                        help="Seed of the start states: with the same seed the same sequence "
+                             "of start episodes comes up, in training and in --test. Seeds the "
+                             "environment only, not the network initialisation or the action "
+                             "sampling. Unset is unseeded, as before.")
     # 06.10.2026 The inclined device of Siegel et al. (2024). Both unset is no device.
     parser.add_argument('--seatback_angle', default=None, type=float, required=False,
                         help="Put MIMo in the two-panel device of Siegel et al. (2024) and "
@@ -1058,6 +1069,7 @@ An example is '251206_prone_linear_1e6_test'
             floor_friction=args.floor_friction,
             floor_solimp_width=args.floor_solimp_width,
             slope=args.slope,
+            init_noise_deg=args.init_noise,
             seatback_angle=args.seatback_angle,
             base_angle=args.base_angle,
             cos_goal_pool=args.cos_goal_pool,
@@ -1073,7 +1085,7 @@ An example is '251206_prone_linear_1e6_test'
             width=480,
             height=render_height)
         
-    obs, _ = env.reset()
+    obs, _ = env.reset(seed=args.init_seed)
 
     # Wrap in noisy observation wrapper (optional).
     # Target keys are all keys except for 'achieved_goal' and 'desired_goal', because we do not want to add noise to those.
@@ -1233,6 +1245,10 @@ An example is '251206_prone_linear_1e6_test'
         # 04.10.2026 Likewise: a run trained on an incline is not the level-floor experiment.
         # Absent from every data.yml written before that date, where it falls back to 0.
         'slope': args.slope,
+        # 11.10.2026 Likewise: the start-state distribution is part of the task. Absent from
+        # every data.yml written before that date, where None is the historical 0.01 rad.
+        # '--init_seed' is deliberately not stored -- it describes the invocation.
+        'init_noise': args.init_noise,
         # 06.10.2026 The device. Absent from every data.yml written before that date, where
         # None is no device.
         'seatback_angle': args.seatback_angle,
@@ -1342,6 +1358,7 @@ An example is '251206_prone_linear_1e6_test'
             floor_friction=args.floor_friction,
             floor_solimp_width=args.floor_solimp_width,
             slope=args.slope,
+            init_noise_deg=args.init_noise,
             seatback_angle=args.seatback_angle,
             base_angle=args.base_angle,
             vision_params=DEFAULT_VISION_PARAMS if args.vision else None,
@@ -1357,6 +1374,11 @@ An example is '251206_prone_linear_1e6_test'
     if train_for > 0:
         if model is None:
             raise RuntimeError("Model not defined. Please provide an algorithm name.")
+        # 11.10.2026 '--init_seed': hand the seed to the VecEnv, which applies it at its next
+        # reset. Every later reset continues that one stream, and the env makes the same draws
+        # per reset whatever the episode did, so episode n starts identically across runs.
+        if args.init_seed is not None:
+            model.get_env().seed(args.init_seed)
         train(model=model,
               save_dir=save_dir,
               train_for=train_for,
@@ -1379,7 +1401,8 @@ An example is '251206_prone_linear_1e6_test'
              render_actuations=render_actuations,
              roll_over_starting_position=roll_over_starting_position,
              log_obs=args.log_obs,
-             render_video_filename=args.render_video_filename)
+             render_video_filename=args.render_video_filename,
+             seed=args.init_seed)
 
     env.close()
 

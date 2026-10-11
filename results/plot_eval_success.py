@@ -57,7 +57,8 @@ STYLE = {
     "lines.linewidth": 3.0,
     "figure.dpi": 300,
     "savefig.dpi": 300,
-    "savefig.bbox": "tight",
+    # No "savefig.bbox": "tight" -- see the savefig call: the page has to come out at the width
+    # it was asked for, and tight cropping trims it to whatever the content happens to need.
 }
 
 # The age palette of the ICDL notebooks, used when every label is one of these ages.
@@ -191,13 +192,30 @@ def collect(sources, forced_posture):
     return data, labels, horizons
 
 
-def bar_colors(labels):
+def parse_color(spec):
+    """Split a '--color LABEL=COLOUR' value. The label is the bar label, not a file name."""
+    label, sep, value = spec.partition('=')
+    if not sep or not value:
+        raise ValueError(f"--color wants LABEL=COLOUR, got {spec!r}")
+    if not matplotlib.colors.is_color_like(value):
+        raise ValueError(f"--color {spec!r}: {value!r} is not a colour matplotlib knows.")
+    return label, value
+
+
+def bar_colors(labels, overrides=None):
+    """The colour of each bar: the age palette when every label is an age, else the ramp.
+
+    'overrides' pins individual bars by label -- keyed on the label rather than on the file,
+    because two files sharing a label are one bar and cannot have two colours.
+    """
+    overrides = overrides or {}
     if all(label in AGE_COLORS for label in labels):
-        return [AGE_COLORS[label] for label in labels]
-    ramp = matplotlib.colors.LinearSegmentedColormap.from_list('mimo_ramp', RAMP)
-    if len(labels) == 1:
-        return [ramp(1.0)]
-    return [ramp(i / (len(labels) - 1)) for i in range(len(labels))]
+        base = [AGE_COLORS[label] for label in labels]
+    else:
+        ramp = matplotlib.colors.LinearSegmentedColormap.from_list('mimo_ramp', RAMP)
+        base = ([ramp(1.0)] if len(labels) == 1
+                else [ramp(i / (len(labels) - 1)) for i in range(len(labels))])
+    return [overrides.get(label, colour) for label, colour in zip(labels, base)]
 
 
 def percentage(rates, threshold):
@@ -222,7 +240,7 @@ def bar_height(rates, args):
 
 def draw(data, labels, args):
     postures = [p for p in POSTURES if p in data] + [p for p in data if p not in POSTURES]
-    colors = bar_colors(labels)
+    colors = bar_colors(labels, dict(parse_color(c) for c in args.color))
     width = args.panel_width or (10 * 0.24 * max(len(labels), 2) / 4)
     fig, axes = plt.subplots(1, len(postures), figsize=(width * len(postures), args.height),
                              sharey=True, constrained_layout=True)
@@ -294,6 +312,10 @@ def main():
     parser.add_argument('--ylabel', default=None,
                         help="Defaults to the metric's own name.")
     parser.add_argument('--title', default=None)
+    parser.add_argument('--color', action='append', default=[], metavar='LABEL=COLOUR',
+                        help="Pin one bar's colour, e.g. --color '9=tab:orange'. Repeatable. "
+                             "Anything not pinned keeps the palette: the age colours when every "
+                             "label is an age, otherwise the grey-to-orange ramp.")
     parser.add_argument('--annotate', action='store_true',
                         help="Print 'successful/total' above each bar. A bar built from 3 seeds "
                              "and one built from 18 look identical otherwise.")
@@ -339,7 +361,11 @@ def main():
     directory = os.path.dirname(os.path.abspath(args.out))
     if directory:
         os.makedirs(directory, exist_ok=True)
-    fig.savefig(args.out, dpi=300, bbox_inches='tight')
+    # Placed at its requested size, not cropped to the content: --panel_width x --height is what
+    # \includegraphics then needs no scale factor for. constrained_layout already keeps the
+    # labels inside, so there is nothing for a tight box to rescue. (Note bbox_inches=None would
+    # mean "use the rcParam", which is why that key is absent from STYLE rather than set here.)
+    fig.savefig(args.out, dpi=300)
     print(f"\nwritten: {args.out}")
 
 

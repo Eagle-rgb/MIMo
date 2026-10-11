@@ -179,6 +179,57 @@
   var AGE_NOTE = { '#ff7f0e': 'age 9' };
   var AGE_COLORS = [['#808080', 'age 1'], ['#aa805a', 'age 3'], ['#d57f34', 'age 6']];
 
+  /* plot_eval_success.AGE_COLORS and RAMP. Mirrored for the same reason THESIS_COLORS is: the
+     swatch beside a row has to be the colour that row's bar will come out as. */
+  var BAR_AGE_COLORS = { '1': '#808080', '3': '#aa805a', '6': '#d57f34', '9': '#ff7f0e' };
+  var BAR_RAMP = ['#808080', '#f08a24'];
+
+  function mixHex(a, b, t) {
+    var pair = [a, b].map(function (hex) {
+      return [1, 3, 5].map(function (i) { return parseInt(hex.substr(i, 2), 16); });
+    });
+    return '#' + pair[0].map(function (channel, i) {
+      var value = Math.round(channel + (pair[1][i] - channel) * t);
+      return (value < 16 ? '0' : '') + value.toString(16);
+    }).join('');
+  }
+
+  function barPalette(labels) {
+    if (labels.length && labels.every(function (l) { return BAR_AGE_COLORS[l]; })) {
+      return labels.map(function (l) { return BAR_AGE_COLORS[l]; });
+    }
+    if (labels.length === 1) return [BAR_RAMP[1]];
+    return labels.map(function (_l, i) {
+      return mixHex(BAR_RAMP[0], BAR_RAMP[1], i / (labels.length - 1));
+    });
+  }
+
+  /* An untouched row still has a name -- the experiment's. Sending nothing would let the script
+     fall back to the payload's file name, i.e. label the bar with a job id. */
+  function barLabel(row) {
+    var input = row.querySelector('.barlabel');
+    if (!input) return '';
+    return (input.value || '').trim() || input.getAttribute('placeholder') || '';
+  }
+
+  function barRows(onlyTicked) {
+    var rows = Array.prototype.slice.call(
+      document.querySelectorAll('#barrows tr[data-bar-row]'));
+    if (!onlyTicked) return rows;
+    return rows.filter(function (row) {
+      var box = row.querySelector('.barpick');
+      return box && box.checked;
+    });
+  }
+
+  /* Which chart a row belongs to. The order arrows and the colour picker are shared by both
+     tables, so the table says what to redraw rather than each handler guessing. */
+  function redrawFor(el) {
+    var table = el && el.closest && el.closest('[data-redraw]');
+    if (table && table.getAttribute('data-redraw') === 'bars') drawBars();
+    else drawMain();
+  }
+
   function pickedColors() {
     var out = {};
     document.querySelectorAll('#labelrows tr[data-color]').forEach(function (tr) {
@@ -200,11 +251,24 @@
     /* Colour follows position, so the swatch is read off the row's current index rather than the
        index the server rendered -- otherwise reordering repaints nothing and the swatches lie.
        A pinned colour wins, and says so with a ring. */
-    document.querySelectorAll('[data-swatch]').forEach(function (el, i) {
+    document.querySelectorAll('#labelrows [data-swatch]').forEach(function (el, i) {
       var row = el.closest('tr');
       var pinned = row && row.getAttribute('data-color');
       el.style.background = pinned || palette[i % palette.length];
       el.setAttribute('data-pinned', pinned ? '1' : '0');
+    });
+    /* Bars exist only for ticked rows, so an unticked row has no place in the palette and says
+       so with an empty swatch rather than borrowing the colour of a bar that is not drawn. */
+    var ticked = barRows(true);
+    var bars = barPalette(ticked.map(barLabel));
+    barRows(false).forEach(function (row) {
+      var el = row.querySelector('[data-swatch]');
+      if (!el) return;
+      var pinned = row.getAttribute('data-color');
+      var index = ticked.indexOf(row);
+      el.style.background = pinned || (index >= 0 ? bars[index] : 'var(--rule)');
+      el.setAttribute('data-pinned', pinned ? '1' : '0');
+      el.setAttribute('data-empty', index >= 0 || pinned ? '0' : '1');
     });
   }
 
@@ -235,7 +299,8 @@
     auto.type = 'button';
     auto.className = 'auto';
     auto.setAttribute('data-color-pick', '');
-    auto.textContent = 'Follow legend position';
+    auto.textContent = (row.hasAttribute('data-bar-row') ? 'Follow the bar palette'
+                                                         : 'Follow legend position');
     pop.appendChild(auto);
 
     row.querySelector('td').appendChild(pop);
@@ -246,7 +311,7 @@
       if (value) row.setAttribute('data-color', value);
       else row.removeAttribute('data-color');
       closePicker();
-      drawMain();
+      redrawFor(row);
       swatch.focus();
     });
   }
@@ -286,7 +351,7 @@
     if (button.getAttribute('data-move') === 'up') row.parentNode.insertBefore(row, sibling);
     else row.parentNode.insertBefore(sibling, row);
     button.focus();
-    drawMain();
+    redrawFor(row);
   });
 
   function labelParams() {
@@ -352,23 +417,28 @@
     var img = document.getElementById('barchart');
     var hint = document.getElementById('barhint');
     if (!img) return;
-    var picked = Array.prototype.filter.call(
-      document.querySelectorAll('.barpick'), function (b) { return b.checked; });
-    if (!picked.length) {
+    /* Row order is bar order: the sources go out in the order the rows sit in, and the server
+       asks the script for --sort=given. */
+    var rows = barRows(true);
+    paintSwatches();
+    if (!rows.length) {
       img.hidden = true;
       setExportLink(document.getElementById('exportbars'), null);
       if (hint) { hint.hidden = false; hint.textContent = 'Tick at least one evaluation to draw the chart.'; }
       return;
     }
-    var query = picked.map(function (box) {
-      var input = document.querySelector('.barlabel[data-job="' + box.value + '"]');
-      var text = input && (input.value || '').trim();
-      return 'src=' + encodeURIComponent((text || '') + '=' + box.value);
+    var query = rows.map(function (row) {
+      return 'src=' + encodeURIComponent(
+        barLabel(row) + '=' + row.querySelector('.barpick').value);
     }).join('&');
+    rows.forEach(function (row) {
+      var pinned = row.getAttribute('data-color');
+      if (pinned) query += '&color=' + encodeURIComponent(barLabel(row) + '=' + pinned);
+    });
     query += '&metric=' + ((document.getElementById('barmetric') || {}).value || 'successful');
     query += '&column=' + ((document.getElementById('barcolumn') || {}).value || 'single');
     if ((document.getElementById('barannotate') || {}).checked) query += '&annotate=1';
-    ['barx=xlabel', 'bary=ylabel'].forEach(function (pair) {
+    ['barx=xlabel', 'bary=ylabel', 'barw=width', 'barh=height'].forEach(function (pair) {
       var bits = pair.split('=');
       var el = document.getElementById(bits[0]);
       var value = el && (el.value || '').trim();
@@ -387,7 +457,7 @@
     }
   });
   document.addEventListener('input', function (e) {
-    if (!e.target.matches || !e.target.matches('.barlabel, #barx, #bary')) return;
+    if (!e.target.matches || !e.target.matches('.barlabel, #barx, #bary, #barw, #barh')) return;
     clearTimeout(barTimer);
     barTimer = setTimeout(drawBars, 350);
   });

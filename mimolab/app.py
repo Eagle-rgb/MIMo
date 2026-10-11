@@ -439,7 +439,8 @@ def plot_eval_bars(request: Request,
                    column: str = Query("single"),
                    height: float = Query(3.0),
                    title: str = Query(None),
-                   sort: str = Query("given")):
+                   sort: str = Query("given"),
+                   width: float = Query(None)):
     """Bars from stored --group payloads, drawn by results/plot_eval_success.py itself."""
     sources = []
     # Superseded payloads included: a chart URL that already names an older job must still draw
@@ -455,6 +456,15 @@ def plot_eval_bars(request: Request,
     if not sources:
         raise HTTPException(400, "Select at least one evaluated experiment.")
 
+    # Pinned bar colours, 'color=<bar label>=<hex>', validated against the picker's own list for
+    # the same reason the curve's are: a hand-edited URL must not reach matplotlib as typed.
+    colors = {}
+    for item in request.query_params.getlist("color"):
+        label, sep, value = item.partition("=")
+        picked = plots.valid_color(value) if sep else None
+        if picked:
+            colors[label] = picked
+
     fmt = "pdf" if request.url.path.endswith(".pdf") else "png"
     with tempfile.TemporaryDirectory() as tmp:
         out = os.path.join(tmp, f"bars.{fmt}")
@@ -462,6 +472,7 @@ def plot_eval_bars(request: Request,
             data = plots.eval_bars(sources, out, metric=metric, threshold=threshold,
                                    xlabel=xlabel, ylabel=ylabel, annotate=bool(annotate),
                                    column=column, height=height, title=title, sort=sort,
+                                   colors=colors, width=width,
                                    python=SETTINGS.python, cwd=SETTINGS.mimo_root)
         except (ValueError, RuntimeError) as exc:
             raise HTTPException(400, str(exc))

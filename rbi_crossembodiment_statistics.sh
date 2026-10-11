@@ -17,9 +17,9 @@ MODEL_SUFFIX=$2
 MODEL_DATE=$3
 HALTUNG=$4
 
-HOSTPREFIXES=("adrastos" "alkmene" "ajax" "anaxo" "achilles" "axylos" "aktor"
-	"admeta" "amata" "agylla" "adamas" "arabia" "adonis" "aither" "apate"
-	"atropos" "aletheia" "acheloos" "anemoi")
+HOSTPREFIXES=(	"adrastos" "alkmene" "ajax" "anaxo" "achilles" "axylos"
+				"aktor" "amata" "agylla" "adamas" "arabia" "adonis"
+				"aither" "apate" "arges" "atropos" "aletheia" "anemoi")
 
 today=$(date +%y-%m-%d)
 

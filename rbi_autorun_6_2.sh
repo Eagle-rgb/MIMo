@@ -7,7 +7,7 @@ if [ $# -ne 2 ]
 fi
 
 USERNAME=$1
-HOSTPREFIXES=("aktor" "admeta" "amata" "agylla" "adamas" "arabia")
+HOSTPREFIXES=("aktor" "amata" "agylla" "adamas" "arabia" "adonis")
 MODEL_NAME=$2
 
 # Date. Used to run gemini_plot script after all runs are finished. Do this before
