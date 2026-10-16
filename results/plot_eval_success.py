@@ -31,6 +31,7 @@ the ICDL figures be redrawn from the data they were originally made from. Those 
 so pass --posture with them.
 """
 import argparse
+import collections
 import glob
 import json
 import os
@@ -75,6 +76,35 @@ POSTURES = ('supine', 'prone')
 DEFAULT_THRESHOLD = 0.75
 
 
+# One cell of an embodiment sweep, as a source. The CEE writes four cells into a single payload
+# (one per coupled age), and each is a bar -- so the source is a file *and* an index into it.
+CellSource = collections.namedtuple('CellSource', 'path index')
+
+
+def read_cells(path):
+    """[(label, CellSource), ...] for one --embodiment_ages / --embodiment_grid payload.
+
+    A coupled cell is labelled by its age, which is what makes the age palette apply and the
+    numeric sort do the right thing; a decoupled one is 'act/body'.
+    """
+    with open(path) as fh:
+        payload = json.load(fh)
+    if not payload.get('embodiment_grid'):
+        raise ValueError(f"{path}: not an embodiment sweep. Produce one with "
+                         f"'eval_rollover.py --group=... --embodiment_ages --json=...'.")
+    out = []
+    for index, cell in enumerate(payload.get('cells', [])):
+        if not cell.get('rows'):
+            continue                    # not evaluated -- leave it out rather than draw a zero
+        physio, morph = cell['age_physio'], cell['age_morph']
+        label = (format(physio, 'g') if physio == morph
+                 else f"{format(physio, 'g')}/{format(morph, 'g')}")
+        out.append((label, CellSource(path, index)))
+    if not out:
+        raise ValueError(f"{path}: the sweep has no evaluated cell.")
+    return out
+
+
 def parse_source(spec):
     """Split a '--json LABEL=PATH[,PATH...]' value. The label may be omitted."""
     label, sep, paths = spec.partition('=')
@@ -93,6 +123,13 @@ def read_source(path):
       payload has no single roll rate and is rejected);
     * an old '..._test_success_rate.csv': 'Run,Success_Rate', no posture.
     """
+    if isinstance(path, CellSource):
+        with open(path.path) as fh:
+            payload = json.load(fh)
+        rows = payload['cells'][path.index].get('rows') or []
+        return [(float(row['rolled']), row.get('starting_position'), row.get('episode_steps'))
+                for row in rows]
+
     if path.lower().endswith('.csv'):
         import csv
         with open(path) as fh:
@@ -142,8 +179,10 @@ def label_for(path, regex):
 
 
 def expand_sources(args):
-    """The (label, [path, ...]) list, from --json arguments and --dir directories."""
+    """The (label, [path, ...]) list, from --json arguments, --dir directories and --cells."""
     sources = [parse_source(spec) for spec in args.json]
+    for path in args.cells:
+        sources.extend((label, [cell]) for label, cell in read_cells(path))
     for directory in args.dir:
         found = sorted(glob.glob(os.path.join(directory, '*.json')))
         if not found:
@@ -286,6 +325,11 @@ def main():
                              "are pooled into a single bar. The label defaults to the file name; "
                              "the posture comes from the file. Old "
                              "'..._test_success_rate.csv' files are accepted with --posture.")
+    parser.add_argument('--cells', action='append', default=[], metavar='PATH',
+                        help="An embodiment sweep written by 'eval_rollover.py "
+                             "--embodiment_ages' (the CEE) or '--embodiment_grid' (the DCEE): "
+                             "one bar per evaluated cell, labelled by the age it was scored at. "
+                             "Repeatable, and combinable with --json.")
     parser.add_argument('--dir', action='append', default=[], metavar='PATH',
                         help="Every '*.json' directly inside this directory becomes a bar. "
                              "Repeatable, and combinable with --json. Use --label_regex to turn "
@@ -325,8 +369,8 @@ def main():
     parser.add_argument('--height', default=3.0, type=float)
     args = parser.parse_args()
 
-    if not args.json and not args.dir:
-        parser.error("Pass at least one --json or --dir.")
+    if not args.json and not args.dir and not args.cells:
+        parser.error("Pass at least one --json, --dir or --cells.")
     if args.ylabel is None:
         args.ylabel = ('Mean roll rate [%]' if args.metric == 'roll_rate'
                        else 'Successful models [%]')

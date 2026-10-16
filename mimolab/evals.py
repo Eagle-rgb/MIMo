@@ -50,6 +50,8 @@ def _run_group_eval(task):
             f"--json={json_path}"]
     if task.get("embodiment_grid"):
         argv.append(f"--embodiment_grid={task['embodiment_grid']}")
+    if task.get("embodiment_ages"):
+        argv.append(f"--embodiment_ages={task['embodiment_ages']}")
     if task.get("starting_position"):
         argv.append(f"--starting_position={task['starting_position']}")
     if task.get("success_threshold") is not None:
@@ -116,13 +118,21 @@ def _store_group(payload):
 
 
 def _store_dcee(payload):
-    """Fold the source cell of a grid into 'evals', and nothing else.
+    """Fold the source cell of an embodiment sweep into 'evals', and nothing else.
 
-    A DCEE payload holds sixteen evaluations of the same seeds, one per embodiment. Storing them
-    all would make the experiment page average a run against bodies it was never trained on. The
-    top-level 'rows' of the payload are the run's own embodiment -- exactly what a plain --group
-    run would have produced -- so folding those keeps the two agreeing.
+    A sweep holds several evaluations of the same seeds, one per embodiment. Storing them all
+    would make the experiment page average a run against bodies it was never trained on. The
+    top-level 'rows' are the run's own embodiment -- exactly what a plain --group run would have
+    produced -- so folding those keeps the two agreeing.
+
+    They are only that when the sweep actually visited it: a run trained at act 6 / body 9 has no
+    cell in a coupled sweep, and eval_rollover then fills the top level from another cell so the
+    payload stays a valid --group result. 'source_in_grid' is false there, and nothing is stored --
+    folding another embodiment's numbers in as the run's own is the error worth avoiding.
     """
+    meta = payload.get("embodiment_grid") or {}
+    if meta and not meta.get("source_in_grid", True):
+        return 0, []
     return _store_group(payload)
 
 
@@ -256,15 +266,17 @@ def _loop():
             _current["started"] = time.time()
         db.execute("UPDATE jobs SET state='running' WHERE job_id=?", (job_id,))
         try:
-            if task.get("kind") in ("group", "dcee"):
+            if task.get("kind") in ("group", "dcee", "cee"):
                 payload = _run_group_eval(task)
-                stored, missing = (_store_dcee(payload) if task["kind"] == "dcee"
+                stored, missing = (_store_dcee(payload) if task["kind"] in ("dcee", "cee")
                                    else _store_group(payload))
                 db.execute("UPDATE jobs SET run_path=? WHERE job_id=?",
                            (payload.get("_json_path") or task["group_spec"], job_id))
                 cells = payload.get("cells")
                 note = (f"{len(cells)} embodiments, {stored} run(s) stored" if cells
                         else f"{stored} run(s) stored")
+                if cells and not (payload.get("embodiment_grid") or {}).get("source_in_grid", True):
+                    note += " (the sweep does not contain the run's own embodiment)"
                 if missing:
                     note += f"; {len(missing)} not in the index"
                 # The replacement is complete and stored; only now may the old result go.
@@ -360,13 +372,14 @@ def submit_group(date, posture, model_name, episodes=40, checkpoint="last",
     return dict(db.one("SELECT * FROM jobs WHERE job_id=?", (job_id,)))
 
 
-def submit_dcee(date, posture, model_name, episodes=40, checkpoint="last",
-                success_threshold=0.75, ages="1,3,6,9"):
-    """Queue a cross-embodiment grid: every seed of one experiment, at every (act, body) age.
+def _submit_sweep(kind, date, posture, model_name, episodes, checkpoint, success_threshold,
+                  ages):
+    """Queue an embodiment sweep over one experiment -- the CEE or the DCEE.
 
-    Same job as submit_group with --embodiment_grid added, so it shares the queue, the log and
-    the progress parsing. It is 'len(ages)**2' times the work of a plain group run -- one env for
-    the whole grid, but every cell is a full pass over every seed.
+    The same job as submit_group with one flag added, so it shares the queue, the log and the
+    progress parsing. The two differ only in which embodiments are visited: 'cee' walks the ages
+    with act = body (len(ages) cells), 'dcee' crosses them (len(ages)**2). One env serves the
+    whole sweep, but every cell is a full pass over every seed.
     """
     if SETTINGS.offline:
         raise RuntimeError("offline mode: evaluation is disabled")
@@ -378,31 +391,48 @@ def submit_dcee(date, posture, model_name, episodes=40, checkpoint="last",
     spec = experiment["group_spec"]
     if not spec:
         raise ValueError("could not derive a --group path for this experiment")
-    grid = ",".join(str(float(a)).rstrip("0").rstrip(".") for a in
-                    [float(part) for part in str(ages).replace(" ", "").split(",") if part])
-    if not grid:
-        raise ValueError("no ages given for the embodiment grid")
+    sweep = ",".join(str(float(a)).rstrip("0").rstrip(".") for a in
+                     [float(part) for part in str(ages).replace(" ", "").split(",") if part])
+    if not sweep:
+        raise ValueError("no ages given for the embodiment sweep")
 
-    job_id = f"dcee-{time.strftime('%y%m%d-%H%M%S')}-{os.urandom(3).hex()}"
-    n_cells = len(grid.split(",")) ** 2
+    flag = "--embodiment_ages" if kind == "cee" else "--embodiment_grid"
+    n_ages = len(sweep.split(","))
+    n_cells = n_ages if kind == "cee" else n_ages ** 2
+
+    job_id = f"{kind}-{time.strftime('%y%m%d-%H%M%S')}-{os.urandom(3).hex()}"
     label = f"{model_name} ({posture}, {experiment['n_seeds']} seeds, {n_cells} embodiments)"
     db.execute("""INSERT INTO jobs (job_id, kind, cmd, label, run_path, started_at, state)
                   VALUES (?,?,?,?,?,?,?)""",
-               (job_id, "dcee", f"eval_rollover.py --group {spec} --embodiment_grid={grid}",
+               (job_id, kind, f"eval_rollover.py --group {spec} {flag}={sweep}",
                 label, spec, time.time(), "queued"))
 
-    task = {"job_id": job_id, "kind": "dcee", "group_spec": spec, "episodes": episodes,
+    task = {"job_id": job_id, "kind": kind, "group_spec": spec, "episodes": episodes,
             "checkpoint": checkpoint, "success_threshold": success_threshold,
-            "embodiment_grid": grid,
             "starting_position": posture if posture in ("prone", "supine") else None,
             "run_ids": [r["run_id"] for r in experiment["runs"]]}
+    task["embodiment_ages" if kind == "cee" else "embodiment_grid"] = sweep
     start_worker()
     _queue.put(task)
     return dict(db.one("SELECT * FROM jobs WHERE job_id=?", (job_id,)))
 
 
-def dcee_json(date, posture, model_name):
-    """The most recent embodiment-grid payload for this experiment, if one was ever produced."""
+def submit_dcee(date, posture, model_name, episodes=40, checkpoint="last",
+                success_threshold=0.75, ages="1,3,6,9"):
+    """The DCEE: every (actuation age, body age) pair, i.e. len(ages)**2 cells."""
+    return _submit_sweep("dcee", date, posture, model_name, episodes, checkpoint,
+                         success_threshold, ages)
+
+
+def submit_cee(date, posture, model_name, episodes=40, checkpoint="last",
+               success_threshold=0.75, ages="1,3,6,9"):
+    """The CEE: MIMo aged as a whole, act = body, i.e. len(ages) cells."""
+    return _submit_sweep("cee", date, posture, model_name, episodes, checkpoint,
+                         success_threshold, ages)
+
+
+def sweep_json(kind, date, posture, model_name):
+    """The most recent embodiment-sweep payload of this kind for this experiment, if any."""
     from . import queries
     experiment = queries.experiment(date, posture, model_name)
     if experiment is None:
@@ -411,12 +441,20 @@ def dcee_json(date, posture, model_name):
     if not spec:
         return None
     row = db.one("""SELECT job_id, run_path, finished_at FROM jobs
-                    WHERE kind='dcee' AND state='finished' AND run_path LIKE '%.json'
+                    WHERE kind=? AND state='finished' AND run_path LIKE '%.json'
                       AND cmd LIKE ?
-                    ORDER BY finished_at DESC LIMIT 1""", (f"%{spec} %",))
+                    ORDER BY finished_at DESC LIMIT 1""", (kind, f"%{spec} %"))
     if row and Path(row["run_path"]).exists():
         return dict(row)
     return None
+
+
+def dcee_json(date, posture, model_name):
+    return sweep_json("dcee", date, posture, model_name)
+
+
+def cee_json(date, posture, model_name):
+    return sweep_json("cee", date, posture, model_name)
 
 
 def group_json(date, posture, model_name):
@@ -436,12 +474,16 @@ def group_json(date, posture, model_name):
     return None
 
 
-def dcee_payloads(limit=50):
-    """Stored embodiment-grid payloads, newest first."""
+def sweep_payloads(kind="dcee", limit=50):
+    """Stored embodiment-sweep payloads of one kind ('dcee' or 'cee'), newest first."""
     rows = db.query("""SELECT job_id, label, run_path, finished_at FROM jobs
-                       WHERE kind='dcee' AND state='finished' AND run_path LIKE '%.json'
-                       ORDER BY finished_at DESC LIMIT ?""", (limit,))
+                       WHERE kind=? AND state='finished' AND run_path LIKE '%.json'
+                       ORDER BY finished_at DESC LIMIT ?""", (kind, limit))
     return [dict(r) for r in rows if r["run_path"] and Path(r["run_path"]).exists()]
+
+
+def dcee_payloads(limit=50):
+    return sweep_payloads("dcee", limit)
 
 
 def group_jsons(limit=200, run_ids=None, include_superseded=False):

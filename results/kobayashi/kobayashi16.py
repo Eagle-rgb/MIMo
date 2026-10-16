@@ -14,8 +14,6 @@ from sklearn.metrics import r2_score
 from results.signal_utils import resample_df_to_60hz, smooth_x_butterworth
 from scipy.interpolate import interp1d
 from collections import Counter
-import datetime
-from results.utils import valid_date, DATE_FORMAT
 from mimoEnv.eval_rollover import (build_env, load_run_config, ROLL_THRESHOLD,
                                    DEFAULT_EPISODE_STEPS)
 
@@ -197,27 +195,6 @@ def calculate_average_velocity(velocities_df, a, b):
 def classify_stationary_limbs_kobayashi(velocity_mean_df: pd.DataFrame, thresh_mm_sec: float):
     return velocity_mean_df[abs(velocity_mean_df['mean']) <= thresh_mm_sec]
 
-def get_kobayashi_left_right_T_TR_interval(T_TR, df_displacement):
-    """ Reads the total duration of the MIMo supine -> prone roll from the maximum index
-    in 'df_displacement'. Returns a tuple T_TR_Left, T_TR_Right representing the 250ms
-    left/right interval around T_TR that Kobayashi 2016 used. Our MIMo rolls much faster than
-    real infants. 250ms is way too long. We get a much smaller interval by comparing our
-    duration to the duration Siegel has (3600ms) and calculate a proportionately smaller '250ms'
-    time range. """
-    kobayashi_time_range=250.0 # ms
-    siegel_duration=3600.0 # ms
-    duration_mimo = df_displacement.index.max() # ms
-    time_range_mimo = int(kobayashi_time_range * duration_mimo / siegel_duration)
-    time_range_mimo = kobayashi_time_range
-    time_range_mimo = kobayashi_time_range / 3.0
-    T_TR_Left = T_TR - time_range_mimo
-    T_TR_Right = T_TR + time_range_mimo
-
-    if T_TR_Left < 0: T_TR_Left = 0
-    if T_TR_Right >= duration_mimo: T_TR_Right = duration_mimo
-
-    return T_TR_Left, T_TR_Right, time_range_mimo
-
 def classify_stationary_limbs_siegel(normalized_to_torso_velocity_ipsilateral_df: pd.DataFrame):
     """ Classifies ipsilateral limbs as in Siegel 2024 "How do babies roll? Identifying the
     coordinated movements of infant rolling through video compared to laboratory techniques."
@@ -249,59 +226,13 @@ def get_timing_moving_limb(T_TR, T_Limb, Th):
     """ Returns timing of limb (leading, synchronous, following) relative
     to torso maximum displacement timestamp 'T_TR'. Returns it as a string.
     Specify 'Th' as the same as the range to classify stationary limbs. """
-    Delta = T_TR - T_Limb
+    Delta = T_Limb - T_TR
     if Delta < -Th:
         return 'leading'
     elif Delta > Th:
         return 'following'
     else:
         return 'synchronous'
-    
-def analysis_siegel(df_100hz_butter: pd.DataFrame):
-    # Step 1: Calculate speeds of each limb.
-    df_velocities = calculate_velocities_df(df_100hz_butter)
-    # Step 2: Normalize velocities of limbs to torso.
-    normalize_velocities_to_torso(df_velocities)
-    #df_velocities.plot()
-    #plt.show()
-    # Step 3: Classify stationary / moving ipsilateral limbs.
-    ipsilateral_velocities_df = df_velocities[['IL', 'IA']]
-    stationary_limbs_df = classify_stationary_limbs_siegel(ipsilateral_velocities_df)
-    stationary_ia = 'IA' in stationary_limbs_df.keys()
-    stationary_il = 'IL' in stationary_limbs_df.keys()
-
-    # Step 4: Identify direction of moving ipsilateral limbs (forwards / backwards)
-    ipsilateral_velocities_mean = ipsilateral_velocities_df.mean()
-    direction_il = 'stationary'
-    direction_ia = 'stationary'
-
-    if not stationary_ia:
-        direction_ia = 'forward' if ipsilateral_velocities_mean['IA'] >= 0 else 'backward'
-    if not stationary_il:
-        direction_il = 'forward' if ipsilateral_velocities_mean['IL'] >= 0 else 'backward'
-
-    entry_stats = {
-        'Stationary_IA': stationary_ia,
-        'Stationary_IL': stationary_il,
-        #'T_TR': None,
-        #'T_CA': None,
-        #'T_CL': None,
-        #'T_IA': None,
-        #'T_IL': None,
-        #'V_TR': None,
-        #'V_CA': None,
-        #'V_CL': None,
-        #'V_IA': None,
-        #'V_IL': None,
-        'Direction_IA': direction_ia,
-        'Direction_IL': direction_il,
-        #'Timing_IA': None,
-        #'Timing_IL': None,
-        #'Timing_CA': None,
-        #'Timing_CL': None
-    }
-
-    return entry_stats
 
 def analysis_kobayashi(df_60hz_butter: pd.DataFrame, thresh=100.0, T_H=250.0):
     """ Performs Kobayashi 2016 analysis. This function does:
@@ -351,7 +282,6 @@ def analysis_kobayashi(df_60hz_butter: pd.DataFrame, thresh=100.0, T_H=250.0):
     #df_episode.plot()
     #plt.show()
 
-    # T_TR_Left, T_TR_Right, T_H = get_kobayashi_left_right_T_TR_interval(T_TR, df_episode)
     T_TR_Left = T_TR - T_H
     T_TR_Right = T_TR + T_H
     duration_mimo = df_60hz_butter.index.max() # ms
@@ -435,41 +365,23 @@ def classify_movement(df):
     if ia_s and not il_s and t_il == 'synchronous' and t_ca == 'synchronous' and t_cl == 'synchronous': return MOVEMENT_PATTERNS[2]
     if ia_s and not il_s and t_il == 'synchronous' and t_ca == 'synchronous' and t_cl == 'following': return MOVEMENT_PATTERNS[3]
     if il_s and not ia_s and t_ia == 'synchronous' and t_ca == 'synchronous' and t_cl == 'following': return MOVEMENT_PATTERNS[4]
-    if not ia_s and not il_s: return MOVEMENT_PATTERNS[5]
+    # Movement pattern F: IA and IL not stationary and all four limbs move synchronously.
+    if not ia_s and not il_s \
+        and t_ca == 'synchronous' and t_cl == 'synchronous' \
+        and t_ia == 'synchronous' and t_il == 'synchronous': \
+            return MOVEMENT_PATTERNS[5]
     return MOVEMENT_PATTERNS[6]
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--collect_data', required=False, action='store_true', help="Collects data, saves it as *.csv and quits.")
-    parser.add_argument('--num_episodes', required=False, default=10, type=int,
-                        help="Number of episodes to let each model play in the environment. This " \
-                        "is not the number of episodes taken into account for kobayashi analysis. " \
-                        "For kobayashi analysis, only the successful episodes out of the 'num_episodes' " \
-                        "performed episodes is taken. Default: 10")
-    parser.add_argument('--load_data', required=False, type=str,
+    parser.add_argument('--load_data', required=True, type=str,
                         help="Load the specified .csv file and perform Kobayashi classification on it.")
-    parser.add_argument('--plot_displacement', action='store_true')
-    parser.add_argument('--age', choices=[1,3,6,9], type=int, help="Infant Age. Choices: 1, 3, 6, 9", required=True)
-    parser.add_argument('--date', type=valid_date, help="Model date")
-    parser.add_argument('--suffix', type=str, help="Model suffix")
-    parser.add_argument('--siegel', action='store_true')
-    parser.add_argument('--until', type=str, default="side_lying",
-                        choices=["side_lying", "45", "full"], help="Roll milestone to analyze until.")
     parser.add_argument('--thresh', type=int, default=300,
                         help="Speed threshold to use in Kobayashi Analysis to classify stationary limbs. Default: 300mm/sec.")
     parser.add_argument('--range', type=int, default=83,
                         help="Range around T_TR to use for classifying stationary limbs. Default 83ms.")
-    parser.add_argument('--transfer_learning', action='store_true', default=False,
-                        help="Enable or disable transferlearning.")
-    parser.add_argument('--transferlearning_age', type=int, required=False, default=9,
-                        help="Specify age for transferlearning.")
     parser.add_argument('--save_full_report', type=str, required=False,
                         help="Saves the full pattern report under this .csv name.")
-    parser.add_argument('--model_dir', type=str, required=False, default='.',
-                        help="Any parent directory to start searching for model.")
-    parser.add_argument('--haltung', type=str, required=False, default='supine',
-                        choices=['supine', 'prone'],
-                        help="Starting position of the runs to collect. Default: supine.")
     parser.add_argument('--checkpoint', type=str, required=False, default='model_best.zip',
                         help="Checkpoint file to load from each run directory. Default "
                              "'model_best.zip', the peak under the reported evaluation protocol "
@@ -484,75 +396,11 @@ if __name__ == '__main__':
     parser.add_argument('--seed0', type=int, required=False, default=1000,
                         help="Episode i of every run is seeded with 'seed0 + i', so all runs "
                              "face identical start states. Pass -1 for unseeded resets.")
-    parser.add_argument('--out', type=str, required=False, default=None,
-                        help="Output .csv for --collect_data. Defaults to "
-                             "'kobayashidata_age<age>.csv'.")
     parser.add_argument('--save_velocities_npy', type=str, required=False,
                         help="Saves normalized mean and std velocities of TR, CA and CL to .npy.")
     
     args = parser.parse_args()
-
-    if args.collect_data:
-        if not args.suffix or not args.date:
-            raise ValueError("--collect_data, but no suffix or date specified.")
-
-        model_date = args.date.strftime(DATE_FORMAT)
-        model_suffix = args.suffix
-
-        if args.transfer_learning:
-            age = args.transferlearning_age
-        else:
-            age = args.age
-
-        # 20.08.2026 The environment used to come from 'results.utils.make_env', which hardcodes
-        # PPO-era settings (pbrs, no goal in the observation, done_active). A SAC+HER policy
-        # cannot even be fed by that env: its observation space has no 'desired_goal'. Build the
-        # env from the run's own 'data.yml' instead, through the same 'build_env' the reported
-        # evaluation protocol uses -- ISR off, goal pinned, no termination on success.
-        runs = find_runs(args.model_dir, model_date, args.haltung, model_suffix)
-        if not runs:
-            raise ValueError(f"No run directories matching "
-                             f"{model_date}_{args.haltung}_{model_suffix}_run_* "
-                             f"under {args.model_dir}")
-        print(f"Found {len(runs)} runs. Reading configuration from {runs[0][1]}.")
-
-        config = load_run_config(os.path.join(runs[0][1], args.checkpoint))
-        # The age is an explicit argument because of transfer learning, where the env is
-        # deliberately not the one the policy was trained in.
-        config = dict(config, physio_age=age, morph_age=age)
-        algorithm = config.get('algorithm', 'PPO')
-        episode_steps = (args.episode_steps or config.get('episode_steps')
-                         or DEFAULT_EPISODE_STEPS)
-        print(f"algorithm={algorithm}, her={config.get('her', False)}, "
-              f"checkpoint={args.checkpoint}, goal={args.goal}, "
-              f"episode_steps={episode_steps}, age={age}")
-
-        env = build_env(config, args.haltung, args.goal)
-
-        df = collect_kobayashi_displacements_all(
-            env, model_date, args.haltung, model_suffix,
-            model_dir=args.model_dir, n_tries=args.num_episodes,
-            algorithm=algorithm, checkpoint=args.checkpoint,
-            episode_steps=episode_steps,
-            seed0=None if args.seed0 < 0 else args.seed0)
-
-        out = args.out
-        if out is None:
-            if args.transfer_learning:
-                out = f'kobayashidata_age{args.age}_transferlearning_age{args.transferlearning_age}.csv'
-            else:
-                out = f'kobayashidata_age{args.age}.csv'
-        df.to_csv(out)
-        print(f"Wrote {out}")
-
-        quit()
-
-    if args.load_data is not None:
-        # df = pd.read_csv('kobayashidata.csv', index_col=['Run', 'Time'])
-        df = pd.read_csv(args.load_data, index_col=['Run', 'Episode', 'Time'])
-
-    else:
-        raise ValueError("Neither --collect_data or --load_data specified...")
+    df = pd.read_csv(args.load_data, index_col=['Run', 'Episode', 'Time'])
     
     groupby_run = df.groupby('Run')
 
@@ -567,14 +415,9 @@ if __name__ == '__main__':
     for run, df_run in groupby_run:
         for episode, df_episode in df_run.groupby(['Episode']):
             episode = episode[0]
-            # Crop DataFrame to the section relevant for our analysis. This is either until
-            # side lying or until reaching 45°.
+            # Crop DataFrame to the section relevant for our analysis. This until side lying.
             milestone = None
-            if args.until == 'side_lying':
-                milestone = 'Side_Lying'
-            elif args.until == '45':
-                milestone = '45_Deg'
-            df_episode = crop_until_milestone(df_episode, milestone=milestone)
+            df_episode = crop_until_milestone(df_episode, milestone='Side_Lying')
 
             if len(df_episode) <= 26:
                 print(f"Skipping run {run}, episode {episode}, because it is too short!")
@@ -583,19 +426,9 @@ if __name__ == '__main__':
             df_episode = relabel_right_left_limbs_in_rolling_direction(df_episode)
             reorient_rollover(df_episode)
 
-            # Kobayashi uses 60Hz, Siegel uses 100Hz. Our data is already at 100Hz, so for Siegel,
-            # we do not need to resample
-            if not args.siegel:
-                df_episode = resample_df_to_60hz(df_episode)
-            else:
-                df_episode = resample_df_to_60hz(df_episode, target_fs=100.0)
-
+            df_episode = resample_df_to_60hz(df_episode, target_fs=100.0)
             df_episode = df_episode.apply(smooth_x_butterworth)
-
-            if args.siegel:
-                entry_stats = analysis_siegel(df_episode)
-            else:
-                entry_stats = analysis_kobayashi(df_episode, thresh=args.thresh, T_H=args.range)
+            entry_stats = analysis_kobayashi(df_episode, thresh=args.thresh, T_H=args.range)
 
             if entry_stats is None:
                 continue
@@ -609,107 +442,27 @@ if __name__ == '__main__':
     df_stats['Support_Pattern'] = df_stats.apply(classify_support, axis=1)
     df_stats['Movement_Pattern'] = df_stats.apply(classify_movement, axis=1)
 
-    if not args.siegel:
-        V_TR_mean = df_stats['V_TR'].mean()
-        V_CA_mean = df_stats['V_CA'].mean()
-        V_CL_mean = df_stats['V_CL'].mean()
-        V_TR_std = df_stats['V_TR'].std()
-        V_CA_std = df_stats['V_CA'].std()
-        V_CL_std = df_stats['V_CL'].std()
+    V_TR_mean = df_stats['V_TR'].mean()
+    V_CA_mean = df_stats['V_CA'].mean()
+    V_CL_mean = df_stats['V_CL'].mean()
+    V_TR_std = df_stats['V_TR'].std()
+    V_CA_std = df_stats['V_CA'].std()
+    V_CL_std = df_stats['V_CL'].std()
 
-        print(f"V_TR_mean: {V_TR_mean}")
-        print(f"V_CA_mean: {V_CA_mean}")
-        print(f"V_CL_mean: {V_CL_mean}")
-        print(f"V_TR_std: {V_TR_std}")
-        print(f"V_CA_std: {V_CA_std}")
-        print(f"V_CL_std: {V_CL_std}")
+    print(f"V_TR_mean: {V_TR_mean}")
+    print(f"V_CA_mean: {V_CA_mean}")
+    print(f"V_CL_mean: {V_CL_mean}")
+    print(f"V_TR_std: {V_TR_std}")
+    print(f"V_CA_std: {V_CA_std}")
+    print(f"V_CL_std: {V_CL_std}")
 
-        print(f"T_H mean: {df_stats['T_H'].mean()}")
+    print(f"T_H mean: {df_stats['T_H'].mean()}")
 
-        if args.save_velocities_npy is not None:
-            means_stds = np.array([V_TR_mean, V_CA_mean, V_CL_mean, V_TR_std, V_CA_std, V_CL_std])
-            np.save(args.save_velocities_npy, means_stds)
+    if args.save_velocities_npy is not None:
+        means_stds = np.array([V_TR_mean, V_CA_mean, V_CL_mean, V_TR_std, V_CA_std, V_CL_std])
+        np.save(args.save_velocities_npy, means_stds)
 
     df_patterns = df_stats[['Run', 'Episode', 'Support_Pattern', 'Movement_Pattern']]
 
     if args.save_full_report is not None:
         df_patterns.to_csv(args.save_full_report)
-
-    quit()
-        
-
-    # print(df_stats)
-    date_today = datetime.datetime.today().strftime('%y-%m-%d')
-    analysis_type = 'siegel' if args.siegel else 'kobayashi'
-    if args.until == 'side_lying':
-        analysis_until = 'lateral'
-    elif args.until == '45':
-        analysis_until = '45'
-    elif args.until == 'full':
-        analyiss_until = 'full'
-
-    if args.save_dir is not None:
-        path = f'{args.save_dir}/{date_today}_{analysis_type}_thresh_{args.thresh}_range_' +\
-                f'{args.range}_until_{analysis_until}_age{args.age}.csv'
-
-        if args.transfer_learning:
-            path = f'{args.save_dir}/{date_today}_{analysis_type}_thresh_{args.thresh}_range_' +\
-                f'{args.range}_until_{analysis_until}_age{args.age}_transferlearning_age{args.transferlearning_age}.csv'
-
-        df_stats.to_csv(path)
-    
-    # A, B, C, D, E, F classification
-    if not args.siegel:
-        keys = ['Timing_IL', 'Timing_IA','Timing_CA', 'Timing_CL']
-        filtered_list = [{k: v for k, v in d.items() if k in keys} for d in stats_list]
-
-
-        patterns = [tuple(d.values()) for d in filtered_list]
-
-        df_patterns = []
-    
-        cnt = Counter(patterns)
-        total_cnt = cnt.total()
-        for pattern, count in cnt.items():
-            timing_il = pattern[0]
-            timing_ia = pattern[1]
-            timing_ca = pattern[2]
-            timing_cl = pattern[3]
-            entry = {
-                'IL': timing_il,
-                'IA': timing_ia,
-                'CA': timing_ca,
-                'CL': timing_cl,
-                'count': count,
-                'fraction': count / total_cnt
-            }
-            df_patterns.append(entry)
-
-        if args.save_dir is not None:
-            path = f'{args.save_dir}/{date_today}_patterns_thresh_{args.thresh}_range_' +\
-                f'{args.range}_until_{analysis_until}_age{args.age}.csv'
-
-            if args.transfer_learning:
-                path = f'{args.save_dir}/{date_today}_patterns_thresh_{args.thresh}_range_' +\
-                    f'{args.range}_until_{analysis_until}_age{args.age}_transferlearning_age{args.transferlearning_age}.csv'
-                
-            df_patterns = pd.DataFrame(df_patterns)
-            df_patterns.to_csv(path)
-
-        pattern_A = ('stationary', 'stationary', 'synchronous', 'synchronous')
-        pattern_B = ('stationary', 'stationary', 'synchronous', 'following')
-        pattern_C = ('synchronous', 'stationary', 'synchronous', 'synchronous')
-        pattern_D = ('synchronous', 'stationary', 'synchronous', 'following')
-        pattern_E = ('stationary', 'synchronous', 'synchronous', 'following')
-        pattern_F = ('synchronous', 'synchronous', 'synchronous', 'synchronous')
-
-        print(f"Cnt A: {cnt[pattern_A]/total_cnt}")
-        print(f"Cnt B: {cnt[pattern_B]/total_cnt}")
-        print(f"Cnt C: {cnt[pattern_C]/total_cnt}")
-        print(f"Cnt D: {cnt[pattern_D]/total_cnt}")
-        print(f"Cnt E: {cnt[pattern_E]/total_cnt}")
-        print(f"Cnt F: {cnt[pattern_F]/total_cnt}")
-        print(f"Total: {total_cnt}")
-
-
-

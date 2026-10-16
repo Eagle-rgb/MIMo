@@ -61,3 +61,7 @@ def smooth_x_butterworth(data, cutoff_hz=6, fs=60):
     smoothed_data = filtfilt(b, a, data)
     
     return smoothed_data
+
+def glmfit_logit(x, y, n_iter=100, tol=1e-10):
+    """ Binomial GLM"""
+    pass

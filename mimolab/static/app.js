@@ -654,10 +654,11 @@
   }
 
   document.addEventListener('submit', function (e) {
-    var form = e.target.closest('[data-group-form], [data-dcee-form]');
+    var form = e.target.closest('[data-group-form], [data-dcee-form], [data-cee-form]');
     if (!form) return;
     e.preventDefault();
-    var kind = form.hasAttribute('data-dcee-form') ? 'dcee' : 'group';
+    var kind = form.hasAttribute('data-cee-form') ? 'cee'
+             : form.hasAttribute('data-dcee-form') ? 'dcee' : 'group';
     var msg = form.querySelector('[data-' + kind + '-msg]');
     var button = form.querySelector('button[type=submit]');
     button.disabled = true;
@@ -698,8 +699,34 @@
                   query.replace('/dcee.png?', '/dcee.pdf?'));
   }
 
+  /* The CEE is the same stored-payload re-render, drawn as bars rather than a grid. */
+  function drawCee() {
+    var img = document.getElementById('ceechart');
+    if (!img) return;
+    var query = img.getAttribute('data-cee-base');
+    query += '&metric=' + ((document.getElementById('ceemetric') || {}).value || 'successful');
+    if ((document.getElementById('ceeannotate') || {}).checked) query += '&annotate=1';
+    [['ceex', 'xlabel'], ['ceey', 'ylabel'], ['ceew', 'width'], ['ceeh', 'height']]
+      .forEach(function (pair) {
+        var el = document.getElementById(pair[0]);
+        var value = el && (el.value || '').trim();
+        if (value) query += '&' + pair[1] + '=' + encodeURIComponent(value);
+      });
+    img.src = query;
+    setExportLink(document.getElementById('exportcee'),
+                  query.replace('/cee.png?', '/cee.pdf?'));
+  }
+
   document.addEventListener('change', function (e) {
-    if (e.target && e.target.id === 'dceemetric') drawDcee();
+    if (!e.target) return;
+    if (e.target.id === 'dceemetric') drawDcee();
+    if (e.target.id === 'ceemetric' || e.target.id === 'ceeannotate') drawCee();
+  });
+  var ceeTimer = null;
+  document.addEventListener('input', function (e) {
+    if (!e.target.matches || !e.target.matches('#ceeopts input')) return;
+    clearTimeout(ceeTimer);
+    ceeTimer = setTimeout(drawCee, 350);
   });
   var dceeTimer = null;
   document.addEventListener('input', function (e) {

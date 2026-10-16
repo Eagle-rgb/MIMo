@@ -899,6 +899,74 @@ def _dcee_protocol():
     return "ages reach the env, and only an age change is swapped in place"
 
 
+@check("the CEE sweeps the coupled ages and the DCEE the full grid")
+def _cee_protocol():
+    """Two different measurements over the same ages, kept apart.
+
+    CEE is rbi_crossembodiment_statistics.sh: MIMo aged as a whole, act = body, four cells. DCEE
+    is rbi_dcee_success.sh: the two ages crossed, sixteen. The coupled sweep is exactly the
+    diagonal of the grid, which is what makes one evaluation path serve both.
+    """
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    from mimoEnv.eval_rollover import embodiment_pairs
+
+    ages = [1, 3, 6, 9]
+    coupled = embodiment_pairs(ages, coupled=True)
+    grid = embodiment_pairs(ages, coupled=False)
+    assert coupled == [(a, a) for a in ages], coupled
+    assert len(grid) == len(ages) ** 2, len(grid)
+    assert set(coupled) <= set(grid), "the coupled sweep is not the grid's diagonal"
+
+    # The figure: one bar per evaluated cell, labelled by the age, which is what reaches for the
+    # age palette. Built here rather than from a stored payload so the check always has teeth.
+    from results.plot_eval_success import read_cells, bar_colors
+    payload = {
+        "group": "/nowhere/exp", "checkpoint": "last", "episodes": 40,
+        "embodiment_grid": {"ages": ages, "coupled": True, "source_in_grid": True,
+                            "source": {"physio": 9, "morph": 9}, "success_threshold": 0.75},
+        "cells": [{"age_physio": a, "age_morph": a,
+                   "summary": {"successful": i, "runs": 3},
+                   "rows": [{"rolled": 1.0 if j < i else 0.0, "starting_position": "supine",
+                             "episode_steps": 500, "model": f"/nowhere/exp_run_{j}/model_1.zip"}
+                            for j in range(3)]}
+                  for i, a in enumerate(ages)],
+    }
+    with tempfile.TemporaryDirectory() as tmp:
+        path = os.path.join(tmp, "cee.json")
+        Path(path).write_text(json.dumps(payload))
+        labels = [label for label, _cell in read_cells(path)]
+        assert labels == [format(a, "g") for a in ages], labels
+        # Labelled by age, so the age palette applies rather than the generic ramp.
+        import matplotlib.colors as mcolors
+        assert mcolors.to_hex(bar_colors(labels)[-1]) == mcolors.to_hex("tab:orange"), \
+            "the age palette did not apply to a CEE's bars"
+
+        out = os.path.join(tmp, "cee.pdf")
+        data = plots.eval_bars([], out, cells=[path], width=2.8, height=2.4,
+                               python=sys.executable, cwd=SETTINGS.mimo_root)
+        box = [float(v) for v in
+               re.search(rb"/MediaBox\s*\[([\d.\s-]+)\]", data).group(1).split()]
+        assert abs(box[2] / 72 - 2.8) < 0.05 and abs(box[3] / 72 - 2.4) < 0.05, \
+            f"CEE page came out {box[2] / 72:.2f} x {box[3] / 72:.2f} in"
+
+        # A plain --group payload is not a sweep and must be refused rather than drawn empty.
+        plain = os.path.join(tmp, "plain.json")
+        Path(plain).write_text(json.dumps({"group": "x", "rows": [], "summary": {}}))
+        try:
+            read_cells(plain)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("a payload without cells was accepted as a sweep")
+
+    # Only the run's own embodiment may be folded into 'evals'. A coupled sweep that does not
+    # visit it stores nothing rather than filing another body's numbers as the run's own.
+    stored, missing = evals._store_dcee(
+        {"embodiment_grid": {"coupled": True, "source_in_grid": False}, "rows": []})
+    assert (stored, missing) == (0, []), (stored, missing)
+    return f"CEE {len(coupled)} coupled ages, DCEE {len(grid)} cells, bars labelled {labels}"
+
+
 @check("the cross-embodiment grid is drawn at the size asked for, in the configured style")
 def _dcee_plot():
     grid = evals.dcee_payloads(limit=1)

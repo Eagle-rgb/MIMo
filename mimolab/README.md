@@ -131,6 +131,22 @@ only began recording the direction on **08.09.2026**, so every evaluation stored
 the `--group` summary (`successful by side`) and in its JSON, so the terminal and the page cannot
 disagree.
 
+**The CEE is the same job with `--embodiment_ages`, and it is bars, not a grid.** The two
+cross-embodiment sweeps the cluster scripts distinguish are both offered on the experiment page:
+the **CEE** ages MIMo as a whole (act = body, four cells, `rbi_crossembodiment_statistics.sh`) and
+the **DCEE** crosses the two ages (sixteen, `rbi_dcee_success.sh`). The coupled sweep is the grid's
+diagonal, so one evaluation path serves both and only `embodiment_pairs` differs; it costs a
+quarter of the DCEE. A single axis reads as bars rather than a heatmap, so the CEE goes through
+`plot_eval_success.py --cells`, one bar per cell labelled by the age it was scored at — which is
+also what makes the script reach for its age palette, so a CEE panel sits beside the other age
+figures. The two are separate job kinds, so running one never supersedes the other.
+
+**Only the run's own embodiment is folded into `evals`, and only when the sweep visited it.** A run
+trained at act 6 / body 9 has no cell in a coupled sweep; `eval_rollover` then fills the payload's
+top level from another cell so it stays a valid `--group` result and sets `source_in_grid: false`,
+and the store skips it. Filing another body's numbers as the run's own evaluation is the error that
+guard exists for; the job note says so when it fires.
+
 **The cross-embodiment grid is the same job with `--embodiment_grid`.** The experiment page can
 score every seed on all 16 (actuation age, body age) pairs -- the DCEE measurement -- reusing the
 group queue, log and progress counter, so a grid reports "run 53 of 96" rather than restarting the

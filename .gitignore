@@ -34,6 +34,7 @@ icdl26
 pdf
 csv
 *.mp4
+*.npz
 
 results/intrinsic
 results/horizon

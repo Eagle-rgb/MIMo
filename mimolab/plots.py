@@ -802,7 +802,7 @@ def dcee_grid(sources, out_path, metric="successful", threshold=0.75, width=None
 
 def eval_bars(sources, out_path, metric="successful", threshold=0.75, xlabel="", ylabel=None,
               annotate=False, column="single", height=3.0, title=None, sort="given",
-              colors=None, width=None, python=None, cwd=None):
+              colors=None, width=None, cells=None, python=None, cwd=None):
     """Draw the success bar chart by calling results/plot_eval_success.py.
 
     Deliberately a subprocess rather than a reimplementation: that script already produces the
@@ -815,13 +815,17 @@ def eval_bars(sources, out_path, metric="successful", threshold=0.75, xlabel="",
     import subprocess
     import json as _json
 
-    if not sources:
+    # 'cells' are embodiment-sweep payloads: one bar per evaluated cell, labelled by the age it
+    # was scored at. That is the CEE figure, and it reuses this path so the bars, the colours and
+    # the exact page size are the ones the thesis bar chart already has.
+    cells = list(cells or [])
+    if not sources and not cells:
         raise ValueError("no evaluation files selected")
 
     # The script lays one panel out per posture and multiplies the width by their number, so the
     # target column width has to be divided by however many postures the payloads contain.
     postures = set()
-    for _label, path in sources:
+    for _label, path in list(sources) + [(None, c) for c in cells]:
         try:
             with open(path) as fh:
                 payload = _json.load(fh)
@@ -853,6 +857,9 @@ def eval_bars(sources, out_path, metric="successful", threshold=0.75, xlabel="",
     for label, path in sources:
         argv.append("--json")
         argv.append(f"{label}={path}" if label else str(path))
+    for path in cells:
+        argv.append("--cells")
+        argv.append(str(path))
 
     proc = subprocess.run(argv, cwd=cwd, capture_output=True, text=True, timeout=180)
     try:

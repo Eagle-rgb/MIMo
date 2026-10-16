@@ -663,36 +663,74 @@ def parse_ages(spec):
     return ages
 
 
-def evaluate_embodiment_grid(run_dirs, args, episodes, ages):
-    """Evaluate the whole group at every (actuation age, body age) pair -- the DCEE measurement.
+def embodiment_pairs(ages, coupled):
+    """The (actuation, body) pairs a sweep visits.
 
-    One env for the entire grid: the ages are the only thing that changes between cells, so
+    coupled=True is the **CEE** of results/cee/ and rbi_crossembodiment_statistics.sh: MIMo is
+    aged as a whole, act = body, so four ages are four embodiments. coupled=False is the **DCEE**
+    of rbi_dcee_success.sh, which varies the two independently and is therefore the 4x4 grid.
+    Keeping both in one function is the point -- they differ only in which pairs are visited.
+    """
+    if coupled:
+        return [(age, age) for age in ages]
+    return [(physio, morph) for physio in ages for morph in ages]
+
+
+def evaluate_embodiment_grid(run_dirs, args, episodes, ages, coupled=False):
+    """Evaluate the whole group at every embodiment in the sweep.
+
+    One env for the entire sweep: the ages are the only thing that changes between cells, so
     '_EnvCache' re-grows MIMo in place rather than building sixteen environments of 3.6 GB each.
 
-    The grid is the cross-embodiment question of results/cee/: a policy trained at one embodiment,
-    scored on all of them. The run's own cell is part of the grid and is what the group summary
-    would report on its own, which is the anchor the rest of the panel is read against.
+    The question is the cross-embodiment one of results/cee/: a policy trained at one embodiment,
+    scored on others. The run's own cell is part of the sweep whenever the sweep contains it, and
+    is what the group summary would report on its own -- the anchor the rest is read against.
     """
     cells = []
     cache = _EnvCache()
-    total = len(run_dirs) * len(ages) * len(ages)
+    pairs = embodiment_pairs(ages, coupled)
+    total = len(run_dirs) * len(pairs)
     done = 0
     try:
-        for age_physio in ages:
-            for age_morph in ages:
-                rows, skipped = evaluate_group(run_dirs, args, episodes, cache=cache,
-                                               ages=(age_physio, age_morph),
-                                               progress=(done, total))
-                done += len(rows) + len(skipped)
-                cells.append({
-                    'age_physio': age_physio, 'age_morph': age_morph,
-                    'summary': _summarise(rows, args.success_threshold) if rows else None,
-                    'rows': rows,
-                    'skipped': [{'run': n, 'reason': r} for n, r in skipped],
-                })
+        for age_physio, age_morph in pairs:
+            rows, skipped = evaluate_group(run_dirs, args, episodes, cache=cache,
+                                           ages=(age_physio, age_morph),
+                                           progress=(done, total))
+            done += len(rows) + len(skipped)
+            cells.append({
+                'age_physio': age_physio, 'age_morph': age_morph,
+                'summary': _summarise(rows, args.success_threshold) if rows else None,
+                'rows': rows,
+                'skipped': [{'run': n, 'reason': r} for n, r in skipped],
+            })
     finally:
         cache.close()
     return cells
+
+
+def _cell_text(summary, mark):
+    if summary is None:
+        return "-".rjust(9)
+    return f"{summary['successful']}/{summary['runs']} {summary['success_fraction'] * 100:>3.0f}%{mark}".rjust(9)
+
+
+def _print_coupled(cells, args, source):
+    """The CEE as one row: MIMo aged as a whole, one column per age."""
+    print()
+    print(f"embodiment sweep    : CEE, {len(cells)} coupled ages (act = body), "
+          f"{args.success_threshold * 100:.0f} % success line")
+    print(f"trained at          : act {source[0]} / body {source[1]}")
+    print()
+    print(f"{'age':<12}" + "  ".join(f"{c['age_physio']:g}".rjust(9) for c in cells))
+    print(f"{'successful':<12}"
+          + "  ".join(_cell_text(c['summary'],
+                                 "*" if (c['age_physio'], c['age_morph']) == tuple(source) else " ")
+                      for c in cells))
+    print(f"{'roll rate':<12}"
+          + "  ".join((f"{c['summary']['roll_rate_mean'] * 100:.0f}%" if c['summary'] else "-")
+                      .rjust(9) for c in cells))
+    print()
+    print("  successful = seeds above the line / seeds evaluated; * is the embodiment they trained on")
 
 
 def _print_grid(cells, ages, args, source):
@@ -709,13 +747,8 @@ def _print_grid(cells, ages, args, source):
         cells_row = []
         for age_morph in ages:
             cell = by_pair.get((age_physio, age_morph))
-            summary = cell and cell['summary']
-            if summary is None:
-                cells_row.append("-".rjust(9))
-                continue
             mark = "*" if (age_physio, age_morph) == tuple(source) else " "
-            cells_row.append(f"{summary['successful']}/{summary['runs']}"
-                             f" {summary['success_fraction'] * 100:>3.0f}%{mark}".rjust(9))
+            cells_row.append(_cell_text(cell and cell['summary'], mark))
         print(f"{'act ' + format(age_physio, 'g'):<12}" + "  ".join(cells_row))
     print()
     print("  cell = successful seeds / seeds evaluated; * is the embodiment the runs trained on")
@@ -1117,6 +1150,14 @@ def main():
                              "re-grown in place between cells. Costs 16x a plain --group run, so "
                              "size the episode count accordingly."
                              % ('/'.join(str(a) for a in AGES),))
+    parser.add_argument('--embodiment_ages', nargs='?', const=','.join(str(a) for a in AGES),
+                        default=None, metavar='AGES',
+                        help="--group only: the CEE. Evaluate the whole group at each age with "
+                             "act = body, i.e. MIMo aged as a whole -- the sweep of "
+                             "rbi_crossembodiment_statistics.sh. Defaults to %s, so four "
+                             "embodiments rather than --embodiment_grid's sixteen. Same payload "
+                             "shape, marked 'coupled'."
+                             % ('/'.join(str(a) for a in AGES),))
     parser.add_argument('--missing_limb', default=None, type=str,
                         metavar='LIMB[+LIMB...]|none',
                         help="Override the missing limbs stored in the run's data.yml. One limb "
@@ -1199,31 +1240,45 @@ def main():
         if not run_dirs:
             parser.error(f"No run directories matched --group={args.group!r}.")
 
-        if args.embodiment_grid is not None:
+        if args.embodiment_grid is not None or args.embodiment_ages is not None:
+            if args.embodiment_grid is not None and args.embodiment_ages is not None:
+                parser.error("--embodiment_grid (act x body) and --embodiment_ages (act = body) "
+                             "are two different sweeps; pick one.")
+            coupled = args.embodiment_ages is not None
             if args.physio_age is not None or args.morph_age is not None:
-                parser.error("--embodiment_grid sets both ages per cell; drop --physio_age/"
+                parser.error("the embodiment sweep sets both ages per cell; drop --physio_age/"
                              "--morph_age.")
             try:
-                ages = parse_ages(args.embodiment_grid)
+                ages = parse_ages(args.embodiment_ages if coupled else args.embodiment_grid)
             except ValueError as exc:
                 parser.error(str(exc))
             source_config = load_run_config(pick_checkpoint(run_dirs[0], args.checkpoint) or '')
             source = (source_config.get('physio_age', 9), source_config.get('morph_age', 9))
-            cells = evaluate_embodiment_grid(run_dirs, args, episodes, ages)
+            cells = evaluate_embodiment_grid(run_dirs, args, episodes, ages, coupled=coupled)
             populated = [c for c in cells if c['summary']]
             if not populated:
                 parser.error("No run had an evaluable checkpoint.")
-            # The run's own embodiment is reported the way a plain --group run would report it,
-            # so the grid and the experiment page cannot disagree about the same number.
+            # The run's own embodiment is reported the way a plain --group run would report it, so
+            # the sweep and the experiment page cannot disagree about the same number. It is only
+            # *in* the sweep when the sweep visits it -- a run trained at act 6 / body 9 has no
+            # cell in a coupled one -- and 'source_in_grid' says so, because folding another
+            # embodiment's rows into the index as if they were the run's own would be wrong.
             own = next((c for c in populated
-                        if (c['age_physio'], c['age_morph']) == source), populated[0])
-            _print_grid(cells, ages, args, source)
+                        if (c['age_physio'], c['age_morph']) == source), None)
+            source_in_grid = own is not None
+            if own is None:
+                own = populated[0]
+            if coupled:
+                _print_coupled(cells, args, source)
+            else:
+                _print_grid(cells, ages, args, source)
             _print_group(own['rows'], [], own['summary'], args, episodes)
             write_csv(args.csv, own['rows'])
             write_json(args.json, {
                 'group': args.group, 'checkpoint': args.checkpoint, 'episodes': episodes,
-                'embodiment_grid': {'ages': ages,
+                'embodiment_grid': {'ages': ages, 'coupled': coupled,
                                     'source': {'physio': source[0], 'morph': source[1]},
+                                    'source_in_grid': source_in_grid,
                                     'success_threshold': args.success_threshold},
                 'cells': cells,
                 'summary': own['summary'], 'rows': own['rows'],

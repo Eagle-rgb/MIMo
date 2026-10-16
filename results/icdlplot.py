@@ -25,6 +25,8 @@ COLORS = {
     9: "tab:orange",
 }
 
+AGES = [1, 3, 6, 9]
+
 def color_gradient(n):
     """ n equally spaced colors from COLORS[1] to COLORS[9], both included, as hex strings.
 

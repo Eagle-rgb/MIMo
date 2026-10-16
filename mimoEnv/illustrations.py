@@ -42,6 +42,7 @@ from datetime import datetime
 import yaml
 
 import numpy as np
+import torch
 
 from mimoEnv.envs.roll_over import TOUCH_PARAMS as ROLL_OVER_TOUCH_PARAMS
 from mimoEnv.envs.roll_over import (LIMBS, LIMB_GROUPS, MISSING_LIMB_MODES,
@@ -64,6 +65,21 @@ OFF_POLICY_ALGORITHMS = ('SAC', 'TD3', 'DDPG')
 ROLL_OVER_EPISODE_STEPS = 500
 
 from mimoEnv.envs.gaussiannoiseobswrapper import GaussianNoiseObsWrapper
+
+
+def weights_fingerprint(policy):
+    """Short sha1 over every parameter and buffer of ``policy``, in state_dict order.
+
+    Printed by '--net_seed' so that two runs can be confirmed to have started from the same
+    weights from their logs alone.
+    """
+    import hashlib
+    digest = hashlib.sha1()
+    for name, tensor in policy.state_dict().items():
+        digest.update(name.encode())
+        digest.update(tensor.detach().cpu().numpy().tobytes())
+    return digest.hexdigest()[:12]
+
 
 def test(wrapped_env, save_dir, model=None, render_video=False, render_frames=False,
          render_actuations=False, roll_over_starting_position='prone', log_obs=None,
@@ -686,6 +702,14 @@ An example is '251206_prone_linear_1e6_test'
                              "of start episodes comes up, in training and in --test. Seeds the "
                              "environment only, not the network initialisation or the action "
                              "sampling. Unset is unseeded, as before.")
+    # 15.10.2026 The seed of the initial network weights, and nothing else.
+    parser.add_argument('--net_seed', default=None, type=int, required=False,
+                        help="Seed of the initial network weights: runs with the same value "
+                             "start from bit-identical weights. torch is reseeded from fresh "
+                             "entropy right after the model is built, so action sampling, "
+                             "minibatch order and the start states (see --init_seed) still "
+                             "differ between runs. Ignored with --load_model. Unset is "
+                             "unseeded, as before.")
     # 06.10.2026 The inclined device of Siegel et al. (2024). Both unset is no device.
     parser.add_argument('--seatback_angle', default=None, type=float, required=False,
                         help="Put MIMo in the two-panel device of Siegel et al. (2024) and "
@@ -1107,6 +1131,13 @@ An example is '251206_prone_linear_1e6_test'
         if value is not None:
             ppo_kwargs[flag] = value
 
+    # 15.10.2026 '--net_seed': seed torch for the construction of the policy only. Weights are
+    # initialised on the CPU before SB3 moves them to the device, so the same seed gives the
+    # same weights on a GPU host too. Without '--net_seed' torch keeps its per-process random
+    # seed and nothing changes.
+    if args.net_seed is not None and not load_model:
+        torch.manual_seed(args.net_seed)
+
     # load pretrained model or create new one
     # Set learning rate for PPO algorithm.
     if algorithm=='PPO':
@@ -1207,6 +1238,13 @@ An example is '251206_prone_linear_1e6_test'
                     tensorboard_log=save_dir,
                     verbose=1)
 
+    if args.net_seed is not None and not load_model:
+        # Leaving torch at the seeded state would hand every run with this seed the same
+        # action-sampling stream as well, i.e. "same initialisation" would silently become
+        # "same initialisation and same exploration noise". Back to fresh entropy.
+        torch.seed()
+        print(f"--net_seed={args.net_seed}: initial weights {weights_fingerprint(model.policy)}")
+
     # Save model metadata in model.
     yaml_data = {
         'lr': args.lr,
@@ -1249,6 +1287,10 @@ An example is '251206_prone_linear_1e6_test'
         # every data.yml written before that date, where None is the historical 0.01 rad.
         # '--init_seed' is deliberately not stored -- it describes the invocation.
         'init_noise': args.init_noise,
+        # 15.10.2026 Stored, unlike '--init_seed': the weights of this run descend from it, and
+        # it is what groups runs into "same initialisation" for the variance analysis. Absent
+        # from every data.yml written before that date, i.e. unseeded.
+        'net_seed': args.net_seed,
         # 06.10.2026 The device. Absent from every data.yml written before that date, where
         # None is no device.
         'seatback_angle': args.seatback_angle,
